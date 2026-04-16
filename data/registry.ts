@@ -16,7 +16,7 @@ export const isPickUnlocked = (user: User | null, pickId: string): boolean => {
  */
 export const getUnlockedPicks = () => {
   return MOCK_PICKS.filter((pick) =>
-    MOCK_USER.unlockedPickIds.includes(pick.id)
+    MOCK_USER.unlockedPickIds.includes(pick._id)
   );
 };
 
@@ -27,9 +27,9 @@ export const getUnlockHistory = (user: User | null) => {
   if (!user) return [];
 
   return MOCK_PICKS
-    .filter((pick) => user.unlockedPickIds.includes(pick.id))
+    .filter((pick) => user.unlockedPickIds.includes(pick._id))
     .map((pick) => ({
-      id: pick.id,
+      id: pick._id,
       title: pick.title,
       price: `${pick.price.toLocaleString("fr-FR")} FCFA`,
       date: new Date(pick.match_date).toLocaleDateString("fr-FR"),
