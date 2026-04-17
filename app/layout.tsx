@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { LoadWrapper } from "@/components/LoadWrapper";
 import Script from "next/script";
+import PWAInstallButton from "@/components/PWAInstallButton";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,7 +18,9 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Coupon Sur",
+  manifest: "/manifest.json",
   description: "Nous sommes une équipe d’analystes sportifs spécialisés dans plusieurs championnats (Europe, Afrique, compétitions internationales)",
+  themeColor: "#0A0C0F",
 };
 
 const FB_PIXEL_ID = process.env.NEXT_PUBLIC_FB_PIXEL_ID;
@@ -68,6 +71,7 @@ export default function RootLayout({
         <AuthProvider>
           <LoadWrapper>
             {children}
+            <PWAInstallButton />
           </LoadWrapper>
         </AuthProvider>
       </body>
