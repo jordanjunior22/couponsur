@@ -24,27 +24,6 @@ interface FapshiWebhookBody {
 }
 
 export async function POST(req: NextRequest) {
-  // ── 1. Verify Fapshi credentials sent in headers ────────────────────────
-  // Fapshi sends apiuser + apikey headers with every webhook call.
-  // Verify them to reject spoofed requests.
-  const incomingApiUser = req.headers.get("apiuser");
-  const incomingApiKey  = req.headers.get("apikey");
-
-  const expectedApiUser = process.env.FAPSHI_API_USER;
-  const expectedApiKey  = process.env.FAPSHI_API_KEY;
-
-  if (
-    !incomingApiUser ||
-    !incomingApiKey  ||
-    incomingApiUser !== expectedApiUser ||
-    incomingApiKey  !== expectedApiKey
-  ) {
-    console.error("Webhook: invalid or missing Fapshi credentials in headers");
-    // Still return 200 — Fapshi doesn't retry, so don't let it think it failed
-    return NextResponse.json({ received: true }, { status: 200 });
-  }
-
-  // ── 2. Parse body ────────────────────────────────────────────────────────
   let body: FapshiWebhookBody;
   try {
     body = await req.json();
