@@ -855,7 +855,7 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
                     <MomoPayment
                         pick={pick}
                         onSuccess={handlePaymentSuccess}
-                        onBack={() => setView(user ? "detail" : "auth")}
+onBack={onClose}
                     />
                 )}
             </div>
