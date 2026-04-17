@@ -32,7 +32,7 @@ interface ApiUser {
 
 const LEAGUES = [
   "Premier League", "Ligue 1", "La Liga", "Serie A",
-  "Bundesliga", "UCL", "MLS", "Eredivisie",
+  "Bundesliga", "UCL", "MLS", "Eredivisie","Mix"
 ];
 
 // ─── Icons ─────────────────────────────────────────────────────────────────────
