@@ -595,8 +595,10 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
 const borderColors = { WIN: "#22C55E", LOSS: "#EF4444", PENDING: "#C9A84C" };
 
 function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void }) {
+    const { user } = useAuth();
     const acc = getAccuracy(pick);
     const isPending = pick.outcome === "PENDING";
+    const isUnlocked = user?.unlockedPickIds?.includes(pick._id);
 
     return (
         <div onClick={() => onSelect(pick)} style={{
@@ -643,7 +645,9 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
                             ? { background: "#C9A84C", color: "#0A0C0F" }
                             : { background: "#222830", color: "#E8EAF0", border: "1px solid #2A3140" }),
                     }}>
-                        {isPending ? `Débloquer — ${pick.price.toLocaleString("fr-FR")} FCFA` : "Voir détails"}
+                        {isPending && !isUnlocked
+                            ? `Débloquer — ${pick.price.toLocaleString("fr-FR")} FCFA`
+                            : "Voir détails"}
                     </button>
                 </div>
             </div>
@@ -725,7 +729,7 @@ type ModalView = "detail" | "auth" | "payment";
 
 function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
     const overlayRef = useRef<HTMLDivElement>(null);
-    const { user } = useAuth();
+    const { user, refreshUser } = useAuth();
     const isPending = pick.outcome === "PENDING";
     const isAlreadyUnlocked = user?.unlockedPickIds?.includes(pick._id) ?? false;
 
@@ -768,10 +772,10 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
         if (e.target === overlayRef.current) onClose();
     };
 
-    const handlePaymentSuccess = () => {
+    const handlePaymentSuccess = async () => {
+        await refreshUser();   // 🔥 THIS is the key fix
         setView("detail");
     };
-
     // Whether the current user can actually read the predictions
     const canViewPredictions = !isPending || isAlreadyUnlocked;
 

@@ -21,19 +21,23 @@ export function HistoryItem({ item }: { item: any }) {
       {open && (
         <div style={content}>
           {item.matches?.length ? (
-            item.matches.map((m: any) => (
-              <div key={m.id} style={row}>
-                <span>{m.prediction}</span>
-                <span
-                  style={{
-                    color: m.outcome === "WIN" ? "#00FFA3" : "#EF4444",
-                    fontWeight: 700,
-                  }}
-                >
-                  {m.outcome}
-                </span>
-              </div>
-            ))
+            item.matches.map((m: any, i: number) => {
+              if (!m) return null;
+
+              return (
+                <div key={i} style={row}>
+                  <span>{m.prediction}</span>
+                  <span
+                    style={{
+                      color: m.outcome === "WIN" ? "#00FFA3" : "#EF4444",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {m.outcome}
+                  </span>
+                </div>
+              );
+            })
           ) : (
             <div style={{ color: "#7A8399", fontSize: 12 }}>
               Aucun détail disponible

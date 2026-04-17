@@ -21,7 +21,7 @@ export function Navbar() {
       });
 
       const data = await res.json();
-
+      console.log(data)
       if (data.success) {
         setHistory(data.data);
       }

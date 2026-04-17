@@ -16,7 +16,7 @@ interface AuthContextType {
   signup: (phone: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   unlockPick: (pickId: string) => Promise<void>;
-
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -26,22 +26,29 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   // 🔥 THIS is what syncs cookie → frontend
-  useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const res = await fetch("/api/auth/me");
-        const data = await res.json();
+  const fetchUser = async () => {
+    try {
+      const res = await fetch("/api/auth/me", {
+        credentials: "include", // ✅ important
+      });
+      const data = await res.json();
 
-        setUser(data.user);
-      } catch (error) {
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-    };
+      setUser(data.user);
+    } catch (error) {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+
 
     fetchUser();
   }, []);
+  // ─── 🔥 NEW: refresh user manually ─────────────────────
+  const refreshUser = async () => {
+    await fetchUser();
+  };
 
   // ─── Login ────────────────────────────────────────────
   const login = async (phone: string, password: string) => {
@@ -85,24 +92,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setUser(data.user); // ✅ auto-login after signup
   };
   const unlockPick = async (pickId: string) => {
-  if (!user) return;
+    if (!user) return;
 
-  const res = await fetch("/api/picks/unlock", {
-    method: "POST",
-    credentials: "include",
-    body: JSON.stringify({ pickId }),
-  });
+    const res = await fetch("/api/picks/unlock", {
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ pickId }),
+    });
 
-  const data = await res.json();
+    const data = await res.json();
 
-  if (!data.success) {
-    throw new Error("Failed to unlock pick");
-  }
+    if (!data.success) {
+      throw new Error("Failed to unlock pick");
+    }
 
-  setUser(data.user); // ✅ sync with backend
-};
+    setUser(data.user); // ✅ sync with backend
+  };
   return (
-    <AuthContext.Provider value={{ user, loading, signup, login, logout,unlockPick }}>
+    <AuthContext.Provider value={{ user, loading, signup, login, logout, unlockPick,refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
