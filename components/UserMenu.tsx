@@ -99,7 +99,7 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
       setLoading(true);
       setFeedback(null);
       await signup(phone, password);
-            // ── Facebook Pixel: Lead event on registration ──
+      // ── Facebook Pixel: Lead event on registration ──
       if (typeof window !== "undefined" && (window as any).fbq) {
         (window as any).fbq("track", "Lead", {
           content_name: "Inscription Premium Picks",
@@ -161,6 +161,7 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
     <>
       {/* ─── TRIGGER BUTTON ──────────────────────────────────── */}
       <div style={{ position: "relative" }}>
+
         {!user && (
           <button onClick={() => setAuthOpen(true)} style={loginBtnStyle}>
             Se connecter
@@ -183,7 +184,20 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
                   </div>
 
                   <div style={dividerStyle} />
-
+                  {user?.role === "ADMIN" && (
+                    <>
+                      <button
+                        style={menuItemStyle}
+                        onClick={() => {
+                          window.location.href = "/dashboard";
+                          setMenuOpen(false);
+                        }}
+                      >
+                        <span style={menuIconStyle}>🛠️</span>
+                        Dashboard
+                      </button>
+                    </>
+                  )}
                   <button
                     style={menuItemStyle}
                     onClick={() => {
@@ -317,8 +331,8 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
               {loading
                 ? "Chargement..."
                 : mode === "login"
-                ? "Se connecter"
-                : "Créer mon compte"}
+                  ? "Se connecter"
+                  : "Créer mon compte"}
             </button>
 
             {/* Switch mode */}

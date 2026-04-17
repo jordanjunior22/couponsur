@@ -20,7 +20,6 @@ export const metadata: Metadata = {
   title: "Coupon Sur",
   manifest: "/manifest.json",
   description: "Nous sommes une équipe d’analystes sportifs spécialisés dans plusieurs championnats (Europe, Afrique, compétitions internationales)",
-  themeColor: "#0A0C0F",
 };
 
 const FB_PIXEL_ID = process.env.NEXT_PUBLIC_FB_PIXEL_ID;
