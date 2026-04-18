@@ -32,7 +32,7 @@ interface ApiUser {
 
 const LEAGUES = [
   "Premier League", "Ligue 1", "La Liga", "Serie A",
-  "Bundesliga", "UCL", "MLS", "Eredivisie","Mix"
+  "Bundesliga", "UCL", "MLS", "Eredivisie", "Mix"
 ];
 
 // ─── Icons ─────────────────────────────────────────────────────────────────────
@@ -186,11 +186,30 @@ function Spinner({ size = 40 }: { size?: number }) {
 // ─── Pick Form Modal ────────────────────────────────────────────────────────────
 function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (p: Pick) => void; onClose: () => void }) {
   const isNew = !pick;
-  const [form, setForm] = useState<Pick>(pick || {
+  const defaultForm = (): Pick => ({
     _id: genId(), title: "", price: 2000, total_odds: 2.0,
     match_date: new Date().toISOString().split("T")[0],
     league: "Premier League", outcome: "PENDING", is_published: false, matches: [],
   });
+
+const [form, setForm] = useState<Pick>(
+  pick
+    ? { ...pick, matches: pick.matches.map((m) => ({ ...m, _id: m._id || genId() })) }
+    : defaultForm()
+);
+useEffect(() => {
+  if (pick) {
+    setForm({
+      ...pick,
+      matches: pick.matches.map((m) => ({
+        ...m,
+        _id: m._id || genId(),   // re-hydrate missing _ids from API response
+      })),
+    });
+  } else {
+    setForm(defaultForm());
+  }
+}, [pick]);
   const [saving, setSaving] = useState(false);
   const [newMatch, setNewMatch] = useState("");
 
@@ -202,33 +221,33 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
     setNewMatch("");
   };
 
-const handleSave = async () => {
-  if (!form.title.trim()) return;
-  setSaving(true);
-  try {
-    const method = isNew ? "POST" : "PUT";
-    const url = isNew ? "/api/picks" : `/api/picks/${form._id}`;
+  const handleSave = async () => {
+    if (!form.title.trim()) return;
+    setSaving(true);
+    try {
+      const method = isNew ? "POST" : "PUT";
+      const url = isNew ? "/api/picks" : `/api/picks/${form._id}`;
 
-    // Strip frontend-generated _id from matches before saving
-    const payload = {
-      ...form,
-      matches: form.matches.map(({ _id, ...rest }) => rest),
-    };
+      // Strip frontend-generated _id from matches before saving
+      const payload = {
+        ...form,
+        matches: form.matches.map(({ _id, ...rest }) => rest),
+      };
 
-    const res = await fetch(url, {
-      method,
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    onSave(data.pick || data.data || form);
-  } catch {
-    onSave(form);
-  } finally {
-    setSaving(false);
-  }
-};
+      const res = await fetch(url, {
+        method,
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      onSave(data.pick || data.data || form);
+    } catch {
+      onSave(form);
+    } finally {
+      setSaving(false);
+    }
+  };
   const iStyle: React.CSSProperties = {
     background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
     color: C.text, fontSize: 13, padding: "10px 12px", width: "100%",
@@ -312,21 +331,38 @@ const handleSave = async () => {
                 <Icons.plus />
               </button>
             </div>
-            {form.matches.map((m) => (
-              <div key={m._id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
-                <div style={{ flex: 1, fontSize: 12, color: C.text }}>{m.prediction}</div>
-                <select value={m.outcome}
-                  onChange={(e) => setForm((f) => ({ ...f, matches: f.matches.map((mx) => mx._id === m._id ? { ...mx, outcome: e.target.value as Match["outcome"] } : mx) }))}
-                  style={{ background: C.dark3, border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, borderRadius: 4, padding: "3px 6px", fontFamily: "inherit", cursor: "pointer" }}>
-                  <option value="PENDING">Pending</option>
-                  <option value="WIN">Win</option>
-                  <option value="LOSS">Loss</option>
-                </select>
-                <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((mx) => mx._id !== m._id) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2 }}>
-                  <Icons.close />
-                </button>
-              </div>
-            ))}
+            {form.matches.map((m) => {
+              const toggleOutcome = () => {
+                const next: Match["outcome"] = m.outcome === "PENDING" ? "WIN" : m.outcome === "WIN" ? "LOSS" : "PENDING";
+                setForm((f) => ({
+                  ...f,
+                  matches: f.matches.map((mx) => mx._id === m._id ? { ...mx, outcome: next } : mx),
+                }));
+              };
+              const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : C.faint;
+              const tickLabel = m.outcome === "WIN" ? "✓" : m.outcome === "LOSS" ? "✗" : "·";
+              return (
+                <div key={m._id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
+                  <div style={{ flex: 1, fontSize: 12, color: C.text }}>{m.prediction}</div>
+                  <button
+                    onClick={toggleOutcome}
+                    title={`Résultat: ${m.outcome} — cliquer pour changer`}
+                    style={{
+                      width: 26, height: 26, borderRadius: 6, border: `1.5px solid ${tickColor}`,
+                      background: m.outcome === "PENDING" ? "transparent" : `${tickColor}22`,
+                      color: tickColor, fontSize: 14, fontWeight: 700, cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {tickLabel}
+                  </button>
+                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((mx) => mx._id !== m._id) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2 }}>
+                    <Icons.close />
+                  </button>
+                </div>
+              );
+            })}
             {form.matches.length === 0 && (
               <div style={{ fontSize: 12, color: C.muted, padding: "8px 0", textAlign: "center" }}>Aucune sélection.</div>
             )}
@@ -853,7 +889,7 @@ export default function AdminDashboard() {
         if (cancelled) return;
         const resolved: Pick[] = Array.isArray(data) ? data
           : Array.isArray(data?.picks) ? data.picks
-          : Array.isArray(data?.data) ? data.data : [];
+            : Array.isArray(data?.data) ? data.data : [];
         setPicks(resolved);
       } catch (e) { console.error("Picks fetch:", e); }
       finally { if (!cancelled) setPicksLoading(false); }
@@ -875,7 +911,7 @@ export default function AdminDashboard() {
         // Handle common API shapes: [], { users: [] }, { data: [] }
         const resolved: ApiUser[] = Array.isArray(data) ? data
           : Array.isArray(data?.users) ? data.users
-          : Array.isArray(data?.data) ? data.data : [];
+            : Array.isArray(data?.data) ? data.data : [];
         setUsers(resolved);
       } catch (e) { console.error("Users fetch:", e); }
       finally { if (!cancelled) setUsersLoading(false); }

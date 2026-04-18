@@ -370,13 +370,20 @@ const avatarStyle: React.CSSProperties = {
   width: 36,
   height: 36,
   borderRadius: "50%",
-  background: "#111827",
-  border: "1px solid #1F2937",
+  background: "rgba(201,168,76,0.15)",
+  border: "1.5px solid #C9A84C",
   color: "#C9A84C",
   cursor: "pointer",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+  fontSize: 13,
+  fontWeight: 700,
+  letterSpacing: "0.5px",
+  fontFamily: "inherit",
+  transition: "background 0.15s, transform 0.1s",
+  userSelect: "none",
+  animation: "avatarPulse 2s ease-out infinite",
 };
 
 const backdropStyle: React.CSSProperties = {

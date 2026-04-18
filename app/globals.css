@@ -24,3 +24,8 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+@keyframes avatarPulse {
+  0%   { box-shadow: 0 0 0 0px rgba(201,168,76,0.55); }
+  60%  { box-shadow: 0 0 0 5px rgba(201,168,76,0.12); }
+  100% { box-shadow: 0 0 0 7px rgba(201,168,76,0); }
+}
