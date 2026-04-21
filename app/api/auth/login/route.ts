@@ -40,7 +40,8 @@ export async function POST(req: NextRequest) {
         { status: 401 }
       );
     }
-
+    user.lastLoginAt = new Date();
+    await user.save();
     // ─── Create JWT ───────────────────────────────────────
     const token = jwt.sign(
       {
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest) {
       phone: user.phone,
       role: user.role,
       unlockedPickIds: user.unlockedPickIds,
+      lastLoginAt: user.lastLoginAt,
     };
 
     // ─── Response with cookie ─────────────────────────────

@@ -28,6 +28,7 @@ interface ApiUser {
   role: "USER" | "ADMIN";
   unlockedPickIds: string[];
   createdAt?: string;
+  lastLoginAt?: string;
 }
 
 const LEAGUES = [
@@ -624,15 +625,15 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
       {/* Desktop table */}
       <div className="admin-table-desktop">
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
-            <span>Téléphone</span><span>Rôle</span><span>Picks</span><span>Wins</span><span>Dépensé</span><span>Détails</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+            <span>Téléphone</span><span>Rôle</span><span>Picks</span><span>Wins</span><span>Dépensé</span><span>Dernière conn.</span><span>Détails</span>
           </div>
           {filtered.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun utilisateur.</div>}
           {filtered.map((u, i) => {
             const { unlocked, wins, rev, avatar, roleBadge } = UserRow({ u });
             return (
               <div key={u._id}
-                style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer", transition: "background 0.15s" }}
+                style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer", transition: "background 0.15s" }}
                 onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.dark4)}
                 onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
                 onClick={() => setSelectedUser(u)}>
@@ -641,6 +642,14 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
                 <div><span style={{ background: "rgba(201,168,76,0.1)", color: C.gold, border: "1px solid rgba(201,168,76,0.2)", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{unlocked.length} picks</span></div>
                 <div style={{ fontSize: 12, color: C.green, fontWeight: 600 }}>{wins} wins</div>
                 <div style={{ fontSize: 12, color: C.text }}>{formatCFA(rev)}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>
+                  {u.lastLoginAt
+                    ? new Date(u.lastLoginAt).toLocaleDateString("fr-FR", {
+                        day: "numeric", month: "short",
+                        hour: "2-digit", minute: "2-digit",
+                      })
+                    : "—"}
+                </div>
                 <button style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, padding: "5px 10px", fontSize: 10, cursor: "pointer", fontFamily: "inherit" }}>Voir →</button>
               </div>
             );
@@ -665,9 +674,17 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
                 </div>
                 <div style={{ fontSize: 13, color: C.gold, fontWeight: 700 }}>{formatCFA(rev)}</div>
               </div>
-              <div style={{ display: "flex", gap: 14, fontSize: 11, color: C.muted }}>
+              <div style={{ display: "flex", gap: 14, fontSize: 11, color: C.muted, flexWrap: "wrap" }}>
                 <span>{unlocked.length} picks débloqués</span>
                 <span style={{ color: C.green }}>{wins} wins</span>
+                <span>
+                  {u.lastLoginAt
+                    ? `🕐 ${new Date(u.lastLoginAt).toLocaleDateString("fr-FR", {
+                        day: "numeric", month: "short",
+                        hour: "2-digit", minute: "2-digit",
+                      })}`
+                    : "Jamais connecté"}
+                </span>
               </div>
             </div>
           );
@@ -678,7 +695,6 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
     </div>
   );
 }
-
 // ─── Revenue Tab ───────────────────────────────────────────────────────────────
 function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const today = new Date().toISOString().split("T")[0];

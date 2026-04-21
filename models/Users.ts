@@ -10,6 +10,7 @@ export interface IUser extends Document {
   password: string;
   role: UserRole;
   unlockedPickIds: mongoose.Types.ObjectId[];
+  lastLoginAt?: Date; 
   createdAt: Date;
   updatedAt: Date;
 }
@@ -36,6 +37,7 @@ const UserSchema = new Schema<IUser>(
         ref: "Pick",
       },
     ],
+    lastLoginAt: { type: Date, default: null },
   },
   {
     timestamps: true,
