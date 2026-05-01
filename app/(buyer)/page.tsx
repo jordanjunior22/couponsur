@@ -527,9 +527,27 @@ export default function BuyerPage() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
               {displayedPicks.map((pick) => (
                 <div key={pick._id} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, overflow: "hidden" }}>
-                  {pick.pickType === "IMAGE" && pick.image && (
-                    <div style={{ width: "100%", height: 180, borderRadius: 8, overflow: "hidden", marginBottom: 12, background: C.dark4 }}>
-                      <img src={`data:${pick.image.contentType};base64,${pick.image.data}`} alt={pick.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  {pick.pickType === "IMAGE" && pick.images && pick.images.length > 0 && (
+                    <div
+                      onClick={() => setModalImages(pick.images || null)}
+                      style={{
+                        width: "100%",
+                        height: 180,
+                        borderRadius: 8,
+                        overflow: "hidden",
+                        marginBottom: 12,
+                        background: C.dark4,
+                        cursor: "pointer",
+                        transition: "opacity 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.opacity = "0.8";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.opacity = "1";
+                      }}
+                    >
+                      <img src={`data:${pick.images[0].contentType};base64,${pick.images[0].data}`} alt={pick.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     </div>
                   )}
 
