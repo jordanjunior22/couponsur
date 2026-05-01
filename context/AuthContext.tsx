@@ -7,6 +7,8 @@ interface AuthUser {
   phone: string;
   role: "USER" | "ADMIN";
   unlockedPickIds: string[];
+  hasActiveSubscription?: boolean;
+  subscriptionEndDate?: string;
 }
 
 interface AuthContextType {
@@ -33,16 +35,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       });
       const data = await res.json();
 
+      console.log("[AuthContext] fetchUser response:", data);
       setUser(data.user);
     } catch (error) {
+      console.error("[AuthContext] fetchUser error:", error);
       setUser(null);
     } finally {
       setLoading(false);
     }
   };
   useEffect(() => {
-
-
     fetchUser();
   }, []);
   // ─── 🔥 NEW: refresh user manually ─────────────────────

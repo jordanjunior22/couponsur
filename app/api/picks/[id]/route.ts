@@ -22,7 +22,30 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({ success: true, data: pick });
+    // Convert Buffer images to base64 for JSON serialization
+    let pickData: any = pick.toObject ? pick.toObject() : pick;
+
+    // Handle images array
+    if (pickData.images && Array.isArray(pickData.images)) {
+      pickData.images = pickData.images.map((img: any) => {
+        let buffer = img.data;
+
+        // Handle case where toObject() serializes Buffer as { type: "Buffer", data: [...] }
+        if (buffer && typeof buffer === 'object' && buffer.type === 'Buffer' && Array.isArray(buffer.data)) {
+          buffer = Buffer.from(buffer.data);
+        }
+
+        // Convert to base64 string
+        if (Buffer.isBuffer(buffer)) {
+          return { ...img, data: buffer.toString('base64') };
+        } else if (typeof buffer === 'string') {
+          return img; // Already base64
+        }
+        return img;
+      });
+    }
+
+    return NextResponse.json({ success: true, data: pickData });
   } catch (error: any) {
     console.error("GET ONE PICK ERROR:", error);
 
@@ -78,6 +101,45 @@ export async function PUT(
       body.match_date = new Date(body.match_date);
     }
 
+    // Handle images update if provided (new images only)
+    if (body.images && Array.isArray(body.images) && body.pickType === "IMAGE") {
+      body.images = body.images.map((img: any) => {
+        const base64Data = img.base64 || img;
+        const contentType = img.contentType || "image/jpeg";
+
+        // Only process if base64Data is a string (new images)
+        if (typeof base64Data === 'string') {
+          // Convert base64 to Buffer
+          const imageBuffer = Buffer.from(
+            base64Data.replace(/^data:image\/\w+;base64,/, ""),
+            "base64"
+          );
+
+          return {
+            data: imageBuffer,
+            contentType,
+          };
+        }
+        // If not a string, assume it's already a Buffer from existing data
+        return img;
+      });
+    }
+
+    // Type-specific validation (only for new creations or when images are provided)
+    if (body.pickType === "IMAGE" && body.images && Array.isArray(body.images) && body.images.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "IMAGE type requires at least one image" },
+        { status: 400 }
+      );
+    }
+
+    if (body.pickType === "SIMPLE" && (!body.matches || body.matches.length === 0)) {
+      return NextResponse.json(
+        { success: false, message: "SIMPLE type requires at least one match" },
+        { status: 400 }
+      );
+    }
+
     const updatedPick = await Pick.findByIdAndUpdate(
       id,
       body,
@@ -94,9 +156,24 @@ export async function PUT(
       );
     }
 
+    // Convert images to base64 for response
+    let responseData: any = updatedPick.toObject ? updatedPick.toObject() : updatedPick;
+    if (responseData.images && Array.isArray(responseData.images)) {
+      responseData.images = responseData.images.map((img: any) => {
+        let buffer = img.data;
+        if (buffer && typeof buffer === 'object' && buffer.type === 'Buffer' && Array.isArray(buffer.data)) {
+          buffer = Buffer.from(buffer.data);
+        }
+        if (Buffer.isBuffer(buffer)) {
+          return { ...img, data: buffer.toString('base64') };
+        }
+        return img;
+      });
+    }
+
     return NextResponse.json({
       success: true,
-      data: updatedPick,
+      data: responseData,
     });
   } catch (error: any) {
     console.error("UPDATE PICK ERROR:", error);
@@ -125,6 +202,7 @@ export async function DELETE(
     }
 
     const { id } = await params;
+
     const deletedPick = await Pick.findByIdAndDelete(id);
 
     if (!deletedPick) {
@@ -137,6 +215,7 @@ export async function DELETE(
     return NextResponse.json({
       success: true,
       message: "Pick deleted successfully",
+      data: deletedPick,
     });
   } catch (error: any) {
     console.error("DELETE PICK ERROR:", error);

@@ -2,11 +2,24 @@
 import { useState, useMemo, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
+import AdminSettingsTab from "@/components/AdminSettingsTab";
+import PickFormModal from "@/components/PickFormModal";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
+interface BetType {
+  _id: string;
+  code: string;
+  label: string;
+  description: string;
+  category: string;
+  predictions: string[];
+  isActive: boolean;
+}
+
 interface Match {
   _id: string;
   prediction: string;
+  betTypeCode?: string;
   outcome: "PENDING" | "WIN" | "LOSS";
 }
 
@@ -184,204 +197,6 @@ function Spinner({ size = 40 }: { size?: number }) {
   );
 }
 
-// ─── Pick Form Modal ────────────────────────────────────────────────────────────
-function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (p: Pick) => void; onClose: () => void }) {
-  const isNew = !pick;
-  const defaultForm = (): Pick => ({
-    _id: genId(), title: "", price: 2000, total_odds: 2.0,
-    match_date: new Date().toISOString().split("T")[0],
-    league: "Premier League", outcome: "PENDING", is_published: false, matches: [],
-  });
-
-const [form, setForm] = useState<Pick>(
-  pick
-    ? { ...pick, matches: pick.matches.map((m) => ({ ...m, _id: m._id || genId() })) }
-    : defaultForm()
-);
-useEffect(() => {
-  if (pick) {
-    setForm({
-      ...pick,
-      matches: pick.matches.map((m) => ({
-        ...m,
-        _id: m._id || genId(),   // re-hydrate missing _ids from API response
-      })),
-    });
-  } else {
-    setForm(defaultForm());
-  }
-}, [pick]);
-  const [saving, setSaving] = useState(false);
-  const [newMatch, setNewMatch] = useState("");
-
-  const set = (key: keyof Pick, val: unknown) => setForm((f) => ({ ...f, [key]: val }));
-
-  const addMatch = () => {
-    if (!newMatch.trim()) return;
-    setForm((f) => ({ ...f, matches: [...f.matches, { _id: genId(), prediction: newMatch.trim(), outcome: "PENDING" }] }));
-    setNewMatch("");
-  };
-
-  const handleSave = async () => {
-    if (!form.title.trim()) return;
-    setSaving(true);
-    try {
-      const method = isNew ? "POST" : "PUT";
-      const url = isNew ? "/api/picks" : `/api/picks/${form._id}`;
-
-      // Strip frontend-generated _id from matches before saving
-      const payload = {
-        ...form,
-        matches: form.matches.map(({ _id, ...rest }) => rest),
-      };
-
-      const res = await fetch(url, {
-        method,
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      onSave(data.pick || data.data || form);
-    } catch {
-      onSave(form);
-    } finally {
-      setSaving(false);
-    }
-  };
-  const iStyle: React.CSSProperties = {
-    background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
-    color: C.text, fontSize: 13, padding: "10px 12px", width: "100%",
-    fontFamily: "inherit", outline: "none",
-  };
-  const lStyle: React.CSSProperties = {
-    fontSize: 10, letterSpacing: "1.5px", color: C.muted,
-    textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6,
-  };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 540, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
-
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
-          <div>
-            <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
-              {isNew ? "Nouveau Pick" : "Modifier"}
-            </div>
-            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1 }}>
-              {isNew ? "Créer un Pick" : form.title || "Sans titre"}
-            </div>
-          </div>
-          <button onClick={onClose} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted }}>
-            <Icons.close />
-          </button>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <label style={lStyle}>Titre</label>
-            <input style={iStyle} value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="Ex: PL Banker of the Week" />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div>
-              <label style={lStyle}>Ligue</label>
-              <select style={{ ...iStyle, cursor: "pointer" }} value={form.league} onChange={(e) => set("league", e.target.value)}>
-                {LEAGUES.map((l) => <option key={l} value={l}>{l}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={lStyle}>Date</label>
-              <input type="date" style={iStyle} value={form.match_date} onChange={(e) => set("match_date", e.target.value)} />
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div>
-              <label style={lStyle}>Prix (FCFA)</label>
-              <input type="number" style={iStyle} value={form.price} onChange={(e) => set("price", Number(e.target.value))} />
-            </div>
-            <div>
-              <label style={lStyle}>Cotes totales</label>
-              <input type="number" step="0.1" style={iStyle} value={form.total_odds} onChange={(e) => set("total_odds", Number(e.target.value))} />
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div>
-              <label style={lStyle}>Résultat</label>
-              <select style={{ ...iStyle, cursor: "pointer" }} value={form.outcome} onChange={(e) => set("outcome", e.target.value as Pick["outcome"])}>
-                <option value="PENDING">En cours</option>
-                <option value="WIN">Win</option>
-                <option value="LOSS">Loss</option>
-              </select>
-            </div>
-            <div>
-              <label style={lStyle}>Statut</label>
-              <button onClick={() => set("is_published", !form.is_published)} style={{ ...iStyle, cursor: "pointer", textAlign: "left", color: form.is_published ? C.green : C.muted, border: `1px solid ${form.is_published ? "rgba(34,197,94,0.4)" : C.border}`, display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ width: 12, height: 12, borderRadius: "50%", background: form.is_published ? C.green : C.faint, flexShrink: 0 }} />
-                {form.is_published ? "Publié" : "Brouillon"}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label style={lStyle}>Sélections ({form.matches.length})</label>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input style={{ ...iStyle, flex: 1 }} value={newMatch} onChange={(e) => setNewMatch(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addMatch()} placeholder="Ex: PSG vs Lyon — BTTS: Yes" />
-              <button onClick={addMatch} style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "10px 14px", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center" }}>
-                <Icons.plus />
-              </button>
-            </div>
-            {form.matches.map((m) => {
-              const toggleOutcome = () => {
-                const next: Match["outcome"] = m.outcome === "PENDING" ? "WIN" : m.outcome === "WIN" ? "LOSS" : "PENDING";
-                setForm((f) => ({
-                  ...f,
-                  matches: f.matches.map((mx) => mx._id === m._id ? { ...mx, outcome: next } : mx),
-                }));
-              };
-              const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : C.faint;
-              const tickLabel = m.outcome === "WIN" ? "✓" : m.outcome === "LOSS" ? "✗" : "·";
-              return (
-                <div key={m._id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
-                  <div style={{ flex: 1, fontSize: 12, color: C.text }}>{m.prediction}</div>
-                  <button
-                    onClick={toggleOutcome}
-                    title={`Résultat: ${m.outcome} — cliquer pour changer`}
-                    style={{
-                      width: 26, height: 26, borderRadius: 6, border: `1.5px solid ${tickColor}`,
-                      background: m.outcome === "PENDING" ? "transparent" : `${tickColor}22`,
-                      color: tickColor, fontSize: 14, fontWeight: 700, cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                      transition: "all 0.15s",
-                    }}
-                  >
-                    {tickLabel}
-                  </button>
-                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((mx) => mx._id !== m._id) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2 }}>
-                    <Icons.close />
-                  </button>
-                </div>
-              );
-            })}
-            {form.matches.length === 0 && (
-              <div style={{ fontSize: 12, color: C.muted, padding: "8px 0", textAlign: "center" }}>Aucune sélection.</div>
-            )}
-          </div>
-
-          <div style={{ display: "flex", gap: 10, paddingTop: 6 }}>
-            <button onClick={onClose} style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: "12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-              Annuler
-            </button>
-            <button onClick={handleSave} disabled={saving || !form.title.trim()} style={{ flex: 2, background: saving ? C.goldDark : C.gold, border: "none", color: C.dark, borderRadius: 8, padding: "12px", fontSize: 12, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", letterSpacing: "1px", opacity: !form.title.trim() ? 0.5 : 1 }}>
-              {saving ? "Enregistrement…" : isNew ? "Créer le Pick" : "Enregistrer"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── User Detail Modal ──────────────────────────────────────────────────────────
 function UserDetailModal({ user, picks, onClose }: { user: ApiUser; picks: Pick[]; onClose: () => void }) {
@@ -878,12 +693,14 @@ function AccessDenied() {
 }
 
 // ─── Main Admin Dashboard ───────────────────────────────────────────────────────
-type Tab = "overview" | "picks" | "users" | "revenue";
+type Tab = "overview" | "picks" | "users" | "revenue" | "settings";
 
 export default function AdminDashboard() {
   // ── Auth guard ────────────────────────────────────────────────────────────
   const { user, loading: authLoading, logout } = useAuth();
   const router = useRouter();
+
+  console.log("[AdminDashboard] Render:", { user, authLoading, role: user?.role });
 
   const [tab, setTab] = useState<Tab>("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -977,6 +794,7 @@ export default function AdminDashboard() {
     { id: "picks", label: "Picks", icon: Icons.picks },
     { id: "users", label: "Utilisateurs", icon: Icons.users },
     { id: "revenue", label: "Revenus", icon: Icons.revenue },
+    { id: "settings", label: "Paramètres", icon: Icons.dashboard },
   ];
 
   const NavItems = () => (
@@ -1100,6 +918,7 @@ export default function AdminDashboard() {
                 {tab === "picks" && <PicksTab picks={picks} setPicks={setPicks} />}
                 {tab === "users" && <UsersTab users={users} usersLoading={usersLoading} picks={picks} />}
                 {tab === "revenue" && <RevenueTab picks={picks} users={users} />}
+                {tab === "settings" && <AdminSettingsTab />}
               </>
             )}
           </main>

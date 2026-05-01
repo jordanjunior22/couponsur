@@ -37,7 +37,24 @@ export async function GET() {
       await user.save();
     }
 
-    return NextResponse.json({ user });
+    // ─── Check active subscription ─────────────────────────
+    const hasActiveSubscription =
+      user.subscription &&
+      user.subscription.status === "active" &&
+      now < user.subscription.endDate;
+
+    // Convert to plain object to ensure all fields are included
+    const userObj = user.toObject();
+    const userResponse = {
+      _id: userObj._id,
+      phone: userObj.phone,
+      role: userObj.role,
+      unlockedPickIds: userObj.unlockedPickIds,
+      hasActiveSubscription: hasActiveSubscription || false,
+      subscriptionEndDate: userObj.subscription?.endDate,
+    };
+
+    return NextResponse.json({ user: userResponse });
   } catch (error) {
     return NextResponse.json({ user: null });
   }

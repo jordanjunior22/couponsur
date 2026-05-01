@@ -1,0 +1,9 @@
+MONGODB_URI=mongodb+srv://couponsur:0FXn9uH8oML4Jxh8@cluster0.iggus.mongodb.net/couponsur?retryWrites=true&w=majority&appName=Cluster0
+JWT_SECRET=supersecretkey123
+NEXT_PUBLIC_FB_PIXEL_ID=your_pixel_id_here
+SIMIZ_SECRET_KEY=smz_test_sk_TQT0hYP3j1uyN6amxp0_-Q4TIFEF7JIr
+SIMIZ_PUBLIC_KEY=smz_test_pk_h1ApJxWtUgD2iZJeKFmACV6wWSbnX9iQ
+SIMIZ_WEBHOOK_SECRET=undefined
+NEXT_PUBLIC_APP_URL=https://couponsur.vercel.app
+FAPSHI_API_USER=5caee6ae-d960-4360-aeb5-92c29a308921
+FAPSHI_API_KEY=FAK_TEST_69ee720204f289340b7c

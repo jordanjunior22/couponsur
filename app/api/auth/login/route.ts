@@ -53,12 +53,19 @@ export async function POST(req: NextRequest) {
     );
 
     // ─── Safe user ────────────────────────────────────────
+    const now = new Date();
+    const hasActiveSubscription = user.subscription &&
+      user.subscription.status === "active" &&
+      now < user.subscription.endDate;
+
     const safeUser = {
       _id: user._id,
       phone: user.phone,
       role: user.role,
       unlockedPickIds: user.unlockedPickIds,
       lastLoginAt: user.lastLoginAt,
+      hasActiveSubscription: hasActiveSubscription || false,
+      subscriptionEndDate: user.subscription?.endDate,
     };
 
     // ─── Response with cookie ─────────────────────────────
@@ -68,11 +75,11 @@ export async function POST(req: NextRequest) {
     );
 
     response.cookies.set("token", token, {
-      httpOnly: true, // 🔐 cannot access from JS
+      httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24 * 7, // 7 days
+      maxAge: 60 * 60 * 24 * 7,
     });
 
     return response;

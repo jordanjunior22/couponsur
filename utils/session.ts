@@ -18,6 +18,8 @@ export interface SessionUser {
   phone: string;
   role: "USER" | "ADMIN";
   unlockedPickIds: string[];
+  hasActiveSubscription: boolean;
+  subscriptionEndDate?: Date;
 }
 
 /**
@@ -57,16 +59,24 @@ export async function getSessionUser(
     await connectDB();
 
     const user = await UserModel.findById(payload.userId)
-      .select("_id phone role unlockedPickIds")
+      .select("_id phone role unlockedPickIds subscription")
       .lean<IUser>();
 
     if (!user) return null;
+
+    // Check if user has active subscription
+    const hasActiveSubscription =
+      user.subscription &&
+      user.subscription.status === "active" &&
+      new Date() < user.subscription.endDate;
 
     return {
       _id: user._id.toString(),
       phone: user.phone,
       role: user.role,
       unlockedPickIds: user.unlockedPickIds.map((id) => id.toString()),
+      hasActiveSubscription: hasActiveSubscription || false,
+      subscriptionEndDate: user.subscription?.endDate,
     };
   } catch {
     return null;
