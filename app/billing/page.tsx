@@ -175,12 +175,6 @@ export default function BillingPage() {
     fetchPlans();
   }, []);
 
-  // Redirect if user already has active subscription
-  useEffect(() => {
-    if (!loading && user && user.hasActiveSubscription) {
-      router.push("/");
-    }
-  }, [user, loading, router]);
 
   const handleSelectPlan = (planId: string) => {
     if (!user) {
