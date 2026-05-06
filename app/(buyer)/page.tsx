@@ -5,6 +5,7 @@ import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import ImageCarouselModal from "@/components/ImageCarouselModal";
 import CouponCodeDisplay from "@/components/CouponCodeDisplay";
+import { groupPicksByDate } from "@/utils/pickHelpers";
 
 interface Match {
   _id: string;
@@ -298,8 +299,13 @@ export default function BuyerPage() {
                     </h2>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-                    {picks.filter((p) => p.outcome === "PENDING").map((pick) => (
+                  {groupPicksByDate(picks.filter((p) => p.outcome === "PENDING")).map((group) => (
+                    <div key={group.date} style={{ marginBottom: 32 }}>
+                      <h3 style={{ fontSize: 14, fontWeight: 600, color: C.gold, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                        • {group.displayDate}
+                      </h3>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+                        {group.picks.map((pick) => (
                       <div key={pick._id} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, overflow: "hidden" }}>
                         {pick.pickType === "IMAGE" && pick.images && pick.images.length > 0 && (
                           <div style={{ marginBottom: 12 }}>
@@ -390,7 +396,7 @@ export default function BuyerPage() {
                           </a>
                         )}
 
-                        {user && !user.hasActiveSubscription && !unlockedPicks.includes(pick._id) && (
+                        {user && !user.hasActiveSubscription && !unlockedPicks.includes(pick._id) && pick.outcome === "PENDING" && (
                           <button
                             onClick={() => handleUnlock(pick._id, pick.price)}
                             disabled={unlocking === pick._id}
@@ -413,7 +419,9 @@ export default function BuyerPage() {
                         )}
                       </div>
                     ))}
-                  </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -429,8 +437,13 @@ export default function BuyerPage() {
                     </h2>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-                    {picks.filter((p) => p.outcome !== "PENDING").map((pick) => (
+                  {groupPicksByDate(picks.filter((p) => p.outcome !== "PENDING")).map((group) => (
+                    <div key={group.date} style={{ marginBottom: 24 }}>
+                      <h3 style={{ fontSize: 14, fontWeight: 600, color: C.gold, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                        • {group.displayDate}
+                      </h3>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+                        {group.picks.map((pick) => (
                       <div key={pick._id} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, overflow: "hidden" }}>
                         {pick.pickType === "IMAGE" && pick.images && pick.images.length > 0 && (
                           <div style={{ marginBottom: 12 }}>
@@ -515,7 +528,9 @@ export default function BuyerPage() {
                         </div>
                       </div>
                     ))}
-                  </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </>
@@ -524,8 +539,14 @@ export default function BuyerPage() {
           {displayedPicks.length === 0 ? (
             <div style={{ textAlign: "center", padding: 40, color: C.muted }}>Aucun pick disponible</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-              {displayedPicks.map((pick) => (
+            <>
+              {groupPicksByDate(displayedPicks).map((group) => (
+                <div key={group.date} style={{ marginBottom: 32 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, color: C.gold, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                    • {group.displayDate}
+                  </h3>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+                    {group.picks.map((pick) => (
                 <div key={pick._id} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, overflow: "hidden" }}>
                   {pick.pickType === "IMAGE" && pick.images && pick.images.length > 0 && (
                     <div
@@ -603,7 +624,7 @@ export default function BuyerPage() {
                     </a>
                   )}
 
-                  {user && !user.hasActiveSubscription && !unlockedPicks.includes(pick._id) && (
+                  {user && !user.hasActiveSubscription && !unlockedPicks.includes(pick._id) && pick.outcome === "PENDING" && (
                     <button
                       onClick={() => handleUnlock(pick._id, pick.price)}
                       disabled={unlocking === pick._id}
@@ -625,8 +646,11 @@ export default function BuyerPage() {
                     </button>
                   )}
                 </div>
+                    ))}
+                  </div>
+                </div>
               ))}
-            </div>
+            </>
           )}
         </div>
       </div>

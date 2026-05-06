@@ -69,9 +69,9 @@ export async function POST(req: NextRequest) {
       subscriptionEndDate: null,
     };
 
-    // ─── Response with cookie ─────────────────────────────
+    // ─── Response with cookie and token for mobile ─────────
     const response = NextResponse.json(
-      { success: true, user: safeUser },
+      { success: true, data: { user: safeUser, token } },
       { status: 201 }
     );
 

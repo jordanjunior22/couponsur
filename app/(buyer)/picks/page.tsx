@@ -6,6 +6,7 @@ import ImageCarouselModal from "@/components/ImageCarouselModal";
 import CouponCodeDisplay from "@/components/CouponCodeDisplay";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { groupPicksByDate } from "@/utils/pickHelpers";
 
 interface Match {
   _id: string;
@@ -330,12 +331,18 @@ export default function PicksPage() {
             Aucun pick disponible
           </div>
         ) : (
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-            gap: 16,
-          }}>
-            {displayedPicks.map((pick) => (
+          <>
+            {groupPicksByDate(displayedPicks).map((group) => (
+              <div key={group.date} style={{ marginBottom: 32 }}>
+                <h3 style={{ fontSize: 14, fontWeight: 600, color: C.gold, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  • {group.displayDate}
+                </h3>
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                  gap: 16,
+                }}>
+                  {group.picks.map((pick) => (
               <div
                 key={pick._id}
                 style={{
@@ -507,7 +514,7 @@ export default function PicksPage() {
                   </a>
                 )}
 
-                {user && !user.hasActiveSubscription && !unlockedPicks.includes(pick._id) && (
+                {user && !user.hasActiveSubscription && !unlockedPicks.includes(pick._id) && pick.outcome === "PENDING" && (
                   <button
                     onClick={() => handleUnlock(pick._id, pick.price)}
                     disabled={unlocking === pick._id}
@@ -529,8 +536,11 @@ export default function PicksPage() {
                   </button>
                 )}
               </div>
+                  ))}
+                </div>
+              </div>
             ))}
-          </div>
+          </>
         )}
         </div>
       </div>
