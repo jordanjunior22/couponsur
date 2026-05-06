@@ -18,7 +18,7 @@ interface Pick {
   league: string;
   outcome: "PENDING" | "WIN" | "LOSS";
   is_published: boolean;
-  matches?: Match[];
+  matches: Match[];
   pickType?: "SIMPLE" | "IMAGE";
   category?: "GROSSES_COTES" | "MONTANTES" | "SAFE";
   matchup?: string;
@@ -177,7 +177,7 @@ export default function PickFormModal({ pick, onSave, onClose }: PickFormModalPr
     setForm((f) => ({
       ...f,
       matches: [
-        ...(f.matches || []),
+        ...f.matches,
         {
           _id: genId(),
           prediction: prediction,
@@ -231,7 +231,7 @@ export default function PickFormModal({ pick, onSave, onClose }: PickFormModalPr
       return;
     }
 
-    if (pickType === "SIMPLE" && (!form.matches || form.matches.length === 0)) {
+    if (pickType === "SIMPLE" && form.matches.length === 0) {
       alert("Ajoute au moins une sélection");
       return;
     }
@@ -247,7 +247,7 @@ export default function PickFormModal({ pick, onSave, onClose }: PickFormModalPr
       };
 
       if (pickType === "SIMPLE") {
-        payload.matches = form.matches?.map(({ _id, ...rest }) => rest) || [];
+        payload.matches = form.matches.map(({ _id, ...rest }) => rest);
       } else if (pickType === "IMAGE") {
         // Send images if we have new files
         if (imageFiles.length > 0) {
@@ -564,7 +564,7 @@ export default function PickFormModal({ pick, onSave, onClose }: PickFormModalPr
               </div>
 
               {/* Matches List */}
-              {form.matches?.map((m) => {
+              {form.matches.map((m) => {
                 const betType = betTypes.find((bt) => bt.code === m.betTypeCode);
                 return (
                   <div key={m._id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
@@ -579,7 +579,7 @@ export default function PickFormModal({ pick, onSave, onClose }: PickFormModalPr
                 );
               })}
 
-              {!form.matches || form.matches.length === 0 ? <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "8px 0" }}>Aucune sélection</div> : null}
+              {form.matches.length === 0 ? <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: "8px 0" }}>Aucune sélection</div> : null}
             </div>
           )}
 

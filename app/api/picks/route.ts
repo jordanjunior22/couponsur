@@ -3,6 +3,12 @@ import Pick from "@/models/Picks";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { addCorsHeaders, handleCorsPreFlight } from "@/utils/cors";
+// ─── OPTIONS: CORS preflight ────────────────────────────
+export async function OPTIONS(req: NextRequest) {
+    return await handleCorsPreFlight(req) || new NextResponse(null, { status: 200 });
+}
+
 // ─── GET: Fetch Picks ────────────────────────────────────
 export async function GET(req: NextRequest) {
     try {
@@ -48,17 +54,21 @@ export async function GET(req: NextRequest) {
             return data;
         });
 
-        return NextResponse.json(
+        const response = NextResponse.json(
             { success: true, data: pickData },
             { status: 200 }
         );
+
+        return addCorsHeaders(response, req.headers.get("origin") || undefined);
     } catch (error) {
         console.error("GET PICKS ERROR:", error);
 
-        return NextResponse.json(
+        const response = NextResponse.json(
             { success: false, message: "Failed to fetch picks" },
             { status: 500 }
         );
+
+        return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 }
 
@@ -238,16 +248,20 @@ export async function POST(req: NextRequest) {
             hasCouponCode: !!responseData.couponCode,
         });
 
-        return NextResponse.json(
+        const response = NextResponse.json(
             { success: true, data: responseData },
             { status: 201 }
         );
+
+        return addCorsHeaders(response, req.headers.get("origin") || undefined);
     } catch (error) {
         console.error("CREATE PICK ERROR:", error);
 
-        return NextResponse.json(
+        const response = NextResponse.json(
             { success: false, message: "Failed to create pick" },
             { status: 500 }
         );
+
+        return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 }

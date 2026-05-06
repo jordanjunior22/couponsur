@@ -3,40 +3,46 @@ import { connectDB } from "@/utils/ConnectDb";
 import UserModel from "@/models/Users";
 import SubscriptionPaymentModel from "@/models/SubscriptionPayment";
 import SubscriptionPlanModel from "@/models/SubscriptionPlan";
-import { cookies } from "next/headers";
-import { verifyToken } from "@/utils/auth";
-import { paymentStatus } from "@/utils/fapshi";
+import { verifyToken, getTokenFromRequest } from "@/utils/auth";
+import { paymentStatus, isFapshiError } from "@/utils/fapshi";
+import { addCorsHeaders, handleCorsPreFlight } from "@/utils/cors";
+
+export async function OPTIONS(req: NextRequest) {
+  return await handleCorsPreFlight(req) || new NextResponse(null, { status: 200 });
+}
 
 export async function POST(req: NextRequest) {
   try {
     await connectDB();
 
-    const cookieStore = await cookies();
-    const token = cookieStore.get("token")?.value;
+    const token = await getTokenFromRequest(req);
 
     if (!token) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Unauthorized" },
         { status: 401 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     const decoded = verifyToken(token);
 
     if (!decoded) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Invalid token" },
         { status: 401 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     const { transId, planId } = await req.json();
 
     if (!transId || !planId) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Missing transId or planId" },
         { status: 400 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // Find the payment record
@@ -46,17 +52,29 @@ export async function POST(req: NextRequest) {
     });
 
     if (!payment) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Payment not found" },
         { status: 404 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // Check payment status with Fapshi
     const statusData = await paymentStatus(transId);
 
+    if (isFapshiError(statusData)) {
+      const response = NextResponse.json(
+        {
+          success: false,
+          message: statusData.message,
+        },
+        { status: statusData.statusCode }
+      );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
+    }
+
     if (statusData.status !== "SUCCESSFUL") {
-      return NextResponse.json(
+      const response = NextResponse.json(
         {
           success: false,
           message: `Payment status is ${statusData.status}`,
@@ -64,16 +82,18 @@ export async function POST(req: NextRequest) {
         },
         { status: 400 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // Get the plan
     const plan = await SubscriptionPlanModel.findById(planId);
 
     if (!plan) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Plan not found" },
         { status: 404 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // Calculate subscription dates
@@ -100,7 +120,7 @@ export async function POST(req: NextRequest) {
       dateConfirmed: new Date(),
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: "Subscription activated",
       data: {
@@ -109,11 +129,13 @@ export async function POST(req: NextRequest) {
         endDate: endDate,
       },
     });
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   } catch (error: any) {
     console.error("Subscription confirm error:", error);
-    return NextResponse.json(
+    const response = NextResponse.json(
       { success: false, message: error.message || "Failed to confirm subscription" },
       { status: 500 }
     );
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   }
 }

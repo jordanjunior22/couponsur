@@ -125,7 +125,7 @@ function CategoryBadge({ category }: { category?: string }) {
 }
 
 export default function BuyerPage() {
-  const { user, isLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [picks, setPicks] = useState<Pick[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"all" | "daily">("all");
@@ -155,13 +155,13 @@ export default function BuyerPage() {
       }
     };
 
-    if (!isLoading) {
+    if (!authLoading) {
       fetchPicks();
       if (user) {
         setUnlockedPicks(user.unlockedPickIds || []);
       }
     }
-  }, [isLoading, user]);
+  }, [authLoading, user]);
 
   const handleUnlock = async (pickId: string, price: number) => {
     if (!user) return;
@@ -202,7 +202,7 @@ export default function BuyerPage() {
     return filtered;
   })();
 
-  if (isLoading || loading) {
+  if (loading || loading) {
     return (
       <div style={{ minHeight: "100vh", background: C.dark, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Navbar />
@@ -371,7 +371,7 @@ export default function BuyerPage() {
                         {pick.pickType === "SIMPLE" && pick.matches && pick.matches.length > 0 && (
                           <div style={{ background: C.dark4, borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12 }}>
                             <div style={{ color: C.muted, marginBottom: 6 }}>{pick.matches.length} sélection{pick.matches.length > 1 ? "s" : ""}</div>
-                            {pick.matches.slice(0, 2).map((m, i) => (
+                            {pick.matches.slice(0, 2).map((m: Match, i: number) => (
                               <div key={i} style={{ fontSize: 11, color: C.text, marginBottom: 4 }}>· {m.prediction}</div>
                             ))}
                             {pick.matches.length > 2 && <div style={{ fontSize: 11, color: C.muted }}>+{pick.matches.length - 2} autre{pick.matches.length - 2 > 1 ? "s" : ""}</div>}
@@ -509,7 +509,7 @@ export default function BuyerPage() {
                         {pick.pickType === "SIMPLE" && pick.matches && pick.matches.length > 0 && (
                           <div style={{ background: C.dark4, borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12 }}>
                             <div style={{ color: C.muted, marginBottom: 6 }}>{pick.matches.length} sélection{pick.matches.length > 1 ? "s" : ""}</div>
-                            {pick.matches.map((m, i) => (
+                            {pick.matches.map((m: Match, i: number) => (
                               <div key={i} style={{ fontSize: 11, color: C.text, marginBottom: 4 }}>· {m.prediction}</div>
                             ))}
                           </div>
@@ -598,7 +598,7 @@ export default function BuyerPage() {
                   {pick.pickType === "SIMPLE" && pick.matches && pick.matches.length > 0 && (
                     <div style={{ background: C.dark4, borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12 }}>
                       <div style={{ color: C.muted, marginBottom: 6 }}>{pick.matches.length} sélection{pick.matches.length > 1 ? "s" : ""}</div>
-                      {pick.matches.slice(0, 2).map((m, i) => (
+                      {pick.matches.slice(0, 2).map((m: Match, i: number) => (
                         <div key={i} style={{ fontSize: 11, color: C.text, marginBottom: 4 }}>· {m.prediction}</div>
                       ))}
                       {pick.matches.length > 2 && <div style={{ fontSize: 11, color: C.muted }}>+{pick.matches.length - 2} autre{pick.matches.length - 2 > 1 ? "s" : ""}</div>}

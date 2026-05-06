@@ -58,13 +58,13 @@ function daysUntil(endDate: string) {
 }
 
 export default function ProfilePage() {
-  const { user, isLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!isLoading) {
+    if (!authLoading) {
       if (!user) {
         router.push("/login");
         return;
@@ -89,9 +89,9 @@ export default function ProfilePage() {
 
       fetchProfile();
     }
-  }, [isLoading, user, router]);
+  }, [authLoading, user, router]);
 
-  if (isLoading || loading) {
+  if (authLoading || loading) {
     return (
       <div style={{
         minHeight: "100vh",

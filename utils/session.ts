@@ -35,11 +35,19 @@ export async function getSessionUser(
   req: NextRequest
 ): Promise<SessionUser | null> {
   try {
-    // ── 1. Extract token from cookie ──────────────────
-    const token =
+    // ── 1. Extract token from cookie or Authorization header ──────────────────
+    let token =
       req.cookies.get("token")?.value ??
       req.cookies.get("auth_token")?.value ?? // fallback name
       null;
+
+    // If no cookie token, try Authorization header (for mobile app)
+    if (!token) {
+      const authHeader = req.headers.get("authorization");
+      if (authHeader?.startsWith("Bearer ")) {
+        token = authHeader.substring(7);
+      }
+    }
 
     if (!token) return null;
 

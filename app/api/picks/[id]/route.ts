@@ -3,6 +3,12 @@ import Pick from "@/models/Picks";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { addCorsHeaders, handleCorsPreFlight } from "@/utils/cors";
+
+// ─── OPTIONS: CORS preflight ────────────────────────────
+export async function OPTIONS(req: NextRequest) {
+  return await handleCorsPreFlight(req) || new NextResponse(null, { status: 200 });
+}
 
 // ─── GET ONE PICK (PUBLIC) ───────────────────────────────
 export async function GET(
@@ -16,10 +22,11 @@ export async function GET(
     const pick = await Pick.findById(id);
 
     if (!pick) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Pick not found" },
         { status: 404 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // Convert Buffer images to base64 for JSON serialization
@@ -45,14 +52,16 @@ export async function GET(
       });
     }
 
-    return NextResponse.json({ success: true, data: pickData });
+    const response = NextResponse.json({ success: true, data: pickData });
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   } catch (error: any) {
     console.error("GET ONE PICK ERROR:", error);
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       { success: false, message: error.message },
       { status: 500 }
     );
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   }
 }
 
@@ -88,10 +97,11 @@ export async function PUT(
 
     const auth = await requireAdmin();
     if ("error" in auth) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: auth.error },
         { status: auth.status }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     const { id } = await params;
@@ -127,17 +137,19 @@ export async function PUT(
 
     // Type-specific validation (only for new creations or when images are provided)
     if (body.pickType === "IMAGE" && body.images && Array.isArray(body.images) && body.images.length === 0) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "IMAGE type requires at least one image" },
         { status: 400 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     if (body.pickType === "SIMPLE" && (!body.matches || body.matches.length === 0)) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "SIMPLE type requires at least one match" },
         { status: 400 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     const updatedPick = await Pick.findByIdAndUpdate(
@@ -150,10 +162,11 @@ export async function PUT(
     );
 
     if (!updatedPick) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Pick not found" },
         { status: 404 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // Convert images to base64 for response
@@ -171,17 +184,19 @@ export async function PUT(
       });
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: responseData,
     });
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   } catch (error: any) {
     console.error("UPDATE PICK ERROR:", error);
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       { success: false, message: error.message },
       { status: 500 }
     );
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   }
 }
 
@@ -195,10 +210,11 @@ export async function DELETE(
 
     const auth = await requireAdmin();
     if ("error" in auth) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: auth.error },
         { status: auth.status }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     const { id } = await params;
@@ -206,23 +222,26 @@ export async function DELETE(
     const deletedPick = await Pick.findByIdAndDelete(id);
 
     if (!deletedPick) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Pick not found" },
         { status: 404 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: "Pick deleted successfully",
       data: deletedPick,
     });
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   } catch (error: any) {
     console.error("DELETE PICK ERROR:", error);
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       { success: false, message: error.message },
       { status: 500 }
     );
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   }
 }

@@ -126,7 +126,7 @@ function CategoryBadge({ category }: { category?: string }) {
 }
 
 export default function PicksPage() {
-  const { user, isLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [picks, setPicks] = useState<Pick[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"all" | "daily">("all");
@@ -156,14 +156,14 @@ export default function PicksPage() {
       }
     };
 
-    if (!isLoading) {
+    if (!authLoading) {
       fetchPicks();
       // Load user's unlocked picks
       if (user) {
         setUnlockedPicks(user.unlockedPickIds || []);
       }
     }
-  }, [isLoading, user]);
+  }, [authLoading, user]);
 
   const handleUnlock = async (pickId: string, price: number) => {
     if (!user) return;
@@ -207,7 +207,7 @@ export default function PicksPage() {
     return filtered;
   })();
 
-  if (isLoading || loading) {
+  if (authLoading || loading) {
     return (
       <div style={{
         minHeight: "100vh",
@@ -442,7 +442,7 @@ export default function PicksPage() {
                     <div style={{ color: C.muted, marginBottom: 6 }}>
                       {pick.matches.length} sélection{pick.matches.length > 1 ? "s" : ""}
                     </div>
-                    {pick.matches.slice(0, 2).map((m, i) => (
+                    {pick.matches.slice(0, 2).map((m: Match, i: number) => (
                       <div key={i} style={{ fontSize: 11, color: C.text, marginBottom: 4 }}>
                         · {m.prediction}
                       </div>

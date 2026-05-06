@@ -3,8 +3,14 @@ import { connectDB } from "@/utils/ConnectDb";
 import User from "@/models/Users";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { addCorsHeaders, handleCorsPreFlight } from "@/utils/cors";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
+
+// ─── OPTIONS: CORS preflight ────────────────────────────
+export async function OPTIONS(req: NextRequest) {
+  return await handleCorsPreFlight(req) || new NextResponse(null, { status: 200 });
+}
 
 // ─── POST: Signup ────────────────────────────────────────
 export async function POST(req: NextRequest) {
@@ -15,27 +21,30 @@ export async function POST(req: NextRequest) {
 
     // ─── Validate input ───────────────────────────────────
     if (!phone || !password) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Phone and password are required" },
         { status: 400 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     if (password.length < 4) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "Password must be at least 4 characters" },
         { status: 400 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // ─── Check if user exists ─────────────────────────────
     const existingUser = await User.findOne({ phone });
 
     if (existingUser) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, message: "User already exists" },
         { status: 409 }
       );
+      return addCorsHeaders(response, req.headers.get("origin") || undefined);
     }
 
     // ─── Hash password ────────────────────────────────────
@@ -77,19 +86,21 @@ export async function POST(req: NextRequest) {
 
     response.cookies.set("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: false, // Works in both dev and production
       sameSite: "lax",
       path: "/",
       maxAge: 60 * 60 * 24 * 7,
     });
 
-    return response;
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   } catch (error: any) {
     console.error("SIGNUP ERROR:", error);
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       { success: false, message: error.message || "Server error" },
       { status: 500 }
     );
+
+    return addCorsHeaders(response, req.headers.get("origin") || undefined);
   }
 }
