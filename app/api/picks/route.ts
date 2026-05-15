@@ -166,7 +166,17 @@ export async function POST(req: NextRequest) {
 
         // Handle matches for SIMPLE
         if (pickType === "SIMPLE") {
-            pickData.matches = matches;
+            pickData.matches = matches.map((m: any) => ({
+                matchId: m.matchId ?? `${m.teamA}_vs_${m.teamB}_${match_date}`.replace(/\s+/g, "_"),
+                teams: {
+                    home: m.teamA,
+                    away: m.teamB,
+                },
+                betTypeCode: m.betTypeCode ?? "1X2",
+                prediction: m.prediction,
+                odds: m.odds,
+                outcome: m.outcome ?? "PENDING",
+            }));
         } else {
             pickData.matches = [];
         }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { UserMenu } from "./UserMenu";
 import { HistoryModal } from "./HistoryModal";
 import { useAuth } from "@/context/AuthContext";
@@ -21,35 +21,28 @@ export function Navbar() {
   const [showHistory, setShowHistory] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const { user } = useAuth();
   const pathname = usePathname();
-
   const isActive = (path: string) => pathname === path;
 
   const fetchHistory = async () => {
     try {
-      setLoading(true);
-      const res = await fetch("/api/picks/unlocked", {
-        credentials: "include",
-      });
+      setHistoryLoading(true);
+      const res = await fetch("/api/picks/unlocked", { credentials: "include" });
       const data = await res.json();
-      if (data.success) {
-        setHistory(data.data);
-      }
+      if (data.success) setHistory(data.data);
     } catch (err) {
       console.error("History fetch error:", err);
     } finally {
-      setLoading(false);
+      setHistoryLoading(false);
     }
   };
 
   const handleOpenHistory = async () => {
     setShowHistory(true);
-    if (user) {
-      await fetchHistory();
-    }
+    if (user) await fetchHistory();
   };
 
   const navLinks = [
@@ -60,15 +53,16 @@ export function Navbar() {
 
   return (
     <>
-      <nav style={{ background: C.dark, borderBottom: `1px solid ${C.border}`, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100, gap: 16 }} className="navbar">
-        <Link href="/" style={{ textDecoration: "none" }}>
-          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: "2px", color: C.text, cursor: "pointer", whiteSpace: "nowrap" }}>
+      <nav style={navStyle}>
+        {/* Logo */}
+        <Link href="/" style={{ textDecoration: "none", flexShrink: 0 }}>
+          <div style={logoStyle}>
             COUPON<span style={{ color: C.gold }}> SÛR</span>
           </div>
         </Link>
 
-        {/* Desktop Links */}
-        <div style={{ display: "none", gap: 24, alignItems: "center", flex: 1, justifyContent: "center" }} className="nav-links-desktop">
+        {/* Desktop center links */}
+        <div className="nav-links-desktop" style={desktopLinksStyle}>
           {navLinks.map((link) => (
             <Link key={link.href} href={link.href} style={getLinkStyle(isActive(link.href))}>
               {link.label}
@@ -81,71 +75,40 @@ export function Navbar() {
           )}
         </div>
 
-        <UserMenu onOpenHistory={handleOpenHistory} />
+        {/* Right side: UserMenu is ALWAYS rendered, hamburger sits beside it on mobile */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" }}>
+          <UserMenu onOpenHistory={handleOpenHistory} />
 
-        {/* Mobile Menu Icon */}
-        <button
-          onClick={() => setShowMobileMenu(!showMobileMenu)}
-          style={{
-            display: "none",
-            background: "none",
-            border: "none",
-            color: C.text,
-            fontSize: 24,
-            cursor: "pointer",
-            padding: 0,
-          }}
-          className="menu-icon"
-        >
-          ☰
-        </button>
+          {/* Hamburger — CSS shows/hides per breakpoint */}
+          <button
+            className="menu-icon"
+            onClick={() => setShowMobileMenu(!showMobileMenu)}
+            style={hamburgerStyle}
+            aria-label="Menu"
+            aria-expanded={showMobileMenu}
+          >
+            {showMobileMenu ? "✕" : "☰"}
+          </button>
+        </div>
       </nav>
 
       {/* Mobile Sidebar */}
       {showMobileMenu && (
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0, 0, 0, 0.5)",
-            zIndex: 999,
-          }}
+          style={sidebarOverlayStyle}
           onClick={() => setShowMobileMenu(false)}
         >
           <div
-            style={{
-              position: "fixed",
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: "80%",
-              maxWidth: 300,
-              background: C.dark2,
-              borderRight: `1px solid ${C.border}`,
-              padding: 16,
-              overflowY: "auto",
-              zIndex: 1000,
-            }}
+            style={sidebarStyle}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Sidebar Links */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {navLinks.map((link) => (
                 <Link
                   key={link.href}
                   href={link.href}
                   onClick={() => setShowMobileMenu(false)}
-                  style={{
-                    color: isActive(link.href) ? C.gold : C.muted,
-                    textDecoration: "none",
-                    fontSize: 14,
-                    fontWeight: isActive(link.href) ? 600 : 400,
-                    padding: "10px 12px",
-                    borderRadius: 6,
-                    background: isActive(link.href) ? "rgba(201,168,76,0.1)" : "transparent",
-                    borderLeft: isActive(link.href) ? `3px solid ${C.gold}` : "3px solid transparent",
-                    paddingLeft: "9px",
-                  }}
+                  style={getMobileLinkStyle(isActive(link.href))}
                 >
                   {link.label}
                 </Link>
@@ -154,60 +117,28 @@ export function Navbar() {
                 <Link
                   href="/profile"
                   onClick={() => setShowMobileMenu(false)}
-                  style={{
-                    color: isActive("/profile") ? C.gold : C.muted,
-                    textDecoration: "none",
-                    fontSize: 14,
-                    fontWeight: isActive("/profile") ? 600 : 400,
-                    padding: "10px 12px",
-                    borderRadius: 6,
-                    background: isActive("/profile") ? "rgba(201,168,76,0.1)" : "transparent",
-                    borderLeft: isActive("/profile") ? `3px solid ${C.gold}` : "3px solid transparent",
-                    paddingLeft: "9px",
-                  }}
+                  style={getMobileLinkStyle(isActive("/profile"))}
                 >
                   Profil
                 </Link>
               )}
             </div>
 
-            {/* Divider */}
-            <div style={{ height: "1px", background: C.border, margin: "16px 0" }} />
-
-            {/* User Menu in Sidebar */}
             {user && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: "1px", fontWeight: 600 }}>
-                  Compte
+              <>
+                <div style={{ height: 1, background: C.border, margin: "16px 0" }} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "1px", fontWeight: 600, padding: "0 12px 6px" }}>
+                    Compte
+                  </div>
+                  <button
+                    onClick={() => { handleOpenHistory(); setShowMobileMenu(false); }}
+                    style={mobileMenuBtnStyle}
+                  >
+                    📋 Mes Déverrouillages
+                  </button>
                 </div>
-                <button
-                  onClick={() => {
-                    handleOpenHistory();
-                    setShowMobileMenu(false);
-                  }}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    color: C.muted,
-                    fontSize: 13,
-                    textAlign: "left",
-                    cursor: "pointer",
-                    padding: "8px 12px",
-                    borderRadius: 6,
-                    transition: "all 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(201,168,76,0.1)";
-                    e.currentTarget.style.color = C.gold;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = C.muted;
-                  }}
-                >
-                  Mes Déverrouillages
-                </button>
-              </div>
+              </>
             )}
           </div>
         </div>
@@ -216,45 +147,130 @@ export function Navbar() {
       {showHistory && (
         <HistoryModal
           data={history}
-          loading={loading}
+          loading={historyLoading}
           onClose={() => setShowHistory(false)}
         />
       )}
 
       <style>{`
-        @media (max-width: 768px) {
-          .nav-links-desktop {
-            display: none !important;
-          }
-          .menu-icon {
-            display: block !important;
-          }
-        }
+        .nav-links-desktop { display: none !important; }
+        .menu-icon { display: flex !important; }
 
         @media (min-width: 769px) {
-          .nav-links-desktop {
-            display: flex !important;
-          }
-          .menu-icon {
-            display: none !important;
-          }
+          .nav-links-desktop { display: flex !important; }
+          .menu-icon { display: none !important; }
         }
       `}</style>
     </>
   );
 }
 
-function getLinkStyle(isActive: boolean): React.CSSProperties {
+/* ─── STYLES ──────────────────────────────────────────────────────────────── */
+
+const navStyle: React.CSSProperties = {
+  background: "#0A0C0F",
+  borderBottom: "1px solid #2A3140",
+  padding: "12px 16px",
+  display: "flex",
+  alignItems: "center",
+  gap: 16,
+  position: "sticky",
+  top: 0,
+  zIndex: 100,
+};
+
+const logoStyle: React.CSSProperties = {
+  fontFamily: "'Bebas Neue', sans-serif",
+  fontSize: 18,
+  letterSpacing: "2px",
+  color: "#E8EAF0",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const desktopLinksStyle: React.CSSProperties = {
+  gap: 24,
+  alignItems: "center",
+  flex: 1,
+  justifyContent: "center",
+};
+
+const hamburgerStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: "#E8EAF0",
+  fontSize: 20,
+  cursor: "pointer",
+  padding: 4,
+  lineHeight: 1,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 32,
+  height: 32,
+  borderRadius: 6,
+  flexShrink: 0,
+};
+
+const sidebarOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.5)",
+  zIndex: 999,
+};
+
+const sidebarStyle: React.CSSProperties = {
+  position: "fixed",
+  left: 0,
+  top: 0,
+  bottom: 0,
+  width: "80%",
+  maxWidth: 300,
+  background: "#111418",
+  borderRight: "1px solid #2A3140",
+  padding: 16,
+  overflowY: "auto",
+  zIndex: 1000,
+};
+
+const mobileMenuBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "#7A8399",
+  fontSize: 13,
+  textAlign: "left",
+  cursor: "pointer",
+  padding: "10px 12px",
+  borderRadius: 6,
+  width: "100%",
+};
+
+function getLinkStyle(active: boolean): React.CSSProperties {
   return {
-    color: isActive ? C.gold : C.muted,
+    color: active ? "#C9A84C" : "#7A8399",
     textDecoration: "none",
     fontSize: 12,
-    fontWeight: isActive ? 600 : 400,
+    fontWeight: active ? 600 : 400,
     letterSpacing: "0.5px",
     textTransform: "uppercase",
-    borderBottom: isActive ? `2px solid ${C.gold}` : "2px solid transparent",
+    borderBottom: active ? "2px solid #C9A84C" : "2px solid transparent",
     paddingBottom: 4,
     transition: "all 0.2s ease",
     cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+}
+
+function getMobileLinkStyle(active: boolean): React.CSSProperties {
+  return {
+    color: active ? "#C9A84C" : "#7A8399",
+    textDecoration: "none",
+    fontSize: 14,
+    fontWeight: active ? 600 : 400,
+    padding: "10px 12px",
+    borderRadius: 6,
+    background: active ? "rgba(201,168,76,0.1)" : "transparent",
+    borderLeft: active ? "3px solid #C9A84C" : "3px solid transparent",
+    display: "block",
   };
 }
