@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
+import SoccerVitalImportModal from "@/components/SoccerVitalImportModal";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 interface Match {
@@ -193,24 +194,24 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
     league: "Premier League", outcome: "PENDING", is_published: false, matches: [],
   });
 
-const [form, setForm] = useState<Pick>(
-  pick
-    ? { ...pick, matches: pick.matches.map((m) => ({ ...m, _id: m._id || genId() })) }
-    : defaultForm()
-);
-useEffect(() => {
-  if (pick) {
-    setForm({
-      ...pick,
-      matches: pick.matches.map((m) => ({
-        ...m,
-        _id: m._id || genId(),   // re-hydrate missing _ids from API response
-      })),
-    });
-  } else {
-    setForm(defaultForm());
-  }
-}, [pick]);
+  const [form, setForm] = useState<Pick>(
+    pick
+      ? { ...pick, matches: pick.matches.map((m) => ({ ...m, _id: m._id || genId() })) }
+      : defaultForm()
+  );
+  useEffect(() => {
+    if (pick) {
+      setForm({
+        ...pick,
+        matches: pick.matches.map((m) => ({
+          ...m,
+          _id: m._id || genId(),   // re-hydrate missing _ids from API response
+        })),
+      });
+    } else {
+      setForm(defaultForm());
+    }
+  }, [pick]);
   const [saving, setSaving] = useState(false);
   const [newMatch, setNewMatch] = useState("");
 
@@ -463,6 +464,7 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
   const [search, setSearch] = useState("");
   const [filterOutcome, setFilterOutcome] = useState("ALL");
   const [filterLeague, setFilterLeague] = useState("ALL");
+  const [showImport, setShowImport] = useState(false);
 
   const filtered = useMemo(() => picks.filter((p) => {
     const s = search.toLowerCase();
@@ -519,6 +521,12 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
         <button onClick={() => { setEditPick(null); setShowForm(true); }}
           style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
           <Icons.plus /> Nouveau Pick
+        </button>
+        <button
+          onClick={() => setShowImport(true)}
+          style={{ background: C.dark4, border: `1px solid ${C.border}`, color: C.gold, borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
+        >
+          ⚽ SoccerVital
         </button>
       </div>
 
@@ -579,6 +587,19 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
 
       {(showForm || editPick) && (
         <PickFormModal pick={editPick} onSave={handleSave} onClose={() => { setShowForm(false); setEditPick(null); }} />
+      )}
+      {showImport && (
+        <SoccerVitalImportModal
+          onClose={() => setShowImport(false)}
+          onPickCreated={(pick) => {
+            const normalized = {
+              ...pick,
+              matches: pick.matches.map((m) => ({ ...m, _id: Math.random().toString(36).slice(2, 9) })),
+            };
+            setPicks((prev) => [normalized as Pick, ...prev]);
+            setShowImport(false);
+          }}
+        />
       )}
     </div>
   );
@@ -645,9 +666,9 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
                 <div style={{ fontSize: 11, color: C.muted }}>
                   {u.lastLoginAt
                     ? new Date(u.lastLoginAt).toLocaleDateString("fr-FR", {
-                        day: "numeric", month: "short",
-                        hour: "2-digit", minute: "2-digit",
-                      })
+                      day: "numeric", month: "short",
+                      hour: "2-digit", minute: "2-digit",
+                    })
                     : "—"}
                 </div>
                 <button style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, padding: "5px 10px", fontSize: 10, cursor: "pointer", fontFamily: "inherit" }}>Voir →</button>
@@ -680,9 +701,9 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
                 <span>
                   {u.lastLoginAt
                     ? `🕐 ${new Date(u.lastLoginAt).toLocaleDateString("fr-FR", {
-                        day: "numeric", month: "short",
-                        hour: "2-digit", minute: "2-digit",
-                      })}`
+                      day: "numeric", month: "short",
+                      hour: "2-digit", minute: "2-digit",
+                    })}`
                     : "Jamais connecté"}
                 </span>
               </div>

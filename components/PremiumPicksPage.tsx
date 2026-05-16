@@ -1,6 +1,8 @@
 "use client";
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { OneXBetBanner } from "./OneXBetBanner";
+import { CompoundBetBanner } from "./CompoundBanner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Match {
@@ -992,7 +994,9 @@ export default function PremiumPicksPage() {
         <>
             <GlobalStyles />
             <main style={{ minHeight: "100vh", background: "#0A0C0F", paddingBottom: 80 }}>
-                <StatsBar picks={picks} />
+                <OneXBetBanner />
+                <CompoundBetBanner/>
+                {/* <StatsBar picks={picks} /> */}
                 <FilterBar active={activeFilter} onChange={setActiveFilter} picks={picks} />
                 <section style={{ padding: "24px 16px", maxWidth: 700, margin: "0 auto" }}>
                     {user && (
