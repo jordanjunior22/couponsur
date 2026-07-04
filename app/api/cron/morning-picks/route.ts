@@ -1,62 +1,35 @@
-// ─── app/api/cron/morning-picks/route.ts ─────────────────────────────────────
+// ─── app/api/cron/morning-picks/route.ts (SoccerVital odds version) ──────────
 //
-// WHAT IT DOES:
-//   1. Fetches today's fixtures from API-Football (all tracked leagues incl. WC)
-//   2. For each upcoming fixture: fetches odds, team stats, H2H in parallel
-//   3. Runs a multi-factor scoring algorithm (odds + form + stats + H2H)
-//   4. Cross-validates tips against SoccerVista & SoccerVital scrapers (+5 pts each)
-//   5. Builds THREE tiered combo picks every day:
-//        • "Safe"  – top 3 games by confidence, total odds 1.30–2.80
-//        • "Value" – next 3 by confidence, total odds 2.80–6.00
-//        • "Bold"  – top 4 highest-odd qualifiers, total odds 6.00+
-//   6. Falls back gracefully: if fewer games pass filters, combos use whatever is
-//      available (min 2 games per combo); combos are skipped only when truly empty.
-//   7. Saves all created picks to MongoDB (published, is_automated: true)
-//
-// WHEN TO RUN:  09:00 Africa/Douala (WAT = UTC+1)
-//   vercel.json cron: "0 8 * * *"
-//
-// QUOTA:  ~24 API calls for fixtures + up to 60 for stats/H2H → ~85/100 daily
-//         Adjust COMBO_SIZE or disable stats for low-quota days via env flags.
+// WHAT THIS DOES:
+//   - Confidence comes from a heuristic (tip specificity + O/U consistency —
+//     see lib/predictionEngine.ts), since SoccerVital publishes no numeric
+//     confidence of its own.
+//   - Odds for 1X2/DC picks are SoccerVital's own published decimal odds
+//     (real numbers from their site, not invented) — see predictionEngine's
+//     realOddForTip(). They are NOT live bookmaker market prices, so they
+//     may differ from what any actual sportsbook offers at bet time.
+//   - No fixture IDs exist from scraped sources, so automatic result grading
+//     is NOT wired up here. Picks are created as PENDING and need either
+//     manual grading or a separate results-only data source.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
 import PickModel, { Outcome } from "@/models/Picks";
-import {
-  getFixturesByDate,
-  getOddsForFixture,
-  getTeamStats,
-  getH2H,
-  extract1X2,
-  pickTip,
-  scoreConfidence,
-  LEAGUE_LABEL,
-  type APIFixture,
-  type APITeamStats,
-  type APIH2H,
-  type ConfidenceBreakdown,
-} from "@/lib/apiFootball";
-import {
-  getSoccerVistaPredictions,
-  crossValidate,
-} from "@/lib/soccervista";
-import {
-  getSoccerVitalPredictions,
-  crossValidateVital,
-} from "@/lib/soccervital";
+import { getPredictions, type PredictionPick } from "@/lib/predictionengine";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const MIN_ODD = 1.25;
-const MAX_ODD = 2.30;          // upper bound for a single selection
-const MIN_CONFIDENCE = 45;     // min score (out of 100) to be included in any combo
-const AUTO_PICK_PRICE = 2000;  // FCFA
+const MIN_CONFIDENCE = 45;      // min score (out of 100) to be included in any combo
 
-// Tier definitions
+// Fixed price bands per tier, in FCFA (100–500 range).
+// minOdds is set per-tier rather than globally: a "Safe" combo is inherently
+// low-odd by design (high confidence ⇒ short-priced favourites), so forcing
+// every tier to the same odds floor would either break the "safe" concept
+// or make it impossible to ever build one.
 const TIERS = [
-  { id: "safe",  label: "Safe",  size: 3, minConf: 65, maxTotalOdds: 3.50, priceMultiplier: 1.0 },
-  { id: "value", label: "Value", size: 3, minConf: 50, maxTotalOdds: 7.00, priceMultiplier: 1.2 },
-  { id: "bold",  label: "Bold",  size: 4, minConf: 45, maxTotalOdds: 25.0, priceMultiplier: 1.5 },
+  { id: "safe",  label: "Safe",  size: 3, minConf: 65, maxOdds: 3.50,  minOdds: 1.50, price: 200 },
+  { id: "value", label: "Value", size: 3, minConf: 50, maxOdds: 7.00,  minOdds: 2.50, price: 350 },
+  { id: "bold",  label: "Bold",  size: 4, minConf: 45, maxOdds: 25.0,  minOdds: 4.00, price: 500 },
 ] as const;
 
 // ─── Auth guard ───────────────────────────────────────────────────────────────
@@ -65,22 +38,6 @@ function isCronAuthorized(req: NextRequest): boolean {
   if (!secret) return true;
   const auth = req.headers.get("authorization");
   return auth === `Bearer ${secret}`;
-}
-
-// ─── Enriched fixture type ────────────────────────────────────────────────────
-interface EnrichedFixture {
-  fixture:    APIFixture;
-  tip:        string;
-  odd:        number;
-  odd1:       number;
-  oddX:       number;
-  odd2:       number;
-  homeStats:  APITeamStats | null;
-  awayStats:  APITeamStats | null;
-  h2h:        APIH2H[];
-  confidence: ConfidenceBreakdown;
-  crossVista: boolean;
-  crossVital: boolean;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -96,127 +53,122 @@ export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
-    // ── 1. Today's date in WAT (UTC+1) ───────────────────────────────────────
     const today = new Date();
-    today.setHours(today.getHours() + 1);
+    today.setHours(today.getHours() + 1); // WAT = UTC+1
     const dateStr = today.toISOString().split("T")[0];
     info(`Running morning-picks for ${dateStr}`);
 
-    // ── 2. Fetch all sources in parallel ─────────────────────────────────────
-    const [allFixtures, vistaData, vitalData] = await Promise.all([
-      getFixturesByDate(dateStr),
-      getSoccerVistaPredictions().catch(() => []),
-      getSoccerVitalPredictions().catch(() => []),
-    ]);
+    // ── 1. Get predictions from SoccerVital ──────────────────────────────────
+    const allPicks = await getPredictions();
+    info(`${allPicks.length} raw prediction(s) across all markets`);
 
-    info(`Fixtures: ${allFixtures.length} | SoccerVista: ${vistaData.length} | SoccerVital: ${vitalData.length}`);
-
-    // ── 3. Filter to only not-started fixtures ────────────────────────────────
-    const upcoming = allFixtures.filter((f) => f.fixture.status.short === "NS");
-    info(`${upcoming.length} not-yet-started fixture(s)`);
-
-    if (upcoming.length === 0) {
-      return NextResponse.json({ ok: true, message: "No fixtures today", log });
+    if (allPicks.length === 0) {
+      return NextResponse.json({ ok: true, message: "No predictions today", log });
     }
 
-    // ── 4. Enrich each fixture (odds + stats + H2H) ───────────────────────────
-    // Run in parallel with a concurrency cap to respect rate limits
-    const CONCURRENCY = 5;
-    const enriched: EnrichedFixture[] = [];
-
-    for (let i = 0; i < upcoming.length; i += CONCURRENCY) {
-      const batch = upcoming.slice(i, i + CONCURRENCY);
-      const results = await Promise.allSettled(
-        batch.map((fixture) => enrichFixture(fixture, vistaData, vitalData, warn))
-      );
-      for (const r of results) {
-        if (r.status === "fulfilled" && r.value) enriched.push(r.value);
-      }
+    // Quick distribution snapshot for debugging — top 5 by confidence
+    const top5 = [...allPicks].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
+    for (const p of top5) {
+      info(`  top: ${p.home} vs ${p.away} | ${p.market} ${p.tip} @ ${p.odd} | conf:${p.confidence}`);
     }
 
-    info(`${enriched.length} fixture(s) fully enriched`);
+    // ── 2. Restrict to 1X2 / Double Chance for combo-building ────────────────
+    //     (O/U picks are available via getPredictions() for a separate
+    //      "markets" feed/UI if you want to surface them individually —
+    //      note those carry isEstimatedOdd: true, unlike 1X2/DC picks)
+    const qualified = allPicks
+      .filter((p) => (p.market === "1X2" || p.market === "DC") && p.confidence >= MIN_CONFIDENCE)
+      .sort((a, b) => b.confidence - a.confidence);
 
-    // ── 5. Filter by minimum confidence ──────────────────────────────────────
-    const qualified = enriched
-      .filter((e) => e.confidence.total >= MIN_CONFIDENCE)
-      .sort((a, b) => b.confidence.total - a.confidence.total);
-
-    info(`${qualified.length} fixture(s) met the confidence threshold (≥${MIN_CONFIDENCE})`);
+    info(`${qualified.length} 1X2/DC pick(s) met the confidence threshold (≥${MIN_CONFIDENCE})`);
 
     if (qualified.length === 0) {
       return NextResponse.json({
         ok: true,
-        message: "No qualifying fixtures after confidence filter",
+        message: "No qualifying picks after confidence filter",
         log,
       });
     }
 
-    // ── 6. Build tiered combos ────────────────────────────────────────────────
+    // ── 3. Build tiered combos ────────────────────────────────────────────────
     const createdPicks: string[] = [];
-    const usedIds = new Set<number>();
+    const usedKeys = new Set<string>();
+    const keyOf = (p: PredictionPick) => `${p.home}|${p.away}`;
 
     for (const tier of TIERS) {
-      // Candidates: meet tier's minConf, not already used in a higher tier
       const candidates = qualified
-        .filter((e) => e.confidence.total >= tier.minConf && !usedIds.has(e.fixture.fixture.id))
-        .slice(0, tier.size * 2); // pool 2× to allow combination flexibility
+        .filter((p) => p.confidence >= tier.minConf && !usedKeys.has(keyOf(p)));
+      // NOTE: intentionally NOT sliced to a "top N" — the swap-up logic in
+      // pickCombo needs the full range of qualifying confidences (and
+      // therefore odds) available, or it can't find a genuinely higher-odd
+      // leg to swap in when a combo starts below the tier's odds floor.
 
       if (candidates.length < 2) {
         warn(`Tier "${tier.label}": not enough candidates (${candidates.length}) — skip`);
         continue;
       }
 
-      // Try to build a combo that stays within maxTotalOdds
-      const selected = pickCombo(candidates, tier.size, tier.maxTotalOdds);
+      const selected = pickCombo(candidates, tier.size, tier.maxOdds, tier.minOdds);
 
       if (selected.length < 2) {
         warn(`Tier "${tier.label}": could not build combo with ≥2 games — skip`);
         continue;
       }
 
-      // Mark IDs as used (safe tier games don't appear in bold tier)
-      if (tier.id === "safe") {
-        for (const s of selected) usedIds.add(s.fixture.fixture.id);
-      }
-
       const totalOdds = parseFloat(
         selected.reduce((acc, s) => acc * s.odd, 1).toFixed(2)
       );
-      const price = Math.round(AUTO_PICK_PRICE * tier.priceMultiplier / 100) * 100;
 
-      // Dominant league label
-      const leagueFreq: Record<string, number> = {};
-      for (const s of selected) {
-        const label = LEAGUE_LABEL[s.fixture.league.id] ?? s.fixture.league.name;
-        leagueFreq[label] = (leagueFreq[label] ?? 0) + 1;
+      if (totalOdds < tier.minOdds) {
+        warn(`Tier "${tier.label}": combo odds ${totalOdds} below floor of ${tier.minOdds} — skip`);
+        continue;
       }
-      const dominantLeague =
-        Object.entries(leagueFreq).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Mix";
+
+      if (tier.id === "safe") {
+        for (const s of selected) usedKeys.add(keyOf(s));
+      }
+
+      const price = tier.price;
+
+      // Label the combo's league honestly: only name a specific league if
+      // every selected match is from that same league, otherwise say "Mixed"
+      // rather than picking a misleading "dominant" one.
+      const distinctLeagues = new Set(selected.map((s) => s.league));
+      const leagueLabel = distinctLeagues.size === 1
+        ? [...distinctLeagues][0]
+        : "Mixed";
 
       const localeDateStr = new Date(dateStr + "T12:00:00").toLocaleDateString("fr-FR", {
         day: "2-digit", month: "2-digit", year: "numeric",
       });
 
-      const pickTitle = `${tier.label} – ${dominantLeague} – x${selected.length} – ${localeDateStr}`;
+      const pickTitle = `${tier.label} – ${leagueLabel} – x${selected.length} – ${localeDateStr}`;
 
       const avgConf = Math.round(
-        selected.reduce((s, e) => s + e.confidence.total, 0) / selected.length
+        selected.reduce((s, e) => s + e.confidence, 0) / selected.length
       );
 
       const matches = selected.map((s) => ({
         prediction: buildPredictionString(s),
         outcome: Outcome.PENDING,
-        fixtureId: s.fixture.fixture.id,
+        fixtureId: null, // no fixture ID available from scraped sources
         tip: s.tip,
         score: null,
+        home: s.home,
+        away: s.away,
+        league: s.league,
       }));
 
+      // All legs in a combo come from the 1X2/DC filter above, which only
+      // includes picks with isEstimatedOdd === false — so the combo's odds
+      // are real (SoccerVital-published), not invented.
       const pick = await PickModel.create({
         title: pickTitle,
         price,
         total_odds: totalOdds,
+        is_estimated_odds: false,
         match_date: new Date(dateStr + "T12:00:00"),
-        league: dominantLeague,
+        league: leagueLabel,
         outcome: Outcome.PENDING,
         is_published: true,
         is_automated: true,
@@ -250,112 +202,57 @@ export async function GET(req: NextRequest) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Fetch odds, stats, H2H for a single fixture and return an EnrichedFixture */
-async function enrichFixture(
-  fixture: APIFixture,
-  vistaData: Awaited<ReturnType<typeof getSoccerVistaPredictions>>,
-  vitalData: Awaited<ReturnType<typeof getSoccerVitalPredictions>>,
-  warn: (m: string) => void
-): Promise<EnrichedFixture | null> {
-  const { id }  = fixture.fixture;
-  const homeId  = fixture.teams.home.id;
-  const awayId  = fixture.teams.away.id;
-  const leagueId = fixture.league.id;
-  const homeName = fixture.teams.home.name;
-  const awayName = fixture.teams.away.name;
-
-  // Fetch odds, stats, H2H in parallel
-  const [oddsData, homeStats, awayStats, h2h] = await Promise.all([
-    getOddsForFixture(id),
-    getTeamStats(homeId, leagueId),
-    getTeamStats(awayId, leagueId),
-    getH2H(homeId, awayId, 10),
-  ]);
-
-  if (!oddsData) {
-    warn(`No odds for ${homeName} vs ${awayName} (id:${id})`);
-    return null;
-  }
-
-  const parsed = extract1X2(oddsData);
-  if (!parsed) {
-    warn(`Could not parse 1X2 for ${homeName} vs ${awayName}`);
-    return null;
-  }
-
-  const { odd1, oddX, odd2 } = parsed;
-  const { tip, odd } = pickTip(odd1, oddX, odd2);
-
-  if (odd < MIN_ODD || odd > MAX_ODD) return null;
-
-  // Cross-validation
-  const crossVista = crossValidate(homeName, awayName, tip, vistaData);
-  const crossVital = crossValidateVital(homeName, awayName, tip, vitalData);
-
-  // Score confidence (SoccerVista is primary cross-val source here)
-  const confidence = scoreConfidence(
-    tip,
-    odd,
-    homeStats,
-    awayStats,
-    h2h,
-    crossVista || crossVital // bonus if either agrees
-  );
-
-  return { fixture, tip, odd, odd1, oddX, odd2, homeStats, awayStats, h2h, confidence, crossVista, crossVital };
-}
-
-/**
- * Greedily build the best combo of exactly `size` games (or fewer if unavailable)
- * that stays within maxTotalOdds. Sorted by confidence desc, then trimmed.
- */
 function pickCombo(
-  candidates: EnrichedFixture[],
+  candidates: PredictionPick[],
   size: number,
-  maxTotalOdds: number
-): EnrichedFixture[] {
-  // Start with the top `size` by confidence
+  maxOdds: number,
+  minOdds: number
+): PredictionPick[] {
   const selected = candidates.slice(0, size);
+  let total = selected.reduce((acc, s) => acc * s.odd, 1);
 
-  // If total odds exceed the cap, swap in lower-odd alternatives
-  let totalOdds = selected.reduce((acc, s) => acc * s.odd, 1);
-
-  // If over cap, try replacing the highest-odd selection with a lower one
-  if (totalOdds > maxTotalOdds) {
+  // Too high: swap the highest-odd selection for a lower-odd candidate
+  if (total > maxOdds) {
     const sorted = [...selected].sort((a, b) => b.odd - a.odd);
     const overflow = sorted[0];
     const replacement = candidates
       .slice(size)
       .find((c) => !selected.includes(c) && c.odd < overflow.odd);
-
-    if (replacement) {
-      const idx = selected.indexOf(overflow);
-      selected[idx] = replacement;
-    }
+    if (replacement) selected[selected.indexOf(overflow)] = replacement;
   }
 
-  // Final total odds
-  totalOdds = selected.reduce((acc, s) => acc * s.odd, 1);
-
-  // Cap at maxTotalOdds: if still too high, drop the highest-odd game
-  while (totalOdds > maxTotalOdds && selected.length > 2) {
+  total = selected.reduce((acc, s) => acc * s.odd, 1);
+  while (total > maxOdds && selected.length > 2) {
     selected.sort((a, b) => b.odd - a.odd);
     selected.shift();
-    totalOdds = selected.reduce((acc, s) => acc * s.odd, 1);
+    total = selected.reduce((acc, s) => acc * s.odd, 1);
+  }
+
+  // Too low: swap the lowest-odd selection for a higher-odd candidate,
+  // as long as we stay under the max. Repeat until we clear the floor or
+  // run out of swaps to try.
+  total = selected.reduce((acc, s) => acc * s.odd, 1);
+  let attempts = 0;
+  while (total < minOdds && attempts < candidates.length) {
+    const sorted = [...selected].sort((a, b) => a.odd - b.odd);
+    const weakest = sorted[0];
+    const pool = candidates.filter((c) => !selected.includes(c));
+    const replacement = pool
+      .filter((c) => c.odd > weakest.odd)
+      .sort((a, b) => b.odd - a.odd)
+      .find((c) => {
+        const projected = (total / weakest.odd) * c.odd;
+        return projected <= maxOdds;
+      });
+    if (!replacement) break;
+    selected[selected.indexOf(weakest)] = replacement;
+    total = selected.reduce((acc, s) => acc * s.odd, 1);
+    attempts++;
   }
 
   return selected;
 }
 
-/** Build the human-readable prediction string with confidence metadata */
-function buildPredictionString(e: EnrichedFixture): string {
-  const { homeName, awayName } = {
-    homeName: e.fixture.teams.home.name,
-    awayName: e.fixture.teams.away.name,
-  };
-  const league = LEAGUE_LABEL[e.fixture.league.id] ?? e.fixture.league.name;
-  const conf   = e.confidence.total;
-  const cv     = [e.crossVista && "Vista", e.crossVital && "Vital"].filter(Boolean).join("+") || "";
-  const cvStr  = cv ? ` [✓${cv}]` : "";
-  return `${homeName} vs ${awayName} — ${e.tip} @ ${e.odd.toFixed(2)} | ${league} | conf:${conf}${cvStr}`;
+function buildPredictionString(p: PredictionPick): string {
+  return `${p.home} v ${p.away} | ${p.tip} | ${p.odd.toFixed(2)}`;
 }

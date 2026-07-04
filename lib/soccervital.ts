@@ -1,5 +1,14 @@
 // ─── lib/soccervital.ts ──────────────────────────────────────────────────────
-// Scrapes SoccerVital for today's predicted tips (second cross-validation source)
+// Scrapes SoccerVital for today's predicted tips + published odds.
+//
+// SoccerVital's table layout (confirmed by inspecting the live page) is:
+//   [0] time  [1] home  [2] away  [3] odd-1  [4] odd-X  [5] odd-2
+//   [6] tip (1X2/DC/etc.)  [7] goals (O/U)  [8] predicted score
+//
+// The 1/X/2 columns are real published decimal odds (SoccerVital's own
+// explainer confirms "1 @ 2.15" style odds in European decimal format).
+// These are NOT live bookmaker odds — they're SoccerVital's own quoted
+// figures — but they are real numbers from the site, not invented.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as cheerio from "cheerio";
@@ -10,6 +19,9 @@ export interface SoccerVitalPrediction {
   tip:    string;
   goals:  string;  // "O" (Over 2.5) | "U" (Under 2.5) | ""
   league: string;
+  odd1:   number | null; // published odd for Home win
+  oddX:   number | null; // published odd for Draw
+  odd2:   number | null; // published odd for Away win
 }
 
 let _cache: { data: SoccerVitalPrediction[]; ts: number } | null = null;
@@ -40,7 +52,7 @@ export async function getSoccerVitalPredictions(): Promise<SoccerVitalPrediction
     $("table tr").each((_, row) => {
       const cells = $(row).find("td");
 
-      if (cells.length < 7) {
+      if (cells.length < 9) {
         const leagueLink = $(row).find("a[href*='table-']");
         if (leagueLink.length > 0) {
           const n = leagueLink.text().trim();
@@ -52,12 +64,15 @@ export async function getSoccerVitalPredictions(): Promise<SoccerVitalPrediction
       const time  = $(cells[0]).text().trim();
       const home  = $(cells[1]).text().trim();
       const away  = $(cells[2]).text().trim();
+      const odd1  = parseOdd($(cells[3]).text());
+      const oddX  = parseOdd($(cells[4]).text());
+      const odd2  = parseOdd($(cells[5]).text());
       const tip   = $(cells[6]).text().trim().replace(/\*/g, "").trim();
       const goals = $(cells[7])?.text().trim() || "";
 
       if (!home || !away || !/^\d{1,2}:\d{2}$/.test(time)) return;
 
-      predictions.push({ home, away, tip, goals, league: currentLeague });
+      predictions.push({ home, away, tip, goals, league: currentLeague, odd1, oddX, odd2 });
     });
 
     _cache = { data: predictions, ts: Date.now() };
@@ -66,6 +81,11 @@ export async function getSoccerVitalPredictions(): Promise<SoccerVitalPrediction
     console.warn("SoccerVital scrape failed:", e);
     return [];
   }
+}
+
+function parseOdd(raw: string): number | null {
+  const n = parseFloat(raw.trim());
+  return Number.isFinite(n) && n > 1 ? n : null;
 }
 
 function normName(name: string): string {

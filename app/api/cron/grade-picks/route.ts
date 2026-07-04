@@ -1,20 +1,39 @@
-// ─── app/api/cron/grade-picks/route.ts ──────────────────────────────────────
+// ─── app/api/cron/grade-picks/route.ts ────────────────────────────────────────
 //
-// Grades all PENDING automated picks whose match_date is today or earlier.
-// Compatible with both legacy single-combo picks and new tiered combo picks.
+// WHAT IT DOES:
+//   1. Finds all PENDING picks whose match_date has passed (i.e. games
+//      should have finished by now).
+//   2. For each match inside those picks, looks up the final score by
+//      re-scraping that match's league page on SoccerVital (the same
+//      "Latest results" table used for form scoring — see soccervitalForm.ts)
+//      and fuzzy-matching team names.
+//   3. Grades each leg (WIN/LOSS) using gradeHelpers.ts, and grades the
+//      overall combo (WIN only if every leg wins; LOSS if any leg loses;
+//      stays PENDING if any leg's result still can't be found).
+//   4. Saves updated outcomes/scores back to Mongo.
 //
-// WHEN TO RUN: 23:30 Africa/Douala (WAT = UTC+1)
-//   vercel.json cron: "30 22 * * *"  (22:30 UTC = 23:30 WAT)
+// LIMITATIONS (be aware of these):
+//   - No fixture ID exists for scraped picks, so matching relies on fuzzy
+//     team-name comparison within the stored league. If a match isn't found
+//     in that league's "Latest results" table (e.g. postponed, or the table
+//     only keeps a short window of recent results, or league-slug mismatch),
+//     it stays PENDING and needs manual grading via the tick-outcome route.
+//   - SoccerVital's results table doesn't include a year, only a day/month
+//     — for older PENDING picks this could theoretically misfire across a
+//     year boundary. Not a concern for near-term grading (typical use case).
+//   - This does NOT touch is_manually_graded picks — those are considered
+//     final once ticked by a human.
+//
+// WHEN TO RUN: a few hours after match_date, once games should be finished
+//   (e.g. suggested cron: run at 23:00 WAT covering that day's matches, or
+//   the following morning before the next day's morning-picks run).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
-import PickModel, { Outcome, IPick } from "@/models/Picks";
-import {
-  getFixturesByIds,
-  gradeResult,
-  FINISHED_STATUSES,
-} from "@/lib/apiFootball";
+import PickModel, { Outcome } from "@/models/Picks";
+import { getLeagueResults, findMatchResult } from "@/lib/soccervitalForm";
+import { gradeTip, comboOutcome } from "@/lib/gradeHelpers";
 
 function isCronAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -35,124 +54,82 @@ export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
+    const now = new Date();
     const pendingPicks = await PickModel.find({
-      outcome:       Outcome.PENDING,
-      is_automated:  true,
-      match_date:    { $lte: todayEnd },
-      "matches.fixtureId": { $exists: true, $ne: null },
-    }).lean();
+      outcome: Outcome.PENDING,
+      is_manually_graded: { $ne: true },
+      match_date: { $lte: now },
+    });
 
-    info(`Found ${pendingPicks.length} pending automated pick(s) to check`);
+    info(`${pendingPicks.length} pending pick(s) with a match_date in the past`);
+
     if (pendingPicks.length === 0) {
       return NextResponse.json({ ok: true, message: "Nothing to grade", log });
     }
 
-    // Collect all unique fixture IDs
-    const allFixtureIds: number[] = [
-      ...new Set(
-        pendingPicks.flatMap((p) =>
-          p.matches.map((m) => m.fixtureId).filter((id): id is number => !!id)
-        )
-      ),
-    ];
+    // Cache league results within this run so multiple picks sharing a
+    // league only trigger one scrape each.
+    const leagueResultsCache = new Map<string, Awaited<ReturnType<typeof getLeagueResults>>>();
+    const getResultsCached = async (league: string) => {
+      if (!leagueResultsCache.has(league)) {
+        leagueResultsCache.set(league, await getLeagueResults(league));
+      }
+      return leagueResultsCache.get(league)!;
+    };
 
-    info(`Fetching results for ${allFixtureIds.length} fixture(s)`);
-    const fixtureData = await getFixturesByIds(allFixtureIds);
-    const fixtureMap  = new Map(fixtureData.map((f) => [f.fixture.id, f]));
-    info(`Received data for ${fixtureMap.size} fixture(s)`);
-
-    let gradedPickCount   = 0;
-    let updatedMatchCount = 0;
+    let gradedPicks = 0;
+    let stillPending = 0;
 
     for (const pick of pendingPicks) {
-      let pickFullyGraded = true;
-      let anyLoss         = false;
+      let anyUpdated = false;
 
-      const updatedMatches = pick.matches.map((match) => {
-        if (match.outcome !== Outcome.PENDING) {
-          if (match.outcome === Outcome.LOSS) anyLoss = true;
-          return match;
-        }
-        if (!match.fixtureId) { pickFullyGraded = false; return match; }
-
-        const fixture = fixtureMap.get(match.fixtureId);
-        if (!fixture) {
-          warn(`Fixture ${match.fixtureId} not in API response`);
-          pickFullyGraded = false;
-          return match;
+      for (const match of pick.matches) {
+        if (match.outcome !== Outcome.PENDING) continue; // already graded (e.g. manually)
+        if (!match.home || !match.away || !match.league) {
+          warn(`Pick ${pick._id}: match missing home/away/league — needs manual grading`);
+          continue;
         }
 
-        const status = fixture.fixture.status.short;
-        if (!FINISHED_STATUSES.includes(status)) {
-          info(`Fixture ${match.fixtureId} still live (${status}) — skip`);
-          pickFullyGraded = false;
-          return match;
-        }
+        const results = await getResultsCached(match.league);
+        const result = findMatchResult(match.home, match.away, results);
 
-        const homeGoals =
-          fixture.score.fulltime.home ??
-          fixture.score.extratime.home ??
-          fixture.goals.home;
-        const awayGoals =
-          fixture.score.fulltime.away ??
-          fixture.score.extratime.away ??
-          fixture.goals.away;
+        if (!result) continue; // not found yet — leave PENDING, try again next run
 
-        if (homeGoals === null || awayGoals === null) {
-          warn(`Fixture ${match.fixtureId} finished but no score — skip`);
-          pickFullyGraded = false;
-          return match;
-        }
+        const outcome = gradeTip(match.tip ?? "", result.homeGoals, result.awayGoals);
+        match.outcome = outcome as Outcome;
+        match.score = `${result.homeGoals}:${result.awayGoals}`;
+        anyUpdated = true;
+      }
 
-        const tip     = match.tip ?? extractTipFromPrediction(match.prediction);
-        const outcome = gradeResult(tip, homeGoals, awayGoals);
-        const score   = `${homeGoals}-${awayGoals}`;
+      const legOutcomes = pick.matches.map((m) => m.outcome as "PENDING" | "WIN" | "LOSS");
+      const overall = comboOutcome(legOutcomes);
 
-        updatedMatchCount++;
-        info(`Graded fixture ${match.fixtureId}: ${tip} @ ${score} → ${outcome}`);
-        if (outcome === Outcome.LOSS) anyLoss = true;
+      if (overall !== "PENDING") {
+        pick.outcome = overall as Outcome;
+        pick.graded_at = new Date();
+        gradedPicks++;
+        info(`Graded pick ${pick._id} ("${pick.title}") → ${overall}`);
+      } else {
+        stillPending++;
+        if (anyUpdated) info(`Pick ${pick._id}: some legs graded, still awaiting others`);
+      }
 
-        return { ...match, outcome, score };
-      });
-
-      const pickOutcome: Outcome = pickFullyGraded
-        ? anyLoss ? Outcome.LOSS : Outcome.WIN
-        : Outcome.PENDING;
-
-      const changed =
-        updatedMatches.some((m, i) => m.outcome !== pick.matches[i]?.outcome) ||
-        pickOutcome !== pick.outcome;
-
-      if (changed) {
-        await PickModel.updateOne(
-          { _id: pick._id },
-          { $set: { matches: updatedMatches, outcome: pickOutcome } }
-        );
-        if (pickOutcome !== Outcome.PENDING) {
-          gradedPickCount++;
-          info(`Pick "${pick.title}" resolved as ${pickOutcome}`);
-        }
+      if (anyUpdated || overall !== "PENDING") {
+        await pick.save();
       }
     }
 
-    info(`Done — graded ${gradedPickCount} pick(s), updated ${updatedMatchCount} match(es)`);
+    info(`${gradedPicks} pick(s) fully graded, ${stillPending} still awaiting results`);
+
     return NextResponse.json({
       ok: true,
-      gradedPicks:    gradedPickCount,
-      updatedMatches: updatedMatchCount,
+      gradedPicks,
+      stillPending,
+      totalChecked: pendingPicks.length,
       log,
     });
   } catch (err) {
     console.error("grade-picks cron error:", err);
     return NextResponse.json({ ok: false, error: String(err), log }, { status: 500 });
   }
-}
-
-function extractTipFromPrediction(prediction: string): string {
-  // Handles both "— 1 @ 1.55" and "— 1X @ 1.30 | UCL | conf:72"
-  const match = prediction.match(/—\s*([^\s@|]+)/);
-  return match?.[1] ?? "1";
 }

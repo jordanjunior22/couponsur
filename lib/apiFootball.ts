@@ -35,7 +35,15 @@ export const LEAGUE_IDS = {
   club_world_cup:  15,
 } as const;
 
-export const CURRENT_SEASON = 2024; // 2024/25 season
+function getCurrentSeason(): number {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1; // 1-12
+  // Season "2025" = Aug 2025 – May/Jun 2026, etc.
+  return month >= 7 ? year : year - 1;
+}
+
+export const CURRENT_SEASON = getCurrentSeason();
 
 export const BOOKMAKER_1XBET  = 8;
 export const BOOKMAKER_BET365 = 6;

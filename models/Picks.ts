@@ -16,6 +16,10 @@ export interface IMatch {
   fixtureId?: number | null;
   tip?: string | null;
   score?: string | null;
+  /** Stored explicitly (not parsed from `prediction`) so grading can look up results reliably */
+  home?: string | null;
+  away?: string | null;
+  league?: string | null;
 }
 
 // ─── Pick Interface ──────────────────────────────────────
@@ -23,6 +27,8 @@ export interface IPick extends Document {
   title: string;
   price: number;
   total_odds: number;
+  /** True when total_odds is a synthetic/estimated value (no real bookmaker odds used) */
+  is_estimated_odds?: boolean;
   match_date: Date;
   league: string;
   outcome: Outcome;
@@ -32,6 +38,9 @@ export interface IPick extends Document {
   tier?: PickTier | null;
   /** Average confidence score (0–100) across all matches in this pick */
   avg_confidence?: number | null;
+  /** True if outcome/scores were entered manually rather than auto-graded */
+  is_manually_graded?: boolean;
+  graded_at?: Date | null;
   matches: IMatch[];
   createdAt: Date;
   updatedAt: Date;
@@ -49,6 +58,9 @@ const MatchSchema = new Schema<IMatch>(
     fixtureId: { type: Number, default: null },
     tip:       { type: String, default: null },
     score:     { type: String, default: null },
+    home:      { type: String, default: null },
+    away:      { type: String, default: null },
+    league:    { type: String, default: null },
   },
   { _id: false }
 );
@@ -59,6 +71,7 @@ const PickSchema = new Schema<IPick>(
     title:      { type: String, required: true, trim: true },
     price:      { type: Number, required: true },
     total_odds: { type: Number, required: true },
+    is_estimated_odds: { type: Boolean, default: false },
     match_date: { type: Date,   required: true },
     league:     { type: String, required: true, trim: true },
     outcome: {
@@ -74,6 +87,8 @@ const PickSchema = new Schema<IPick>(
       default: null,
     },
     avg_confidence: { type: Number, default: null },
+    is_manually_graded: { type: Boolean, default: false },
+    graded_at: { type: Date, default: null },
     matches: {
       type:     [MatchSchema],
       required: true,
