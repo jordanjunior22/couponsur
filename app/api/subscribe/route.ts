@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
-import PickModel from "@/models/Picks";
 import PaymentModel from "@/models/Payment";
 import UserModel from "@/models/Users";
+import { getSettings } from "@/models/Settings";
 import { directPay, isFapshiError } from "@/utils/fapshi";
-import { getSessionUser } from "@/utils/session"; // your JWT/cookie helper
+import { getSessionUser } from "@/utils/session";
 import { captureRequestSignal } from "@/utils/requestSignal";
-
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,13 +14,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { pickId, phone, fbc, fbp, sourceUrl } = await req.json();
-
-    if (!pickId || !phone) {
-      return NextResponse.json(
-        { error: "pickId and phone are required" },
-        { status: 400 }
-      );
+    const { phone, fbc, fbp, sourceUrl } = await req.json();
+    if (!phone) {
+      return NextResponse.json({ error: "phone is required" }, { status: 400 });
     }
 
     await connectDB();
@@ -36,21 +31,21 @@ export async function POST(req: NextRequest) {
 
     if (normalizedInput !== normalizedAccount) {
       return NextResponse.json(
-        {
-          error:
-            "Le numéro saisi ne correspond pas à votre compte. Utilisez le numéro associé à votre compte.",
-        },
+        { error: "Le numéro saisi ne correspond pas à votre compte. Utilisez le numéro associé à votre compte." },
         { status: 403 }
       );
     }
 
-    const pick = await PickModel.findById(pickId);
-    if (!pick) {
-      return NextResponse.json({ error: "Pick not found" }, { status: 404 });
+    if (dbUser.subscription?.status === "ACTIVE" && dbUser.subscription.expiresAt && dbUser.subscription.expiresAt > new Date()) {
+      return NextResponse.json(
+        { error: "Vous avez déjà un abonnement actif." },
+        { status: 400 }
+      );
     }
 
     const existing = await PaymentModel.findOne({
-      pickId,
+      userId: dbUser._id,
+      paymentType: "SUBSCRIPTION",
       phone: normalizedAccount,
       status: "PENDING",
     });
@@ -60,15 +55,18 @@ export async function POST(req: NextRequest) {
         success: true,
         transId: existing.fapshiTransId,
         paymentId: existing._id,
-        message: "Payment already initiated",
+        message: "Subscription payment already initiated",
       });
     }
 
+    const settings = await getSettings();
+    const price = settings.subscriptionMonthlyPrice;
+
     const paymentRes = await directPay({
-      amount: pick.price,
+      amount: price,
       phone: normalizedAccount,
-      externalId: pickId,
-      message: `Payment for ${pick.title}`,
+      externalId: `sub-${dbUser._id}-${Date.now()}`,
+      message: "Abonnement mensuel Coupon Sûr",
     });
 
     if (isFapshiError(paymentRes)) {
@@ -78,10 +76,10 @@ export async function POST(req: NextRequest) {
     const signal = captureRequestSignal(req, { fbc, fbp, sourceUrl });
 
     const payment = await PaymentModel.create({
-      pickId: pick._id,
+      paymentType: "SUBSCRIPTION",
       userId: dbUser._id,
       phone: normalizedAccount,
-      amount: pick.price,
+      amount: price,
       fapshiTransId: paymentRes.transId,
       status: "PENDING",
       ...signal,
@@ -93,11 +91,8 @@ export async function POST(req: NextRequest) {
       paymentId: payment._id,
     });
   } catch (err: any) {
-    console.error("Pay API error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    console.error("Subscribe API error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 

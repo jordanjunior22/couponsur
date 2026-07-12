@@ -33,6 +33,12 @@ interface ApiUser {
   phone: string;
   role: "USER" | "ADMIN";
   unlockedPickIds: string[];
+  subscription?: {
+    status: "NONE" | "ACTIVE" | "EXPIRED";
+    plan: "MONTHLY";
+    startedAt: string | null;
+    expiresAt: string | null;
+  };
   createdAt?: string;
   lastLoginAt?: string;
 }
@@ -69,6 +75,12 @@ const Icons = {
       <path d="M1 12L5 7l3 3 3-4 3-2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  settings: () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+    <circle cx="8" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.4" />
+    <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M3.5 12.5l1.4-1.4M11.1 4.9l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+  </svg>
+),
   plus: () => (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -127,6 +139,17 @@ const C = {
 };
 
 // ─── Utilities ─────────────────────────────────────────────────────────────────
+function SubscriptionBadge({ subscription }: { subscription?: ApiUser["subscription"] }) {
+  const isActive = subscription?.status === "ACTIVE" && subscription.expiresAt && new Date(subscription.expiresAt) > new Date();
+  if (!isActive) {
+    return <span style={{ fontSize: 9, color: C.muted, letterSpacing: "1px" }}>—</span>;
+  }
+  return (
+    <span style={{ background: "rgba(201,168,76,0.1)", color: C.gold, border: "1px solid rgba(201,168,76,0.25)", fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 4, letterSpacing: "1px", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+      Abonné
+    </span>
+  );
+}
 function genId() { return Math.random().toString(36).slice(2, 9); }
 function formatCFA(n: number) { return n.toLocaleString("fr-FR") + " FCFA"; }
 function formatDate(d: string) {
@@ -410,6 +433,11 @@ function UserDetailModal({ user, picks, onClose }: { user: ApiUser; picks: Pick[
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto", padding: 24 }}>
+        {user.subscription?.status === "ACTIVE" && user.subscription.expiresAt && new Date(user.subscription.expiresAt) > new Date() && (
+          <div style={{ background: "rgba(201,168,76,0.06)", border: "1px solid rgba(201,168,76,0.2)", borderRadius: 8, padding: "10px 12px", marginBottom: 16, fontSize: 12, color: C.gold }}>
+            Abonné mensuel — actif jusqu'au {new Date(user.subscription.expiresAt).toLocaleDateString("fr-FR")}
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
             <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
@@ -781,20 +809,21 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
       {/* Desktop table */}
       <div className="admin-table-desktop">
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
-            <span>Téléphone</span><span>Rôle</span><span>Picks</span><span>Wins</span><span>Dépensé</span><span>Dernière conn.</span><span>Détails</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+            <span>Téléphone</span><span>Rôle</span><span>Abonnement</span><span>Picks</span><span>Wins</span><span>Dépensé</span><span>Dernière conn.</span><span>Détails</span>
           </div>
           {filtered.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun utilisateur.</div>}
           {filtered.map((u, i) => {
             const { unlocked, wins, rev, avatar, roleBadge } = UserRow({ u });
             return (
               <div key={u._id}
-                style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer", transition: "background 0.15s" }}
+                style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer", transition: "background 0.15s" }}
                 onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.dark4)}
                 onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
                 onClick={() => setSelectedUser(u)}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>{avatar}<div style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{u.phone}</div></div>
                 <div>{roleBadge}</div>
+                <div><SubscriptionBadge subscription={u.subscription} /></div>
                 <div><span style={{ background: "rgba(201,168,76,0.1)", color: C.gold, border: "1px solid rgba(201,168,76,0.2)", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{unlocked.length} picks</span></div>
                 <div style={{ fontSize: 12, color: C.green, fontWeight: 600 }}>{wins} wins</div>
                 <div style={{ fontSize: 12, color: C.text }}>{formatCFA(rev)}</div>
@@ -826,6 +855,7 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>{u.phone}</div>
                     {roleBadge}
+                    <SubscriptionBadge subscription={u.subscription} />
                   </div>
                 </div>
                 <div style={{ fontSize: 13, color: C.gold, fontWeight: 700 }}>{formatCFA(rev)}</div>
@@ -967,7 +997,9 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const topUsers = [...users]
     .map((u) => ({ u, rev: u.unlockedPickIds.reduce((s, pid) => { const p = picks.find((pk) => pk._id === pid); return s + (p ? p.price : 0); }, 0) }))
     .sort((a, b) => b.rev - a.rev).slice(0, 5);
-
+  const activeSubscribers = users.filter((u) =>
+    u.subscription?.status === "ACTIVE" && u.subscription.expiresAt && new Date(u.subscription.expiresAt) > new Date()
+  ).length;
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 24 }}>
@@ -975,6 +1007,7 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
         <StatCard label="Utilisateurs" value={users.length} sub={`${activeUsers} actifs`} />
         <StatCard label="Picks Totaux" value={picks.length} sub={`${picks.filter((p) => p.is_published).length} publiés`} />
         <StatCard label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${finished.length - wins}L`} />
+        <StatCard label="Abonnés Actifs" value={activeSubscribers} sub={`sur ${users.length} utilisateurs`} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
@@ -1015,7 +1048,124 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
     </div>
   );
 }
+function SettingsTab() {
+  const [price, setPrice] = useState<number | null>(null);
+  const [inputValue, setInputValue] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) {
+          setPrice(data.data.subscriptionMonthlyPrice);
+          setInputValue(String(data.data.subscriptionMonthlyPrice));
+        }
+      } catch (e) {
+        console.error("Settings fetch:", e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const handleSave = async () => {
+    const num = Number(inputValue);
+    if (!num || num <= 0) return;
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriptionMonthlyPrice: num }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setPrice(data.data.subscriptionMonthlyPrice);
+        setSaveMsg("Enregistré avec succès.");
+      } else {
+        setSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setSaving(false);
+      setTimeout(() => setSaveMsg(null), 3000);
+    }
+  };
+
+  const iStyle: React.CSSProperties = {
+    background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
+    color: C.text, fontSize: 14, padding: "10px 12px", width: "100%",
+    fontFamily: "inherit", outline: "none",
+  };
+
+  if (loading) {
+    return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
+  }
+
+  return (
+    <div style={{ maxWidth: 480 }}>
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+          Abonnement
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 16 }}>
+          Prix mensuel
+        </div>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+          Montant (FCFA)
+        </label>
+        <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+          <input
+            type="number"
+            min={1}
+            step={100}
+            style={iStyle}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+          />
+          <button
+            onClick={handleSave}
+            disabled={saving || !inputValue || Number(inputValue) <= 0 || Number(inputValue) === price}
+            style={{
+              background: saving ? C.goldDark : C.gold, border: "none", color: C.dark,
+              borderRadius: 8, padding: "0 20px", fontSize: 12, fontWeight: 700,
+              cursor: (saving || !inputValue || Number(inputValue) <= 0) ? "not-allowed" : "pointer",
+              fontFamily: "inherit", letterSpacing: "0.5px", whiteSpace: "nowrap",
+              opacity: (saving || !inputValue || Number(inputValue) <= 0 || Number(inputValue) === price) ? 0.5 : 1,
+            }}
+          >
+            {saving ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </div>
+
+        {price != null && (
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: saveMsg ? 10 : 0 }}>
+            Prix actuel affiché aux utilisateurs : <span style={{ color: C.gold, fontWeight: 600 }}>{price.toLocaleString("fr-FR")} FCFA / mois</span>
+          </div>
+        )}
+
+        {saveMsg && (
+          <div style={{
+            fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 4,
+            background: saveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${saveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+            color: saveMsg.includes("succès") ? C.green : C.red,
+          }}>
+            {saveMsg}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 // ─── Access Denied ─────────────────────────────────────────────────────────────
 function AccessDenied() {
   const router = useRouter();
@@ -1034,7 +1184,7 @@ function AccessDenied() {
 }
 
 // ─── Main Admin Dashboard ───────────────────────────────────────────────────────
-type Tab = "overview" | "picks" | "users" | "revenue";
+type Tab = "overview" | "picks" | "users" | "revenue" | "settings";
 
 export default function AdminDashboard() {
   // ── Auth guard ────────────────────────────────────────────────────────────
@@ -1133,6 +1283,7 @@ export default function AdminDashboard() {
     { id: "picks", label: "Picks", icon: Icons.picks },
     { id: "users", label: "Utilisateurs", icon: Icons.users },
     { id: "revenue", label: "Revenus", icon: Icons.revenue },
+    { id: "settings", label: "Paramètres", icon: Icons.settings },
   ];
 
   const NavItems = () => (
@@ -1256,6 +1407,7 @@ export default function AdminDashboard() {
                 {tab === "picks" && <PicksTab picks={picks} setPicks={setPicks} />}
                 {tab === "users" && <UsersTab users={users} usersLoading={usersLoading} picks={picks} />}
                 {tab === "revenue" && <RevenueTab picks={picks} users={users} />}
+                {tab === "settings" && <SettingsTab />}
               </>
             )}
           </main>

@@ -7,6 +7,12 @@ interface AuthUser {
   phone: string;
   role: "USER" | "ADMIN";
   unlockedPickIds: string[];
+  subscription?: {
+    status: "NONE" | "ACTIVE" | "EXPIRED";
+    plan: "MONTHLY";
+    startedAt: string | null;
+    expiresAt: string | null;
+  };
 }
 
 interface AuthContextType {
@@ -17,6 +23,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   unlockPick: (pickId: string) => Promise<void>;
   refreshUser: () => Promise<void>;
+  hasActiveSubscription: () => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -25,14 +32,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // 🔥 THIS is what syncs cookie → frontend
   const fetchUser = async () => {
     try {
       const res = await fetch("/api/auth/me", {
-        credentials: "include", // ✅ important
+        credentials: "include",
       });
       const data = await res.json();
-
       setUser(data.user);
     } catch (error) {
       setUser(null);
@@ -40,17 +45,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setLoading(false);
     }
   };
+
   useEffect(() => {
-
-
     fetchUser();
   }, []);
-  // ─── 🔥 NEW: refresh user manually ─────────────────────
+
   const refreshUser = async () => {
     await fetchUser();
   };
 
-  // ─── Login ────────────────────────────────────────────
   const login = async (phone: string, password: string) => {
     const res = await fetch("/api/auth/login", {
       method: "POST",
@@ -64,14 +67,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       throw new Error(data.message);
     }
 
-    setUser(data.user); // ✅ sync immediately
+    setUser(data.user);
   };
 
-  // ─── Logout ───────────────────────────────────────────
   const logout = async () => {
     await fetch("/api/auth/logout", {
       method: "POST",
-      credentials: "include", // ✅ ensure cookie sent
+      credentials: "include",
     });
 
     setUser(null);
@@ -89,8 +91,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       throw new Error(data.message);
     }
 
-    setUser(data.user); // ✅ auto-login after signup
+    setUser(data.user);
   };
+
   const unlockPick = async (pickId: string) => {
     if (!user) return;
 
@@ -106,10 +109,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       throw new Error("Failed to unlock pick");
     }
 
-    setUser(data.user); // ✅ sync with backend
+    setUser(data.user);
   };
+
+  // Client-side convenience check — the actual gating source of truth is
+  // still whatever the server returns on /api/auth/me, this just saves
+  // every component from re-deriving the "is it still active" date logic.
+  const hasActiveSubscription = () => {
+    if (!user?.subscription) return false;
+    if (user.subscription.status !== "ACTIVE") return false;
+    if (!user.subscription.expiresAt) return false;
+    return new Date(user.subscription.expiresAt) > new Date();
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, signup, login, logout, unlockPick,refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, signup, login, logout, unlockPick, refreshUser, hasActiveSubscription }}>
       {children}
     </AuthContext.Provider>
   );

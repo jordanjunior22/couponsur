@@ -30,10 +30,33 @@ export async function GET() {
       return NextResponse.json({ user: null });
     }
 
+    let needsSave = false;
+
     // ─── Update lastLoginAt if inactive for 5+ minutes ───────
     const now = new Date();
     if (!user.lastLoginAt || now.getTime() - user.lastLoginAt.getTime() > FIVE_MINUTES) {
       user.lastLoginAt = now;
+      needsSave = true;
+    }
+
+    // ─── Lazily flip a lapsed subscription to EXPIRED ────────
+    // The cron (expire-subscriptions) does this in bulk once a day, but
+    // that leaves a window where the DB still says ACTIVE even though
+    // access is already correctly cut off client-side (hasActiveSubscription
+    // checks expiresAt directly). Doing it here too means the status is
+    // corrected the moment this specific user is looked up, not just once
+    // a day — so anything reading user.subscription.status (admin badges,
+    // future queries) is accurate immediately, not just eventually.
+    if (
+      user.subscription?.status === "ACTIVE" &&
+      user.subscription.expiresAt &&
+      user.subscription.expiresAt < now
+    ) {
+      user.subscription.status = "EXPIRED";
+      needsSave = true;
+    }
+
+    if (needsSave) {
       await user.save();
     }
 

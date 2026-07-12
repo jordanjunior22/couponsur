@@ -1,50 +1,18 @@
-// ─── app/api/cron/morning-picks/route.ts (SoccerVital odds version) ──────────
-//
-// WHAT THIS DOES:
-//   - Confidence comes from a heuristic (tip specificity + O/U consistency +
-//     form GAP between the two sides — see lib/predictionEngine.ts), since
-//     SoccerVital publishes no numeric confidence of its own.
-//   - Odds for 1X2/DC picks are SoccerVital's own published decimal odds
-//     (real numbers from their site, not invented) — see predictionEngine's
-//     realOddForTip(). They are NOT live bookmaker market prices, so they
-//     may differ from what any actual sportsbook offers at bet time.
-//   - The "Safe" tier additionally requires a minimum form GAP (not just
-//     confidence) — a team in clearly better recent form than its opponent,
-//     backing the same side as the tip. This is what actually distinguishes
-//     "Maitland WWWWW vs Adamstown LLWDL" (a strong, filterable signal) from
-//     two evenly-matched teams that merely got tagged with a decisive tip.
-//   - No fixture IDs exist from scraped sources, so automatic result grading
-//     is NOT wired up here. Picks are created as PENDING and need either
-//     manual grading or a separate results-only data source (see
-//     app/api/cron/grade-picks/route.ts).
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
 import PickModel, { Outcome } from "@/models/Picks";
 import { getPredictions, type PredictionPick } from "@/lib/predictionengine";
+import { getTodayWAT } from "@/lib/soccervital";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const MIN_CONFIDENCE = 45;      // min score (out of 100) to be included in any combo
+const MIN_CONFIDENCE = 45;
 
-// Fixed price bands per tier, in FCFA (100–500 range).
-// minOdds is set per-tier rather than globally: a "Safe" combo is inherently
-// low-odd by design (high confidence ⇒ short-priced favourites), so forcing
-// every tier to the same odds floor would either break the "safe" concept
-// or make it impossible to ever build one.
-//
-// minFormGap (0–1, or null): the minimum required form-gap (see
-// formGapScore in predictionEngine.ts) between the tipped side and its
-// opponent. Only enforced where set — Safe requires a genuine form
-// mismatch backing the tip; Value/Bold stay gap-agnostic since they lean
-// more on odds/confidence than on a "clear favourite" narrative.
 const TIERS = [
   { id: "safe",  label: "Safe",  size: 3, minConf: 65, maxOdds: 3.50,  minOdds: 1.50, price: 200, minFormGap: 0.4 as number | null },
   { id: "value", label: "Value", size: 3, minConf: 50, maxOdds: 7.00,  minOdds: 2.50, price: 350, minFormGap: null as number | null },
   { id: "bold",  label: "Bold",  size: 4, minConf: 45, maxOdds: 25.0,  minOdds: 4.00, price: 500, minFormGap: null as number | null },
 ] as const;
 
-// ─── Auth guard ───────────────────────────────────────────────────────────────
 function isCronAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true;
@@ -52,7 +20,6 @@ function isCronAuthorized(req: NextRequest): boolean {
   return auth === `Bearer ${secret}`;
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   if (!isCronAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -65,13 +32,42 @@ export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
-    const today = new Date();
-    today.setHours(today.getHours() + 1); // WAT = UTC+1
-    const dateStr = today.toISOString().split("T")[0];
-    info(`Running morning-picks for ${dateStr}`);
+    // Single shared "today in WAT" used consistently for both the
+    // SoccerVital date param AND the saved pick's match_date, so the
+    // fixtures we scrape and the date we stamp on the pick can never
+    // drift apart the way they did before.
+    const todayWAT = getTodayWAT();
+    const dateStr = todayWAT.toISOString().split("T")[0];
+    const dayStart = new Date(dateStr + "T00:00:00");
+    const dayEnd = new Date(dateStr + "T23:59:59.999");
 
-    // ── 1. Get predictions from SoccerVital ──────────────────────────────────
-    const allPicks = await getPredictions();
+    info(`Running morning-picks for ${dateStr} (requesting this exact date from SoccerVital)`);
+
+    // ── 0. Idempotency guard ──────────────────────────────────────────────────
+    // Prevents duplicate combos if this cron is accidentally triggered twice
+    // for the same day (manual re-run, a retry-window cron entry, etc.).
+    // Without this, a second successful run would create a second full set
+    // of Safe/Value/Bold picks for the same date, and buyers could end up
+    // seeing (and being confused by, or double-charged conceptually across)
+    // two "Safe" picks dated today.
+    const alreadyRanToday = await PickModel.exists({
+      is_automated: true,
+      match_date: { $gte: dayStart, $lte: dayEnd },
+    });
+
+    if (alreadyRanToday) {
+      warn(`Automated picks already exist for ${dateStr} — aborting to avoid duplicates. Delete existing picks first if you intentionally want to regenerate today's combos.`);
+      return NextResponse.json({
+        ok: true,
+        aborted: true,
+        reason: "already_ran_today",
+        message: `Automated picks already exist for ${dateStr}. No new picks created.`,
+        log,
+      });
+    }
+
+    // ── 1. Get predictions from SoccerVital for TODAY specifically ───────────
+    const allPicks = await getPredictions(todayWAT);
     info(`${allPicks.length} raw prediction(s) across all markets`);
 
     if (allPicks.length === 0) {
@@ -86,9 +82,6 @@ export async function GET(req: NextRequest) {
     }
 
     // ── 2. Restrict to 1X2 / Double Chance for combo-building ────────────────
-    //     (O/U picks are available via getPredictions() for a separate
-    //      "markets" feed/UI if you want to surface them individually —
-    //      note those carry isEstimatedOdd: true, unlike 1X2/DC picks)
     const qualified = allPicks
       .filter((p) => (p.market === "1X2" || p.market === "DC") && p.confidence >= MIN_CONFIDENCE)
       .sort((a, b) => b.confidence - a.confidence);
@@ -105,6 +98,11 @@ export async function GET(req: NextRequest) {
 
     // ── 3. Build tiered combos ────────────────────────────────────────────────
     const createdPicks: string[] = [];
+    // usedKeys now accumulates across ALL tiers (not just Safe) — a match
+    // used in Safe can't reappear in Value, and a match used in Safe or
+    // Value can't reappear in Bold. This is what actually prevents Value
+    // and Bold from silently containing identical legs, which the
+    // simulation earlier surfaced as a real (pre-existing) bug.
     const usedKeys = new Set<string>();
     const keyOf = (p: PredictionPick) => `${p.home}|${p.away}`;
 
@@ -112,17 +110,10 @@ export async function GET(req: NextRequest) {
       const candidates = qualified
         .filter((p) => p.confidence >= tier.minConf && !usedKeys.has(keyOf(p)))
         .filter((p) => tier.minFormGap === null || (p.formGap !== null && p.formGap >= tier.minFormGap))
-        // Prioritize the clearest form gaps first (your "clear gap" ask),
-        // falling back to confidence when gap data is unavailable (null
-        // sorts last via the ?? -1 fallback).
         .sort((a, b) => (b.formGap ?? -1) - (a.formGap ?? -1));
-      // NOTE: intentionally NOT sliced to a "top N" — the swap-up logic in
-      // pickCombo needs the full range of qualifying confidences (and
-      // therefore odds) available, or it can't find a genuinely higher-odd
-      // leg to swap in when a combo starts below the tier's odds floor.
 
       if (candidates.length < 2) {
-        warn(`Tier "${tier.label}": not enough candidates (${candidates.length}) after confidence${tier.minFormGap !== null ? "+form-gap" : ""} filter — skip`);
+        warn(`Tier "${tier.label}": not enough candidates (${candidates.length}) after confidence${tier.minFormGap !== null ? "+form-gap" : ""}+dedup filter — skip`);
         continue;
       }
 
@@ -133,8 +124,6 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      // Total combo odds = product of each leg's decimal odds (standard
-      // accumulator math), NOT a sum. e.g. 1.58 × 1.42 = 2.24.
       const totalOdds = parseFloat(
         selected.reduce((acc, s) => acc * s.odd, 1).toFixed(2)
       );
@@ -144,15 +133,11 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      if (tier.id === "safe") {
-        for (const s of selected) usedKeys.add(keyOf(s));
-      }
+      // Every tier now reserves its legs, not just Safe.
+      for (const s of selected) usedKeys.add(keyOf(s));
 
       const price = tier.price;
 
-      // Label the combo's league honestly: only name a specific league if
-      // every selected match is from that same league, otherwise say "Mixed"
-      // rather than picking a misleading "dominant" one.
       const distinctLeagues = new Set(selected.map((s) => s.league));
       const leagueLabel = distinctLeagues.size === 1
         ? [...distinctLeagues][0]
@@ -168,12 +153,9 @@ export async function GET(req: NextRequest) {
         selected.reduce((s, e) => s + e.confidence, 0) / selected.length
       );
 
-      // Structured match data — home/away/tip/odd are the fields the UI
-      // actually renders. No `prediction` string; nothing parses it
-      // anymore, so it's dropped entirely rather than kept as dead weight.
       const matches = selected.map((s) => ({
         outcome: Outcome.PENDING,
-        fixtureId: null, // no fixture ID available from scraped sources
+        fixtureId: null,
         tip: s.tip,
         odd: s.odd,
         score: null,
@@ -182,12 +164,9 @@ export async function GET(req: NextRequest) {
         league: s.league,
         confidence: s.confidence,
         sources: s.sources,
-        date: new Date(dateStr + "T12:00:00"), // combo legs are always same-day
+        date: new Date(dateStr + "T12:00:00"),
       }));
 
-      // All legs in a combo come from the 1X2/DC filter above, which only
-      // includes picks with isEstimatedOdd === false — so the combo's odds
-      // are real (SoccerVital-published), not invented.
       const pick = await PickModel.create({
         title: pickTitle,
         price,
@@ -240,11 +219,6 @@ function pickCombo(
   const selected = candidates.slice(0, size);
   let total = selected.reduce((acc, s) => acc * s.odd, 1);
 
-  // Too high: swap the highest-odd selection for a lower-odd candidate.
-  // Search the FULL remaining pool (not just candidates beyond the initial
-  // slice) since `candidates` is sorted by form gap (then confidence), not
-  // odds — a valid lower-odd replacement could exist anywhere outside
-  // `selected`.
   if (total > maxOdds) {
     const sorted = [...selected].sort((a, b) => b.odd - a.odd);
     const overflow = sorted[0];
@@ -252,7 +226,7 @@ function pickCombo(
     const replacement = pool
       .filter((c) => c.odd < overflow.odd)
       .sort((a, b) => a.odd - b.odd)
-      .pop(); // closest-below replacement (highest odd that's still < overflow)
+      .pop();
     if (replacement) selected[selected.indexOf(overflow)] = replacement;
   }
 
@@ -263,9 +237,6 @@ function pickCombo(
     total = selected.reduce((acc, s) => acc * s.odd, 1);
   }
 
-  // Too low: swap the lowest-odd selection for a higher-odd candidate,
-  // as long as we stay under the max. Repeat until we clear the floor or
-  // run out of swaps to try.
   total = selected.reduce((acc, s) => acc * s.odd, 1);
   let attempts = 0;
   while (total < minOdds && attempts < candidates.length) {

@@ -232,10 +232,9 @@ function scoreMatch(
 
 // ─── Public entrypoint ────────────────────────────────────────────────────────
 
-export async function getPredictions(): Promise<PredictionPick[]> {
-  const vitalData = await getSoccerVitalPredictions().catch(() => []);
+export async function getPredictions(targetDate?: Date): Promise<PredictionPick[]> {
+  const vitalData = await getSoccerVitalPredictions(targetDate).catch(() => []);
 
-  // Fetch form data once per distinct league, in parallel, capped batches
   const leagues = [...new Set(vitalData.map((p) => p.league))];
   const formByLeague = new Map<string, Map<string, TeamForm>>();
 

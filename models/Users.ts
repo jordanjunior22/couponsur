@@ -5,15 +5,35 @@ export enum UserRole {
   ADMIN = "ADMIN",
 }
 
+export type SubscriptionStatus = "NONE" | "ACTIVE" | "EXPIRED";
+
+export interface ISubscription {
+  status: SubscriptionStatus;
+  plan: "MONTHLY";
+  startedAt: Date | null;
+  expiresAt: Date | null;
+}
+
 export interface IUser extends Document {
   phone: string;
   password: string;
   role: UserRole;
   unlockedPickIds: mongoose.Types.ObjectId[];
-  lastLoginAt?: Date; 
+  subscription: ISubscription;
+  lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const SubscriptionSchema = new Schema<ISubscription>(
+  {
+    status:    { type: String, enum: ["NONE", "ACTIVE", "EXPIRED"], default: "NONE" },
+    plan:      { type: String, enum: ["MONTHLY"], default: "MONTHLY" },
+    startedAt: { type: Date, default: null },
+    expiresAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
 
 const UserSchema = new Schema<IUser>(
   {
@@ -37,6 +57,7 @@ const UserSchema = new Schema<IUser>(
         ref: "Pick",
       },
     ],
+    subscription: { type: SubscriptionSchema, default: () => ({}) },
     lastLoginAt: { type: Date, default: null },
   },
   {

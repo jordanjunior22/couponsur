@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { OneXBetBanner } from "./OneXBetBanner";
 import { CompoundBetBanner } from "./CompoundBanner";
-
+import { trackEvent, generateEventId, getFbCookies } from "@/lib/pixelClient";
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Match {
     home: string;
@@ -281,12 +281,10 @@ function AuthGate({ onSuccess }: { onSuccess: () => void }) {
                 await login(phone, password);
             } else {
                 await signup(phone, password);
-                if (typeof window !== "undefined" && (window as any).fbq) {
-                    (window as any).fbq("track", "Lead", {
-                        content_name: "Inscription Premium Picks",
-                        currency: "XAF",
-                    });
-                }
+                trackEvent("Lead", generateEventId("lead"), {
+                    content_name: "Inscription Premium Picks",
+                    currency: "XAF",
+                });
             }
             onSuccess();
         } catch {
@@ -356,7 +354,239 @@ const MomoLogo = ({ op }: { op: "mtn" | "orange" }) => (
         {op === "mtn" ? "MTN" : "ORG"}
     </div>
 );
+export function SubscribePayment({ onSuccess, onBack }: { onSuccess: () => void; onBack: () => void }) {
+    const { user } = useAuth();
+    const [step, setStep] = useState<PayStep>("form");
+    const [phone, setPhone] = useState(user?.phone ?? "");
+    const [operator, setOperator] = useState<"mtn" | "orange">("mtn");
+    const [transId, setTransId] = useState<string | null>(null);
+    const [errorMsg, setErrorMsg] = useState<string>("");
+    const [pollCount, setPollCount] = useState(0);
+    const [monthlyPrice, setMonthlyPrice] = useState<number | null>(null);
+    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+    const MAX_POLLS = 40;
 
+    useEffect(() => {
+        (async () => {
+            try {
+                const res = await fetch("/api/admin/settings");
+                const data = await res.json();
+                if (data?.success && data?.data?.subscriptionMonthlyPrice) {
+                    setMonthlyPrice(data.data.subscriptionMonthlyPrice);
+                }
+            } catch {
+                // fall through to null — UI shows a loading/fallback state below
+            }
+        })();
+    }, []);
+
+    const clearPolling = useCallback(() => {
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    }, []);
+    useEffect(() => {
+        if (step === "success") {
+            trackEvent("Purchase", `sub-purchase-${transId}`, {
+                content_name: "Abonnement Mensuel",
+                value: monthlyPrice ?? undefined,
+                currency: "XAF",
+            });
+        }
+    }, [step, transId, monthlyPrice]);
+    const handlePay = async () => {
+        const cleaned = phone.replace(/\s/g, "");
+        if (!cleaned || cleaned.length < 9) return;
+        setErrorMsg("");
+        try {
+            setStep("processing");
+            const { fbc, fbp } = getFbCookies();
+            const res = await fetch("/api/subscribe", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    phone: cleaned,
+                    fbc,
+                    fbp,
+                    sourceUrl: typeof window !== "undefined" ? window.location.href : undefined,
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok) { setErrorMsg(data.error || "Le paiement a échoué. Réessayez."); setStep("form"); return; }
+            trackEvent("InitiateCheckout", generateEventId("sub-checkout"), {
+                content_name: "Abonnement Mensuel",
+                value: monthlyPrice ?? undefined,
+                currency: "XAF",
+            });
+            setTransId(data.transId);
+            setStep("pending");
+        } catch {
+            setErrorMsg("Erreur réseau. Vérifiez votre connexion et réessayez.");
+            setStep("form");
+        }
+    };
+
+    useEffect(() => {
+        if (!transId || step !== "pending") return;
+        setPollCount(0);
+        intervalRef.current = setInterval(async () => {
+            setPollCount((c) => {
+                if (c >= MAX_POLLS) { clearPolling(); setStep("expired"); return c; }
+                return c + 1;
+            });
+            try {
+                const res = await fetch(`/api/payment/status?transId=${transId}`);
+                const data = await res.json();
+                if (!data?.status) return;
+                if (data.status === "SUCCESSFUL") { clearPolling(); setStep("success"); }
+                else if (data.status === "FAILED") { clearPolling(); setErrorMsg("Paiement refusé par l'opérateur."); setStep("failed"); }
+                else if (data.status === "EXPIRED") { clearPolling(); setErrorMsg("La session de paiement a expiré."); setStep("expired"); }
+            } catch { /* keep polling */ }
+        }, 3000);
+        return clearPolling;
+    }, [transId, step, clearPolling]);
+
+    const priceLabel = monthlyPrice != null ? `${monthlyPrice.toLocaleString("fr-FR")} FCFA` : "…";
+
+    if (step === "processing") {
+        return (
+            <div style={{ textAlign: "center", padding: "32px 16px" }}>
+                <div style={{ width: 48, height: 48, border: "4px solid #2A3140", borderTopColor: "#C9A84C", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 20px" }} />
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#C9A84C", letterSpacing: 2, marginBottom: 8 }}>Initialisation du paiement…</div>
+                <div style={{ fontSize: 12, color: "#7A8399", lineHeight: 1.6 }}>
+                    Connexion à {operator === "mtn" ? "MTN MoMo" : "Orange Money"} en cours.<br />Veuillez patienter.
+                </div>
+            </div>
+        );
+    }
+
+    if (step === "pending") {
+        const secondsLeft = Math.max(0, (MAX_POLLS - pollCount) * 3);
+        const minutes = Math.floor(secondsLeft / 60);
+        const seconds = secondsLeft % 60;
+        return (
+            <div style={{ textAlign: "center", padding: "24px 16px" }}>
+                <div style={{ marginBottom: 20 }}><IconPhone /></div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: "#C9A84C", letterSpacing: 2, marginBottom: 12 }}>Confirmez sur votre téléphone</div>
+                <div style={{ fontSize: 13, color: "#E8EAF0", marginBottom: 8, lineHeight: 1.7 }}>
+                    Une notification a été envoyée au<br />
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#C9A84C", fontWeight: 700 }}>+237 {phone}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#7A8399", marginBottom: 24, lineHeight: 1.6 }}>
+                    Confirmez le paiement de{" "}
+                    <strong style={{ color: "#E8EAF0" }}>{priceLabel}</strong> pour votre abonnement mensuel.
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 20 }}>
+                    {[0, 0.4, 0.8].map((delay) => (
+                        <div key={delay} style={{ width: 8, height: 8, borderRadius: "50%", background: "#C9A84C", animation: `pulse 1.2s ease-in-out ${delay}s infinite` }} />
+                    ))}
+                </div>
+                <div style={{ fontSize: 11, color: "#3A4455", marginBottom: 24 }}>
+                    Expiration dans {minutes}:{seconds.toString().padStart(2, "0")}
+                </div>
+                <button onClick={() => { clearPolling(); setStep("form"); setTransId(null); }} style={{ ...S.btnGhost, fontSize: 12 }}>
+                    Annuler
+                </button>
+            </div>
+        );
+    }
+
+    if (step === "success") {
+        return (
+            <div style={{ textAlign: "center", padding: "32px 16px", animation: "scaleIn 0.3s ease" }}>
+                <div style={{ marginBottom: 20 }}><IconSuccess /></div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: "#22C55E", letterSpacing: 2, marginBottom: 12 }}>Abonnement activé !</div>
+                <div style={{ fontSize: 13, color: "#E8EAF0", marginBottom: 8, lineHeight: 1.7 }}>
+                    Votre paiement de <span style={{ color: "#22C55E", fontWeight: 700 }}>{priceLabel}</span> a été confirmé.
+                </div>
+                <div style={{ fontSize: 12, color: "#7A8399", marginBottom: 28, lineHeight: 1.6 }}>
+                    Vous avez maintenant accès à tous les picks pendant 30 jours.
+                </div>
+                <button onClick={onSuccess} style={S.btnGold}>Voir tous les picks →</button>
+            </div>
+        );
+    }
+
+    if (step === "failed" || step === "expired") {
+        const isExpired = step === "expired";
+        return (
+            <div style={{ textAlign: "center", padding: "32px 16px", animation: "scaleIn 0.3s ease" }}>
+                <div style={{ marginBottom: 20 }}><IconFail /></div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, color: "#EF4444", letterSpacing: 2, marginBottom: 12 }}>
+                    {isExpired ? "Session expirée" : "Paiement échoué"}
+                </div>
+                <div style={{ fontSize: 13, color: "#E8EAF0", marginBottom: 8, lineHeight: 1.7 }}>
+                    {errorMsg || (isExpired ? "La session a expiré avant la confirmation." : "Le paiement n'a pas pu être traité.")}
+                </div>
+                <button onClick={() => { setStep("form"); setTransId(null); setErrorMsg(""); }} style={S.btnGold}>Réessayer</button>
+                <button onClick={onBack} style={S.btnGhost}>Annuler</button>
+            </div>
+        );
+    }
+
+    // ── FORM ──────────────────────────────────────────────
+    return (
+        <div>
+            <div style={{
+                background: "rgba(201,168,76,0.05)", border: "1px solid rgba(201,168,76,0.15)",
+                borderRadius: 10, padding: "12px 14px", marginBottom: 20,
+            }}>
+                <div style={{ fontSize: 13, color: "#E8EAF0", fontWeight: 600, marginBottom: 6 }}>Abonnement Mensuel</div>
+                <div style={{ fontSize: 12, color: "#7A8399", lineHeight: 1.6, marginBottom: 10 }}>
+                    Accès illimité à tous les picks pendant 30 jours — plus besoin de débloquer un par un.
+                </div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: "#C9A84C" }}>
+                    {priceLabel}<span style={{ fontSize: 12, color: "#7A8399", fontFamily: "'DM Sans', sans-serif" }}> / mois</span>
+                </div>
+            </div>
+            {errorMsg && (
+                <div style={{ fontSize: 12, color: "#EF4444", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+                    {errorMsg}
+                </div>
+            )}
+            <div style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, marginBottom: 8 }}>Opérateur Mobile Money</div>
+            <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+                {(["mtn", "orange"] as const).map((op) => (
+                    <button key={op} onClick={() => setOperator(op)} style={{
+                        flex: 1, display: "flex", alignItems: "center", gap: 10,
+                        padding: "12px 14px", borderRadius: 10, cursor: "pointer",
+                        background: operator === op ? "rgba(201,168,76,0.07)" : "#1A1F26",
+                        border: operator === op ? "1px solid #C9A84C" : "1px solid #2A3140",
+                        transition: "all 0.2s",
+                    }}>
+                        <MomoLogo op={op} />
+                        <div style={{ textAlign: "left" }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: "#E8EAF0" }}>{op === "mtn" ? "MTN MoMo" : "Orange Money"}</div>
+                            <div style={{ fontSize: 10, color: "#7A8399" }}>{op === "mtn" ? "6 / 7 / 8XX" : "6 / 9XX"}</div>
+                        </div>
+                        {operator === op && <div style={{ marginLeft: "auto", flexShrink: 0 }}><IconCheck size={14} /></div>}
+                    </button>
+                ))}
+            </div>
+            <div style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, marginBottom: 8 }}>Numéro de téléphone</div>
+            <div style={{ position: "relative", marginBottom: 20 }}>
+                <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "#7A8399", fontWeight: 600, pointerEvents: "none" }}>+237</span>
+                <input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value.replace(/[^0-9\s]/g, ""))}
+                    placeholder="6XX XXX XXX"
+                    maxLength={12}
+                    style={{ ...S.input, paddingLeft: 54, marginBottom: 0 }}
+                />
+            </div>
+            <button
+                onClick={handlePay}
+                disabled={!phone || phone.replace(/\s/g, "").length < 9 || monthlyPrice == null}
+                style={{
+                    ...S.btnGold,
+                    opacity: (!phone || phone.replace(/\s/g, "").length < 9 || monthlyPrice == null) ? 0.45 : 1,
+                    cursor: (!phone || phone.replace(/\s/g, "").length < 9 || monthlyPrice == null) ? "not-allowed" : "pointer",
+                }}
+            >
+                S'abonner — {priceLabel}
+            </button>
+            <button onClick={onBack} style={S.btnGhost}>Annuler</button>
+        </div>
+    );
+}
 export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess: () => void; onBack: () => void }) {
     const { user } = useAuth();
     const [step, setStep] = useState<PayStep>("form");
@@ -368,23 +598,44 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
     const MAX_POLLS = 40;
 
+
     const clearPolling = useCallback(() => {
         if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     }, []);
-
+    useEffect(() => {
+        if (step === "success") {
+            trackEvent("Purchase", `purchase-${transId}`, {
+                content_name: pick.title,
+                value: pick.price,
+                currency: "XAF",
+            });
+        }
+    }, [step, transId, pick.title, pick.price]);
     const handlePay = async () => {
         const cleaned = phone.replace(/\s/g, "");
         if (!cleaned || cleaned.length < 9) return;
         setErrorMsg("");
         try {
             setStep("processing");
+            const { fbc, fbp } = getFbCookies();
             const res = await fetch("/api/pay", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ pickId: pick._id, phone: cleaned }),
+                body: JSON.stringify({
+                    pickId: pick._id,
+                    phone: cleaned,
+                    fbc,
+                    fbp,
+                    sourceUrl: typeof window !== "undefined" ? window.location.href : undefined,
+                }),
             });
             const data = await res.json();
             if (!res.ok) { setErrorMsg(data.error || "Le paiement a échoué. Réessayez."); setStep("form"); return; }
+            trackEvent("InitiateCheckout", generateEventId("checkout"), {
+                content_name: pick.title,
+                value: pick.price,
+                currency: "XAF",
+            });
             setTransId(data.transId);
             setStep("pending");
         } catch {
@@ -605,11 +856,11 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
 
 // ─── Pick Card ────────────────────────────────────────────────────────────────
 const borderColors = { WIN: "#22C55E", LOSS: "#EF4444", PENDING: "#C9A84C" };
-
 function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void }) {
-    const { user } = useAuth();
+    const { user, hasActiveSubscription } = useAuth();
     const isPending = pick.outcome === "PENDING";
-    const isUnlocked = user?.unlockedPickIds?.includes(pick._id);
+    const isSubscribed = hasActiveSubscription();
+    const isUnlocked = isSubscribed || user?.unlockedPickIds?.includes(pick._id);
     const tierMeta = pick.tier ? TIER_META[pick.tier] : null;
     const accentColor = "#C9A84C";
 
@@ -630,18 +881,18 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
                 el.style.borderLeft = `3px solid ${borderColors[pick.outcome]}`;
             }}
         >
-{/* Tier header strip for automated picks — neutral, no risk coloring */}
-{tierMeta && (
-    <div style={{
-        background: "rgba(201,168,76,0.06)", borderBottom: "1px solid #2A3140",
-        padding: "6px 14px", display: "flex", alignItems: "center", justifyContent: "space-between",
-    }}>
-        <span style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#C9A84C", fontWeight: 700 }}>
-            Combo {tierMeta.label}
-        </span>
-        <span style={{ fontSize: 9, color: "#7A8399" }}>{tierMeta.desc}</span>
-    </div>
-)}
+            {/* Tier header strip for automated picks — neutral, no risk coloring */}
+            {tierMeta && (
+                <div style={{
+                    background: "rgba(201,168,76,0.06)", borderBottom: "1px solid #2A3140",
+                    padding: "6px 14px", display: "flex", alignItems: "center", justifyContent: "space-between",
+                }}>
+                    <span style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#C9A84C", fontWeight: 700 }}>
+                        Combo {tierMeta.label}
+                    </span>
+                    <span style={{ fontSize: 9, color: "#7A8399" }}>{tierMeta.desc}</span>
+                </div>
+            )}
             <div style={{ padding: 16 }}>
                 {/* Top row: league + outcome */}
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
@@ -768,8 +1019,8 @@ function PredictionRow({ match }: { match: Match }) {
                     alignItems: "center", justifyContent: "center", flexShrink: 0,
                     background: match.outcome === "WIN" ? "rgba(34,197,94,0.12)" : match.outcome === "LOSS" ? "rgba(239,68,68,0.12)" : "rgba(201,168,76,0.1)",
                 }}>
-                    {match.outcome === "WIN"     && <IconCheck />}
-                    {match.outcome === "LOSS"    && <IconX />}
+                    {match.outcome === "WIN" && <IconCheck />}
+                    {match.outcome === "LOSS" && <IconX />}
                     {match.outcome === "PENDING" && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#C9A84C" }} />}
                 </div>
             </div>
@@ -782,11 +1033,19 @@ type ModalView = "detail" | "auth" | "payment";
 
 function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
     const overlayRef = useRef<HTMLDivElement>(null);
-    const { user, refreshUser } = useAuth();
+    const { user, refreshUser, hasActiveSubscription } = useAuth();
     const isPending = pick.outcome === "PENDING";
-    const isAlreadyUnlocked = user?.unlockedPickIds?.includes(pick._id) ?? false;
+    const isSubscribed = hasActiveSubscription();
+    const isAlreadyUnlocked = isSubscribed || (user?.unlockedPickIds?.includes(pick._id) ?? false);
     const tierMeta = pick.tier ? TIER_META[pick.tier] : null;
-
+    useEffect(() => {
+        trackEvent("ViewContent", generateEventId("view"), {
+            content_name: pick.title,
+            content_type: "product",
+            value: pick.price,
+            currency: "XAF",
+        });
+    }, [pick._id]); // fires once per pick opened
     const getInitialView = (): ModalView => {
         if (!isPending) return "detail";
         if (isAlreadyUnlocked) return "detail";
@@ -920,6 +1179,7 @@ function FilterBar({ active, onChange, picks }: { active: FilterType; onChange: 
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
+
 export default function PremiumPicksPage() {
     const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
     const [historyOpen, setHistoryOpen] = useState(false);
@@ -927,7 +1187,8 @@ export default function PremiumPicksPage() {
     const [picks, setPicks] = useState<Pick[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const { user } = useAuth();
+    const [showSubscribe, setShowSubscribe] = useState(false);
+    const { user, hasActiveSubscription, refreshUser } = useAuth();
 
     useEffect(() => {
         let cancelled = false;
@@ -998,7 +1259,42 @@ export default function PremiumPicksPage() {
                 <OneXBetBanner />
                 <CompoundBetBanner />
                 <FilterBar active={activeFilter} onChange={setActiveFilter} picks={picks} />
-
+                {user && !hasActiveSubscription() && (
+                    <div style={{
+                        background: "linear-gradient(135deg, rgba(201,168,76,0.1), rgba(201,168,76,0.03))",
+                        border: "1px solid rgba(201,168,76,0.25)",
+                        padding: "16px 18px", marginBottom: 20,
+                        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+                    }}>
+                        <div>
+                            <div style={{ fontSize: 13, color: "#E8EAF0", fontWeight: 600, marginBottom: 4 }}>
+                                Accédez à tous les picks, sans débloquer un par un
+                            </div>
+                            <div style={{ fontSize: 11, color: "#7A8399" }}>
+                                Abonnement mensuel — économisez sur le long terme
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => setShowSubscribe(true)}
+                            style={{ background: "#C9A84C", color: "#0A0C0F", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.5px", whiteSpace: "nowrap" }}
+                        >
+                            S'abonner
+                        </button>
+                    </div>
+                )}
+                {user && hasActiveSubscription() && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, padding: "10px 14px", background: "rgba(201,168,76,0.06)", border: "1px solid rgba(201,168,76,0.2)", borderRadius: 8 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#C9A84C", flexShrink: 0 }} />
+                        <span style={{ fontSize: 11, color: "#C9A84C", letterSpacing: "0.5px" }}>
+                            Abonné — accès illimité actif{user.subscription?.expiresAt ? ` jusqu'au ${new Date(user.subscription.expiresAt).toLocaleDateString("fr-FR")}` : ""}
+                        </span>
+                    </div>
+                )}
+                {user && !hasActiveSubscription() && user.subscription?.status === "EXPIRED" && (
+                    <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 8 }}>
+                        Votre abonnement a expiré{user.subscription.expiresAt ? ` le ${new Date(user.subscription.expiresAt).toLocaleDateString("fr-FR")}` : ""}.
+                    </div>
+                )}
                 <section style={{ padding: "24px 16px", maxWidth: 700, margin: "0 auto" }}>
                     {user && (
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, padding: "10px 14px", background: "rgba(34,197,94,0.05)", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 8 }}>
@@ -1050,6 +1346,33 @@ export default function PremiumPicksPage() {
                 </section>
 
                 {selectedPick && <Modal pick={selectedPick} onClose={() => setSelectedPick(null)} />}
+                {showSubscribe && (
+                    <div ref={undefined} onClick={(e) => e.target === e.currentTarget && setShowSubscribe(false)} style={{
+                        position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)",
+                        display: "flex", alignItems: "flex-end", justifyContent: "center",
+                        zIndex: 50, backdropFilter: "blur(4px)",
+                    }}>
+                        <div style={{
+                            background: "#111418", border: "1px solid #2A3140",
+                            borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 600,
+                            padding: "24px 20px 40px", position: "relative",
+                            maxHeight: "90vh", overflowY: "auto",
+                            animation: "slideUp 0.3s cubic-bezier(0.32,0.72,0,1)",
+                        }}>
+                            <div style={{ width: 40, height: 4, background: "#3A4455", borderRadius: 2, margin: "0 auto 20px" }} />
+                            <button onClick={() => setShowSubscribe(false)} style={{
+                                position: "absolute", top: 16, right: 16, width: 30, height: 30,
+                                background: "#222830", border: "1px solid #2A3140", borderRadius: "50%",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                cursor: "pointer", color: "#7A8399", fontSize: 14,
+                            }}>✕</button>
+                            <SubscribePayment
+                                onSuccess={async () => { await refreshUser(); setShowSubscribe(false); }}
+                                onBack={() => setShowSubscribe(false)}
+                            />
+                        </div>
+                    </div>
+                )}
             </main>
         </>
     );

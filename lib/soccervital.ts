@@ -1,5 +1,5 @@
 // ─── lib/soccervital.ts ──────────────────────────────────────────────────────
-// Scrapes SoccerVital for today's predicted tips + published odds.
+// Scrapes SoccerVital for a given day's predicted tips + published odds.
 //
 // SoccerVital's table layout (confirmed by inspecting the live page) is:
 //   [0] time  [1] home  [2] away  [3] odd-1  [4] odd-X  [5] odd-2
@@ -9,6 +9,21 @@
 // explainer confirms "1 @ 2.15" style odds in European decimal format).
 // These are NOT live bookmaker odds — they're SoccerVital's own quoted
 // figures — but they are real numbers from the site, not invented.
+//
+// DATE HANDLING: the bare homepage (https://www.soccervital.com/) renders
+// "today" using a client-side jQuery UI datepicker (`#date_picker`) that
+// fills itself in via JS using the VISITOR'S browser clock — this value
+// never appears in the raw HTML we fetch, and more importantly, the
+// server has no reliable way to know we wanted WAT's "today" specifically.
+// This was the actual root cause of a real incident: the cron created
+// picks dated for the 12th using fixtures that were really from the 11th,
+// because we were trusting the server's own undocumented default instead
+// of asking for a specific day.
+//
+// Confirmed via DevTools: changing the datepicker navigates to
+//   https://www.soccervital.com/soccer-games/?date=DD-MM-YYYY
+// We now always build this URL explicitly using WAT's current date, so
+// there is no ambiguity about which day's fixtures we're getting.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as cheerio from "cheerio";
@@ -22,16 +37,59 @@ export interface SoccerVitalPrediction {
   odd1:   number | null; // published odd for Home win
   oddX:   number | null; // published odd for Draw
   odd2:   number | null; // published odd for Away win
+  time:   string;        // raw kickoff time as scraped, e.g. "15:00"
 }
 
-let _cache: { data: SoccerVitalPrediction[]; ts: number } | null = null;
-const CACHE_TTL = 30 * 60 * 1000;
+interface CacheEntry {
+  data: SoccerVitalPrediction[];
+  ts: number;
+}
 
-export async function getSoccerVitalPredictions(): Promise<SoccerVitalPrediction[]> {
-  if (_cache && Date.now() - _cache.ts < CACHE_TTL) return _cache.data;
+// Cache is now keyed per requested date string, since we can (and do, via
+// the admin import modal vs. the cron) request different days in the same
+// process lifetime. A single shared cache keyed by nothing would silently
+// return one day's data for a request meant for another.
+const _cache: Map<string, CacheEntry> = new Map();
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+/** Formats a Date as SoccerVital's expected DD-MM-YYYY query param. */
+function formatDateParam(d: Date): string {
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
+}
+
+/**
+ * Returns "today" in WAT (UTC+1), matching the timezone convention already
+ * used by the cron (`today.setHours(today.getHours() + 1)`). Centralized
+ * here so every caller computes "today" the same way instead of each
+ * reimplementing the UTC+1 offset independently.
+ */
+export function getTodayWAT(): Date {
+  const now = new Date();
+  const wat = new Date(now.getTime() + 60 * 60 * 1000); // UTC+1
+  return wat;
+}
+
+/**
+ * Fetches predictions for a specific date. Defaults to "today" in WAT if
+ * no date is given — but unlike the old version, this is now an EXPLICIT
+ * default computed by us, not an implicit one decided by SoccerVital's
+ * server based on its own clock/timezone.
+ */
+export async function getSoccerVitalPredictions(
+  targetDate: Date = getTodayWAT()
+): Promise<SoccerVitalPrediction[]> {
+  const dateParam = formatDateParam(targetDate);
+  const cacheKey = dateParam;
+
+  const cached = _cache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
 
   try {
-    const res = await fetch("https://www.soccervital.com/", {
+    const url = `https://www.soccervital.com/soccer-games/?date=${dateParam}`;
+    const res = await fetch(url, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -39,7 +97,11 @@ export async function getSoccerVitalPredictions(): Promise<SoccerVitalPrediction
         "Accept-Language": "en-US,en;q=0.9",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
-      next: { revalidate: 1800 },
+      // No Next.js fetch Data Cache here — we manage freshness ourselves
+      // via the in-memory `_cache` above, keyed per date. A second,
+      // independent cache layer on top would just reintroduce the same
+      // kind of hidden-staleness risk we're fixing.
+      cache: "no-store",
     });
 
     if (!res.ok) return [];
@@ -72,13 +134,13 @@ export async function getSoccerVitalPredictions(): Promise<SoccerVitalPrediction
 
       if (!home || !away || !/^\d{1,2}:\d{2}$/.test(time)) return;
 
-      predictions.push({ home, away, tip, goals, league: currentLeague, odd1, oddX, odd2 });
+      predictions.push({ home, away, tip, goals, league: currentLeague, odd1, oddX, odd2, time });
     });
 
-    _cache = { data: predictions, ts: Date.now() };
+    _cache.set(cacheKey, { data: predictions, ts: Date.now() });
     return predictions;
   } catch (e) {
-    console.warn("SoccerVital scrape failed:", e);
+    console.warn(`SoccerVital scrape failed for date ${dateParam}:`, e);
     return [];
   }
 }
