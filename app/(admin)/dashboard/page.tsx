@@ -425,17 +425,20 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
 }
 
 // ─── User Detail Modal ──────────────────────────────────────────────────────────
-function UserDetailModal({ user, picks, onClose }: { user: ApiUser; picks: Pick[]; onClose: () => void }) {
+function UserDetailModal({ user, picks, subPrice, onClose }: { user: ApiUser; picks: Pick[]; subPrice: number | null; onClose: () => void }) {
   const unlockedPicks = picks.filter((p) => user.unlockedPickIds.includes(p._id));
-  const revenue = unlockedPicks.reduce((sum, p) => sum + p.price, 0);
+  const pickRevenue = unlockedPicks.reduce((sum, p) => sum + p.price, 0);
+  const isActiveSubscriber = user.subscription?.status === "ACTIVE" && user.subscription.expiresAt && new Date(user.subscription.expiresAt) > new Date();
+  const subRevenue = isActiveSubscriber && subPrice != null ? subPrice : 0;
+  const revenue = pickRevenue + subRevenue;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto", padding: 24 }}>
-        {user.subscription?.status === "ACTIVE" && user.subscription.expiresAt && new Date(user.subscription.expiresAt) > new Date() && (
+        {isActiveSubscriber && (
           <div style={{ background: "rgba(201,168,76,0.06)", border: "1px solid rgba(201,168,76,0.2)", borderRadius: 8, padding: "10px 12px", marginBottom: 16, fontSize: 12, color: C.gold }}>
-            Abonné mensuel — actif jusqu'au {new Date(user.subscription.expiresAt).toLocaleDateString("fr-FR")}
+            Abonné mensuel — actif jusqu'au {new Date(user.subscription!.expiresAt!).toLocaleDateString("fr-FR")}
           </div>
         )}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
@@ -462,6 +465,12 @@ function UserDetailModal({ user, picks, onClose }: { user: ApiUser; picks: Pick[
             </div>
           ))}
         </div>
+
+        {subRevenue > 0 && (
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 16 }}>
+            Répartition: <span style={{ color: C.gold }}>{formatCFA(pickRevenue)}</span> picks · <span style={{ color: C.gold }}>{formatCFA(subRevenue)}</span> abonnement
+          </div>
+        )}
 
         <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
           Picks débloqués
@@ -772,6 +781,17 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
 function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoading: boolean; picks: Pick[] }) {
   const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);
   const [search, setSearch] = useState("");
+  const [subPrice, setSubPrice] = useState<number | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) setSubPrice(data.data.subscriptionMonthlyPrice);
+      } catch { /* falls back to pick-only revenue below */ }
+    })();
+  }, []);
 
   const filtered = useMemo(() =>
     users.filter((u) => u.phone.includes(search) || u.role.toLowerCase().includes(search.toLowerCase())),
@@ -782,10 +802,20 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
     return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
   }
 
+  // Same "is this subscription currently active" check used everywhere else
+  const isActiveSubscriber = (u: ApiUser) =>
+    u.subscription?.status === "ACTIVE" && u.subscription.expiresAt && new Date(u.subscription.expiresAt) > new Date();
+
   const UserRow = ({ u }: { u: ApiUser }) => {
     const unlocked = picks.filter((p) => u.unlockedPickIds.includes(p._id));
     const wins = unlocked.filter((p) => p.outcome === "WIN").length;
-    const rev = unlocked.reduce((s, p) => s + p.price, 0);
+    const pickRev = unlocked.reduce((s, p) => s + p.price, 0);
+    const subscribed = isActiveSubscriber(u);
+    // Estimate — see note in RevenueTab: this uses the current settings
+    // price, so it's approximate for subscribers who joined before a
+    // price change.
+    const subRev = subscribed && subPrice != null ? subPrice : 0;
+    const rev = pickRev + subRev;
     const avatar = (
       <div style={{ width: 34, height: 34, borderRadius: "50%", background: u.role === "ADMIN" ? "rgba(201,168,76,0.15)" : "rgba(59,130,246,0.1)", border: `1px solid ${u.role === "ADMIN" ? C.goldDark : "#1d4ed8"}`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: u.role === "ADMIN" ? C.gold : C.blue, flexShrink: 0 }}>
         {u.phone.slice(-2)}
@@ -796,7 +826,7 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
         {u.role}
       </span>
     );
-    return { unlocked, wins, rev, avatar, roleBadge };
+    return { unlocked, wins, rev, pickRev, subRev, avatar, roleBadge };
   };
 
   return (
@@ -877,7 +907,7 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
         })}
       </div>
 
-      {selectedUser && <UserDetailModal user={selectedUser} picks={picks} onClose={() => setSelectedUser(null)} />}
+      {selectedUser && <UserDetailModal user={selectedUser} picks={picks} subPrice={subPrice} onClose={() => setSelectedUser(null)} />}
     </div>
   );
 }
@@ -887,20 +917,55 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
   const [dateFrom, setDateFrom] = useState(thirtyAgo);
   const [dateTo, setDateTo] = useState(today);
+  const [subPrice, setSubPrice] = useState<number | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) setSubPrice(data.data.subscriptionMonthlyPrice);
+      } catch { /* fall back to pick-only revenue */ }
+    })();
+  }, []);
 
   const filteredPicks = useMemo(() =>
     picks.filter((p) => p.match_date >= dateFrom && p.match_date <= dateTo),
     [picks, dateFrom, dateTo]
   );
 
-  const totalRevenue = useMemo(() =>
+  const pickRevenue = useMemo(() =>
     users.reduce((t, u) => t + u.unlockedPickIds.reduce((s, pid) => { const p = filteredPicks.find((pk) => pk._id === pid); return s + (p ? p.price : 0); }, 0), 0),
     [users, filteredPicks]
   );
 
+  // Subscription revenue can't be filtered by the pick date-range picker
+  // (subscriptions aren't tied to a match_date) — this counts anyone whose
+  // subscription STARTED within the selected window, using the current
+  // settings price as an estimate of what they paid.
+  const subscriptionRevenue = useMemo(() => {
+    if (subPrice == null) return 0;
+    return users.filter((u) => {
+      if (!u.subscription?.startedAt) return false;
+      const started = u.subscription.startedAt.split("T")[0];
+      return started >= dateFrom && started <= dateTo;
+    }).length * subPrice;
+  }, [users, dateFrom, dateTo, subPrice]);
+
+  const totalRevenue = pickRevenue + subscriptionRevenue;
+
   const totalUnlocks = useMemo(() =>
     users.reduce((t, u) => t + u.unlockedPickIds.filter((pid) => filteredPicks.find((p) => p._id === pid)).length, 0),
     [users, filteredPicks]
+  );
+
+  const newSubscribersInRange = useMemo(() =>
+    users.filter((u) => {
+      if (!u.subscription?.startedAt) return false;
+      const started = u.subscription.startedAt.split("T")[0];
+      return started >= dateFrom && started <= dateTo;
+    }).length,
+    [users, dateFrom, dateTo]
   );
 
   const perPickRevenue = useMemo(() =>
@@ -925,7 +990,7 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
 
   return (
     <div>
-      {/* Date filter */}
+      {/* Date filter — unchanged */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 22, background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", flexWrap: "wrap" }}>
         <span style={{ fontSize: 10, color: C.muted, letterSpacing: "1.5px", textTransform: "uppercase", fontWeight: 600 }}>Période</span>
         <input type="date" style={iStyle} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
@@ -940,11 +1005,16 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
       </div>
 
       {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 12 }}>
         <StatCard label="Revenu Total" value={totalRevenue >= 1000 ? `${(totalRevenue / 1000).toFixed(0)}K` : totalRevenue} sub={formatCFA(totalRevenue)} accent />
         <StatCard label="Débloquages" value={totalUnlocks} sub={`${filteredPicks.length} picks`} />
+        <StatCard label="Nouveaux Abonnés" value={newSubscribersInRange} sub={formatCFA(subscriptionRevenue)} />
         <StatCard label="Win Rate" value={`${winRate}%`} sub={`${filteredPicks.filter((p) => p.outcome === "WIN").length} victoires`} />
         <StatCard label="Prix Moyen" value={filteredPicks.length > 0 ? `${Math.round(filteredPicks.reduce((s, p) => s + p.price, 0) / filteredPicks.length / 100) * 100}` : "0"} sub="FCFA / pick" />
+      </div>
+
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 22 }}>
+        Répartition: <span style={{ color: C.gold }}>{formatCFA(pickRevenue)}</span> picks · <span style={{ color: C.gold }}>{formatCFA(subscriptionRevenue)}</span> abonnements
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
@@ -989,27 +1059,46 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const finished = picks.filter((p) => p.outcome !== "PENDING");
   const wins = finished.filter((p) => p.outcome === "WIN").length;
   const winRate = finished.length > 0 ? Math.round((wins / finished.length) * 100) : 0;
-  const totalRevenue = users.reduce((sum, u) =>
+
+  const pickRevenue = users.reduce((sum, u) =>
     sum + u.unlockedPickIds.reduce((s, pid) => { const p = picks.find((pk) => pk._id === pid); return s + (p ? p.price : 0); }, 0), 0
   );
+
+  const activeSubscribers = users.filter((u) =>
+    u.subscription?.status === "ACTIVE" && u.subscription.expiresAt && new Date(u.subscription.expiresAt) > new Date()
+  );
+
+  const [subPrice, setSubPrice] = useState<number | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) setSubPrice(data.data.subscriptionMonthlyPrice);
+      } catch { /* revenue falls back to pick-only if this fails */ }
+    })();
+  }, []);
+
+  const subscriptionRevenue = subPrice != null ? activeSubscribers.length * subPrice : 0;
+  const totalRevenue = pickRevenue + subscriptionRevenue;
+
   const activeUsers = users.filter((u) => u.unlockedPickIds.length > 0).length;
   const recentPicks = [...picks].sort((a, b) => b.match_date.localeCompare(a.match_date)).slice(0, 5);
   const topUsers = [...users]
     .map((u) => ({ u, rev: u.unlockedPickIds.reduce((s, pid) => { const p = picks.find((pk) => pk._id === pid); return s + (p ? p.price : 0); }, 0) }))
     .sort((a, b) => b.rev - a.rev).slice(0, 5);
-  const activeSubscribers = users.filter((u) =>
-    u.subscription?.status === "ACTIVE" && u.subscription.expiresAt && new Date(u.subscription.expiresAt) > new Date()
-  ).length;
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 24 }}>
-        <StatCard label="Revenu Total" value={`${Math.round(totalRevenue / 1000)}K`} sub={formatCFA(totalRevenue)} accent />
+        <StatCard label="Revenu Total" value={`${Math.round(totalRevenue / 1000)}K`} sub={`${formatCFA(pickRevenue)} picks + ${formatCFA(subscriptionRevenue)} abonnements`} accent />
         <StatCard label="Utilisateurs" value={users.length} sub={`${activeUsers} actifs`} />
         <StatCard label="Picks Totaux" value={picks.length} sub={`${picks.filter((p) => p.is_published).length} publiés`} />
         <StatCard label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${finished.length - wins}L`} />
-        <StatCard label="Abonnés Actifs" value={activeSubscribers} sub={`sur ${users.length} utilisateurs`} />
+        <StatCard label="Abonnés Actifs" value={activeSubscribers.length} sub={`sur ${users.length} utilisateurs`} />
       </div>
 
+      {/* rest unchanged — recentPicks / topUsers sections stay as-is */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Activité Récente</div>
