@@ -15,6 +15,20 @@ export function OneXBetBanner() {
   return (
     <>
       <style>{`
+        @keyframes xbet-blink {
+          0%, 100% {
+            border-color: #1A3A6B;
+            box-shadow: 0 0 0 rgba(21,101,192,0);
+          }
+          50% {
+            border-color: #42A5F5;
+            box-shadow: 0 0 20px rgba(66,165,245,0.35);
+          }
+        }
+        @keyframes xbet-badge-blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
         .xbet-banner {
           margin: 0 16px;
           background: linear-gradient(135deg, #0A1628 0%, #0D1F3C 60%, #0A1628 100%);
@@ -29,10 +43,12 @@ export function OneXBetBanner() {
           overflow: hidden;
           position: relative;
           transition: border-color 0.2s, box-shadow 0.2s;
+          animation: xbet-blink 2.2s ease-in-out infinite;
         }
         .xbet-banner:hover {
           border-color: #1976D2;
           box-shadow: 0 0 24px rgba(21,101,192,0.25);
+          animation-play-state: paused;
         }
         .xbet-banner::before {
           content: '';
@@ -64,6 +80,7 @@ export function OneXBetBanner() {
           color: #42A5F5;
           font-weight: 700;
           margin-bottom: 5px;
+          animation: xbet-badge-blink 1.3s ease-in-out infinite;
         }
         .xbet-title {
           font-family: 'Bebas Neue', sans-serif;
@@ -127,6 +144,12 @@ export function OneXBetBanner() {
           white-space: nowrap;
         }
         .xbet-cta:hover { background: #1976D2; }
+
+        @media (prefers-reduced-motion: reduce) {
+          .xbet-banner, .xbet-tag {
+            animation: none;
+          }
+        }
 
         @media (max-width: 540px) {
           .xbet-banner {
