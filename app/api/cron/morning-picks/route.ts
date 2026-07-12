@@ -1,16 +1,22 @@
 // ─── app/api/cron/morning-picks/route.ts (SoccerVital odds version) ──────────
 //
 // WHAT THIS DOES:
-//   - Confidence comes from a heuristic (tip specificity + O/U consistency —
-//     see lib/predictionEngine.ts), since SoccerVital publishes no numeric
-//     confidence of its own.
+//   - Confidence comes from a heuristic (tip specificity + O/U consistency +
+//     form GAP between the two sides — see lib/predictionEngine.ts), since
+//     SoccerVital publishes no numeric confidence of its own.
 //   - Odds for 1X2/DC picks are SoccerVital's own published decimal odds
 //     (real numbers from their site, not invented) — see predictionEngine's
 //     realOddForTip(). They are NOT live bookmaker market prices, so they
 //     may differ from what any actual sportsbook offers at bet time.
+//   - The "Safe" tier additionally requires a minimum form GAP (not just
+//     confidence) — a team in clearly better recent form than its opponent,
+//     backing the same side as the tip. This is what actually distinguishes
+//     "Maitland WWWWW vs Adamstown LLWDL" (a strong, filterable signal) from
+//     two evenly-matched teams that merely got tagged with a decisive tip.
 //   - No fixture IDs exist from scraped sources, so automatic result grading
 //     is NOT wired up here. Picks are created as PENDING and need either
-//     manual grading or a separate results-only data source.
+//     manual grading or a separate results-only data source (see
+//     app/api/cron/grade-picks/route.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
@@ -26,10 +32,16 @@ const MIN_CONFIDENCE = 45;      // min score (out of 100) to be included in any 
 // low-odd by design (high confidence ⇒ short-priced favourites), so forcing
 // every tier to the same odds floor would either break the "safe" concept
 // or make it impossible to ever build one.
+//
+// minFormGap (0–1, or null): the minimum required form-gap (see
+// formGapScore in predictionEngine.ts) between the tipped side and its
+// opponent. Only enforced where set — Safe requires a genuine form
+// mismatch backing the tip; Value/Bold stay gap-agnostic since they lean
+// more on odds/confidence than on a "clear favourite" narrative.
 const TIERS = [
-  { id: "safe",  label: "Safe",  size: 3, minConf: 65, maxOdds: 3.50,  minOdds: 1.50, price: 200 },
-  { id: "value", label: "Value", size: 3, minConf: 50, maxOdds: 7.00,  minOdds: 2.50, price: 350 },
-  { id: "bold",  label: "Bold",  size: 4, minConf: 45, maxOdds: 25.0,  minOdds: 4.00, price: 500 },
+  { id: "safe",  label: "Safe",  size: 3, minConf: 65, maxOdds: 3.50,  minOdds: 1.50, price: 200, minFormGap: 0.4 as number | null },
+  { id: "value", label: "Value", size: 3, minConf: 50, maxOdds: 7.00,  minOdds: 2.50, price: 350, minFormGap: null as number | null },
+  { id: "bold",  label: "Bold",  size: 4, minConf: 45, maxOdds: 25.0,  minOdds: 4.00, price: 500, minFormGap: null as number | null },
 ] as const;
 
 // ─── Auth guard ───────────────────────────────────────────────────────────────
@@ -69,7 +81,8 @@ export async function GET(req: NextRequest) {
     // Quick distribution snapshot for debugging — top 5 by confidence
     const top5 = [...allPicks].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
     for (const p of top5) {
-      info(`  top: ${p.home} vs ${p.away} | ${p.market} ${p.tip} @ ${p.odd} | conf:${p.confidence}`);
+      const gapStr = p.formGap !== null ? p.formGap.toFixed(2) : "n/a";
+      info(`  top: ${p.home} vs ${p.away} | ${p.market} ${p.tip} @ ${p.odd} | conf:${p.confidence} | gap:${gapStr}`);
     }
 
     // ── 2. Restrict to 1X2 / Double Chance for combo-building ────────────────
@@ -97,14 +110,19 @@ export async function GET(req: NextRequest) {
 
     for (const tier of TIERS) {
       const candidates = qualified
-        .filter((p) => p.confidence >= tier.minConf && !usedKeys.has(keyOf(p)));
+        .filter((p) => p.confidence >= tier.minConf && !usedKeys.has(keyOf(p)))
+        .filter((p) => tier.minFormGap === null || (p.formGap !== null && p.formGap >= tier.minFormGap))
+        // Prioritize the clearest form gaps first (your "clear gap" ask),
+        // falling back to confidence when gap data is unavailable (null
+        // sorts last via the ?? -1 fallback).
+        .sort((a, b) => (b.formGap ?? -1) - (a.formGap ?? -1));
       // NOTE: intentionally NOT sliced to a "top N" — the swap-up logic in
       // pickCombo needs the full range of qualifying confidences (and
       // therefore odds) available, or it can't find a genuinely higher-odd
       // leg to swap in when a combo starts below the tier's odds floor.
 
       if (candidates.length < 2) {
-        warn(`Tier "${tier.label}": not enough candidates (${candidates.length}) — skip`);
+        warn(`Tier "${tier.label}": not enough candidates (${candidates.length}) after confidence${tier.minFormGap !== null ? "+form-gap" : ""} filter — skip`);
         continue;
       }
 
@@ -115,6 +133,8 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
+      // Total combo odds = product of each leg's decimal odds (standard
+      // accumulator math), NOT a sum. e.g. 1.58 × 1.42 = 2.24.
       const totalOdds = parseFloat(
         selected.reduce((acc, s) => acc * s.odd, 1).toFixed(2)
       );
@@ -148,15 +168,21 @@ export async function GET(req: NextRequest) {
         selected.reduce((s, e) => s + e.confidence, 0) / selected.length
       );
 
+      // Structured match data — home/away/tip/odd are the fields the UI
+      // actually renders. No `prediction` string; nothing parses it
+      // anymore, so it's dropped entirely rather than kept as dead weight.
       const matches = selected.map((s) => ({
-        prediction: buildPredictionString(s),
         outcome: Outcome.PENDING,
         fixtureId: null, // no fixture ID available from scraped sources
         tip: s.tip,
+        odd: s.odd,
         score: null,
         home: s.home,
         away: s.away,
         league: s.league,
+        confidence: s.confidence,
+        sources: s.sources,
+        date: new Date(dateStr + "T12:00:00"), // combo legs are always same-day
       }));
 
       // All legs in a combo come from the 1X2/DC filter above, which only
@@ -177,8 +203,11 @@ export async function GET(req: NextRequest) {
         matches,
       });
 
+      const gapSummary = selected
+        .map((s) => (s.formGap !== null ? s.formGap.toFixed(2) : "n/a"))
+        .join(", ");
       info(
-        `[${tier.label.toUpperCase()}] Created: "${pick.title}" — x${totalOdds} — conf:${avgConf} — id:${pick._id}`
+        `[${tier.label.toUpperCase()}] Created: "${pick.title}" — x${totalOdds} — conf:${avgConf} — gaps:[${gapSummary}] — id:${pick._id}`
       );
       createdPicks.push(pick._id.toString());
     }
@@ -211,13 +240,19 @@ function pickCombo(
   const selected = candidates.slice(0, size);
   let total = selected.reduce((acc, s) => acc * s.odd, 1);
 
-  // Too high: swap the highest-odd selection for a lower-odd candidate
+  // Too high: swap the highest-odd selection for a lower-odd candidate.
+  // Search the FULL remaining pool (not just candidates beyond the initial
+  // slice) since `candidates` is sorted by form gap (then confidence), not
+  // odds — a valid lower-odd replacement could exist anywhere outside
+  // `selected`.
   if (total > maxOdds) {
     const sorted = [...selected].sort((a, b) => b.odd - a.odd);
     const overflow = sorted[0];
-    const replacement = candidates
-      .slice(size)
-      .find((c) => !selected.includes(c) && c.odd < overflow.odd);
+    const pool = candidates.filter((c) => !selected.includes(c));
+    const replacement = pool
+      .filter((c) => c.odd < overflow.odd)
+      .sort((a, b) => a.odd - b.odd)
+      .pop(); // closest-below replacement (highest odd that's still < overflow)
     if (replacement) selected[selected.indexOf(overflow)] = replacement;
   }
 
@@ -251,8 +286,4 @@ function pickCombo(
   }
 
   return selected;
-}
-
-function buildPredictionString(p: PredictionPick): string {
-  return `${p.home} v ${p.away} | ${p.tip} | ${p.odd.toFixed(2)}`;
 }

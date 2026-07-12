@@ -11,34 +11,37 @@ export type PickTier = "safe" | "value" | "bold";
 
 // ─── Match Interface ─────────────────────────────────────
 export interface IMatch {
-  prediction: string;
+  prediction?: string;
   outcome: Outcome;
   fixtureId?: number | null;
   tip?: string | null;
+  odd?: number | null;
   score?: string | null;
-  /** Stored explicitly (not parsed from `prediction`) so grading can look up results reliably */
-  home?: string | null;
-  away?: string | null;
+  home: string;
+  away: string;
   league?: string | null;
+  confidence?: number | null;
+  sources?: string[];
+  /** The calendar date this specific match was played/scheduled on.
+   *  Defaults to the pick's match_date at creation time — combo legs are
+   *  always same-day, so this is safe to derive there. Used by
+   *  grade-picks to disambiguate re-matches (same two teams playing
+   *  again later) instead of matching on team names alone. */
+  date?: Date | null;
 }
-
 // ─── Pick Interface ──────────────────────────────────────
 export interface IPick extends Document {
   title: string;
   price: number;
   total_odds: number;
-  /** True when total_odds is a synthetic/estimated value (no real bookmaker odds used) */
   is_estimated_odds?: boolean;
   match_date: Date;
   league: string;
   outcome: Outcome;
   is_published: boolean;
   is_automated?: boolean;
-  /** Combo tier: safe | value | bold (only set on automated picks) */
   tier?: PickTier | null;
-  /** Average confidence score (0–100) across all matches in this pick */
   avg_confidence?: number | null;
-  /** True if outcome/scores were entered manually rather than auto-graded */
   is_manually_graded?: boolean;
   graded_at?: Date | null;
   matches: IMatch[];
@@ -49,22 +52,25 @@ export interface IPick extends Document {
 // ─── Match Schema (Subdocument) ──────────────────────────
 const MatchSchema = new Schema<IMatch>(
   {
-    prediction: { type: String, required: true, trim: true },
+    prediction: { type: String, trim: true, default: null },
     outcome: {
       type: String,
       enum: Object.values(Outcome),
       default: Outcome.PENDING,
     },
-    fixtureId: { type: Number, default: null },
-    tip:       { type: String, default: null },
-    score:     { type: String, default: null },
-    home:      { type: String, default: null },
-    away:      { type: String, default: null },
-    league:    { type: String, default: null },
+    fixtureId:  { type: Number, default: null },
+    tip:        { type: String, default: null },
+    odd:        { type: Number, default: null },
+    score:      { type: String, default: null },
+    home:       { type: String, required: true, trim: true },
+    away:       { type: String, required: true, trim: true },
+    league:     { type: String, default: null },
+    confidence: { type: Number, default: null },
+    sources:    { type: [String], default: undefined },
+    date:       { type: Date, default: null },
   },
   { _id: false }
 );
-
 // ─── Pick Schema ─────────────────────────────────────────
 const PickSchema = new Schema<IPick>(
   {

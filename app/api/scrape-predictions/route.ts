@@ -1,12 +1,20 @@
 // ─── app/api/scrape-predictions/route.ts ─────────────────────────────────────
 // Returns merged predictions from SoccerVital and SoccerVista.
 // Used by the admin dashboard import modal.
-// Cached for 30 min by Next.js.
+//
+// This route must always execute fresh — the admin needs today's live
+// fixtures, not a stale build-time snapshot. `dynamic = "force-dynamic"`
+// disables Next's route-level static caching entirely; freshness beyond
+// that is governed by the fetch-level caches inside soccervital.ts /
+// soccervista.ts (their own CACHE_TTL / next.revalidate values).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextResponse } from "next/server";
 import { getSoccerVitalPredictions } from "@/lib/soccervital";
 import { getSoccerVistaPredictions } from "@/lib/soccervista";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET() {
   try {
@@ -43,13 +51,16 @@ export async function GET() {
       byLeague[m.league].push(m);
     }
 
-    return NextResponse.json({
-      matches,
-      byLeague,
-      total:     matches.length,
-      vistaOnly: vistaRaw.length,
-      scrapedAt: new Date().toISOString(),
-    });
+    return NextResponse.json(
+      {
+        matches,
+        byLeague,
+        total:     matches.length,
+        vistaOnly: vistaRaw.length,
+        scrapedAt: new Date().toISOString(),
+      },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (err) {
     console.error("Scrape error:", err);
     return NextResponse.json(

@@ -41,6 +41,18 @@ interface LeagueCacheEntry {
 const _cache: Map<string, LeagueCacheEntry> = new Map();
 const CACHE_TTL = 3 * 60 * 60 * 1000; // 3 hours
 
+// Tolerance window (in days) when matching a stored match date against a
+// scraped result's date. Games are usually graded within a day or two of
+// match_date, and the results table has no year, so we don't need this
+// wide — just enough to absorb timezone rounding, not enough to risk
+// catching a genuinely different fixture between the same two teams.
+const DATE_MATCH_TOLERANCE_DAYS = 2;
+
+const MONTH_MAP: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
 export function slugifyLeague(name: string): string {
   return name
     .toLowerCase()
@@ -66,6 +78,44 @@ export function teamMatch(a: string, b: string): boolean {
   const s = na.length < nb.length ? na : nb;
   const l = na.length < nb.length ? nb : na;
   return s.length >= 4 && l.includes(s);
+}
+
+/**
+ * Parses a result's day/month string (e.g. "03 Jul", no year) into a real
+ * Date, using `referenceDate` to infer the year — picking whichever of
+ * (referenceYear - 1, referenceYear, referenceYear + 1) puts the parsed
+ * date closest to referenceDate. This correctly handles picks graded
+ * shortly after a year boundary without needing SoccerVital to publish a
+ * year at all.
+ */
+function parseResultDate(raw: string, referenceDate: Date): Date | null {
+  const match = raw.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})/);
+  if (!match) return null;
+
+  const day = parseInt(match[1], 10);
+  const monthKey = match[2].slice(0, 3).toLowerCase();
+  const month = MONTH_MAP[monthKey];
+  if (month === undefined || Number.isNaN(day)) return null;
+
+  const refYear = referenceDate.getFullYear();
+  let best: Date | null = null;
+  let bestDiff = Infinity;
+
+  for (const year of [refYear - 1, refYear, refYear + 1]) {
+    const candidate = new Date(year, month, day, 12, 0, 0);
+    const diff = Math.abs(candidate.getTime() - referenceDate.getTime());
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
+function daysBetween(a: Date, b: Date): number {
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.abs(a.getTime() - b.getTime()) / msPerDay;
 }
 
 async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry> {
@@ -198,14 +248,50 @@ export function lookupTeamForm(
   return null;
 }
 
-/** Find a specific match's result by fuzzy team-name match */
+/**
+ * Find a specific match's result by fuzzy team-name match, disambiguated
+ * by date when `targetDate` is provided.
+ *
+ * - If targetDate is given: only candidates within DATE_MATCH_TOLERANCE_DAYS
+ *   are considered, and the closest one wins. This is what prevents two
+ *   teams meeting again later in the season from silently overwriting an
+ *   earlier fixture's grade.
+ * - If targetDate is omitted (e.g. legacy picks saved before `date` existed
+ *   on matches): falls back to the old team-name-only behavior, returning
+ *   the first match found — same as before, so old ungraded picks don't
+ *   get stuck forever.
+ */
 export function findMatchResult(
   home: string,
   away: string,
-  results: RawResult[]
+  results: RawResult[],
+  targetDate?: Date | null
 ): RawResult | null {
-  for (const r of results) {
-    if (teamMatch(r.home, home) && teamMatch(r.away, away)) return r;
+  const candidates = results.filter(
+    (r) => teamMatch(r.home, home) && teamMatch(r.away, away)
+  );
+  if (candidates.length === 0) return null;
+
+  if (!targetDate) {
+    return candidates[0]; // legacy fallback — no date to disambiguate with
   }
-  return null;
+
+  let best: RawResult | null = null;
+  let bestDiff = Infinity;
+
+  for (const r of candidates) {
+    const parsed = parseResultDate(r.date, targetDate);
+    if (!parsed) continue;
+    const diff = daysBetween(parsed, targetDate);
+    if (diff <= DATE_MATCH_TOLERANCE_DAYS && diff < bestDiff) {
+      bestDiff = diff;
+      best = r;
+    }
+  }
+
+  // If we had a date but nothing parsed/matched within tolerance, don't
+  // silently fall back to a team-only guess — that defeats the whole
+  // point. Leave it unresolved (caller keeps the leg PENDING) rather
+  // than risk grading against the wrong fixture.
+  return best;
 }

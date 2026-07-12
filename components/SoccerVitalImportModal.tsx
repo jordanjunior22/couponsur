@@ -15,6 +15,15 @@ interface ScrapedMatch {
     prediction: string;
 }
 
+interface CreatedMatch {
+    home: string;
+    away: string;
+    tip: string;
+    odd: number;
+    league?: string;
+    outcome: "PENDING" | "WIN" | "LOSS";
+}
+
 interface CreatedPick {
     _id: string;
     title: string;
@@ -24,7 +33,7 @@ interface CreatedPick {
     league: string;
     outcome: "PENDING" | "WIN" | "LOSS";
     is_published: boolean;
-    matches: { prediction: string; outcome: "PENDING" | "WIN" | "LOSS" }[];
+    matches: CreatedMatch[];
 }
 
 interface Props {
@@ -57,16 +66,6 @@ function tipColor(tip: string): string {
     if (t.startsWith("U")) return "#F97316";
     if (t === "DNB") return "#EC4899";
     return C.blue;
-}
-
-// ─── Map tip → betTypeCode ────────────────────────────────────────────────────
-function betTypeFromTip(tip: string): string {
-    const t = tip.toUpperCase();
-    if (t === "BTTS") return "BTTS";
-    if (t.startsWith("O")) return "OU25";
-    if (t.startsWith("U")) return "OU25";
-    if (t === "1X" || t === "X2" || t === "12") return "DC";
-    return "1X2";
 }
 
 // ─── Step indicator ───────────────────────────────────────────────────────────
@@ -267,8 +266,13 @@ export default function SoccerVitalImportModal({ onClose, onPickCreated }: Props
             matches: selectedMatches.map((m) => {
                 const tip = tipOverrides[`${m.home}|${m.away}`] ?? m.tip;
                 return {
-                    prediction: `${m.home} vs ${m.away} – ${tip}`,  // ← e.g. "Bayern vs Dortmund – 1"
+                    home: m.home,
+                    away: m.away,
+                    tip,
+                    odd: oddForTip(m, tip),
+                    league: m.league,
                     outcome: "PENDING",
+                    date: matchDate,
                 };
             }),
         };

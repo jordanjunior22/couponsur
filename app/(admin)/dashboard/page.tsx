@@ -6,8 +6,13 @@ import SoccerVitalImportModal from "@/components/SoccerVitalImportModal";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 interface Match {
-  _id: string;
-  prediction: string;
+  _id?: string;
+  home: string;
+  away: string;
+  tip: string;
+  odd: number;
+  league?: string;
+  date?: string;
   outcome: "PENDING" | "WIN" | "LOSS";
 }
 
@@ -185,7 +190,6 @@ function Spinner({ size = 40 }: { size?: number }) {
   );
 }
 
-// ─── Pick Form Modal ────────────────────────────────────────────────────────────
 function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (p: Pick) => void; onClose: () => void }) {
   const isNew = !pick;
   const defaultForm = (): Pick => ({
@@ -194,35 +198,33 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
     league: "Premier League", outcome: "PENDING", is_published: false, matches: [],
   });
 
-  const [form, setForm] = useState<Pick>(
-    pick
-      ? { ...pick, matches: pick.matches.map((m) => ({ ...m, _id: m._id || genId() })) }
-      : defaultForm()
-  );
+  const [form, setForm] = useState<Pick>(pick ? { ...pick } : defaultForm());
   useEffect(() => {
-    if (pick) {
-      setForm({
-        ...pick,
-        matches: pick.matches.map((m) => ({
-          ...m,
-          _id: m._id || genId(),   // re-hydrate missing _ids from API response
-        })),
-      });
-    } else {
-      setForm(defaultForm());
-    }
+    setForm(pick ? { ...pick } : defaultForm());
   }, [pick]);
   const [saving, setSaving] = useState(false);
-  const [newMatch, setNewMatch] = useState("");
+  const [newMatch, setNewMatch] = useState({ home: "", away: "", tip: "1", odd: 1.8 });
 
   const set = (key: keyof Pick, val: unknown) => setForm((f) => ({ ...f, [key]: val }));
 
-  const addMatch = () => {
-    if (!newMatch.trim()) return;
-    setForm((f) => ({ ...f, matches: [...f.matches, { _id: genId(), prediction: newMatch.trim(), outcome: "PENDING" }] }));
-    setNewMatch("");
-  };
+  const TIPS = ["1", "X", "2", "1X", "X2", "12", "BTTS", "O 2.5", "U 2.5", "DNB"];
 
+  const addMatch = () => {
+    if (!newMatch.home.trim() || !newMatch.away.trim()) return;
+    setForm((f) => ({
+      ...f,
+      matches: [...f.matches, {
+        _id: genId(),
+        home: newMatch.home.trim(),
+        away: newMatch.away.trim(),
+        tip: newMatch.tip,
+        odd: newMatch.odd,
+        outcome: "PENDING",
+        date: f.match_date, // inherit the pick's date at time of adding
+      }],
+    }));
+    setNewMatch({ home: "", away: "", tip: "1", odd: 1.8 });
+  };
   const handleSave = async () => {
     if (!form.title.trim()) return;
     setSaving(true);
@@ -326,14 +328,26 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
 
           <div>
             <label style={lStyle}>Sélections ({form.matches.length})</label>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input style={{ ...iStyle, flex: 1 }} value={newMatch} onChange={(e) => setNewMatch(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addMatch()} placeholder="Ex: PSG vs Lyon — BTTS: Yes" />
-              <button onClick={addMatch} style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "10px 14px", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center" }}>
+
+            {/* Add match row */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto auto", gap: 6, marginBottom: 8 }}>
+              <input style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.home}
+                onChange={(e) => setNewMatch((m) => ({ ...m, home: e.target.value }))} placeholder="Domicile" />
+              <input style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.away}
+                onChange={(e) => setNewMatch((m) => ({ ...m, away: e.target.value }))} placeholder="Extérieur"
+                onKeyDown={(e) => e.key === "Enter" && addMatch()} />
+              <select style={{ ...iStyle, fontSize: 12, padding: "8px 10px", cursor: "pointer", width: "auto" }} value={newMatch.tip}
+                onChange={(e) => setNewMatch((m) => ({ ...m, tip: e.target.value }))}>
+                {TIPS.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <input type="number" step="0.01" style={{ ...iStyle, fontSize: 12, padding: "8px 10px", width: 70 }} value={newMatch.odd}
+                onChange={(e) => setNewMatch((m) => ({ ...m, odd: Number(e.target.value) }))} placeholder="Cote" />
+              <button onClick={addMatch} style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center" }}>
                 <Icons.plus />
               </button>
             </div>
-            {form.matches.map((m) => {
+
+            {form.matches.map((m, idx) => {
               const toggleOutcome = () => {
                 const next: Match["outcome"] = m.outcome === "PENDING" ? "WIN" : m.outcome === "WIN" ? "LOSS" : "PENDING";
                 setForm((f) => ({
@@ -344,8 +358,11 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
               const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : C.faint;
               const tickLabel = m.outcome === "WIN" ? "✓" : m.outcome === "LOSS" ? "✗" : "·";
               return (
-                <div key={m._id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
-                  <div style={{ flex: 1, fontSize: 12, color: C.text }}>{m.prediction}</div>
+                <div key={m._id ?? idx} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
+                  <div style={{ flex: 1, fontSize: 12, color: C.text }}>
+                    {m.home} vs {m.away} — <span style={{ color: C.gold, fontWeight: 700 }}>{m.tip}</span>
+                    <span style={{ color: C.muted }}> @ {m.odd}</span>
+                  </div>
                   <button
                     onClick={toggleOutcome}
                     title={`Résultat: ${m.outcome} — cliquer pour changer`}
@@ -465,6 +482,8 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
   const [filterOutcome, setFilterOutcome] = useState("ALL");
   const [filterLeague, setFilterLeague] = useState("ALL");
   const [showImport, setShowImport] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const filtered = useMemo(() => picks.filter((p) => {
     const s = search.toLowerCase();
@@ -474,6 +493,39 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
       (filterLeague === "ALL" || p.league === filterLeague)
     );
   }), [picks, search, filterOutcome, filterLeague]);
+
+  // Clear selections that no longer exist in the filtered/current list
+  useEffect(() => {
+    setSelected((prev) => {
+      const validIds = new Set(picks.map((p) => p._id));
+      const next = new Set([...prev].filter((id) => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [picks]);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((p) => selected.has(p._id));
+
+  const toggleSelectAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allFilteredSelected) {
+        filtered.forEach((p) => next.delete(p._id));
+      } else {
+        filtered.forEach((p) => next.add(p._id));
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelected(new Set());
 
   const handleSave = (p: Pick) => {
     setPicks((prev) => {
@@ -489,6 +541,26 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
     if (!confirm("Supprimer ce pick ?")) return;
     try { await fetch(`/api/picks/${id}`, { method: "DELETE", credentials: "include" }); } catch { /* optimistic */ }
     setPicks((prev) => prev.filter((p) => p._id !== id));
+    setSelected((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    if (!confirm(`Supprimer ${ids.length} pick${ids.length > 1 ? "s" : ""} ? Cette action est irréversible.`)) return;
+
+    setBulkDeleting(true);
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/picks/${id}`, { method: "DELETE", credentials: "include" }).catch(() => null)
+        )
+      );
+    } finally {
+      setPicks((prev) => prev.filter((p) => !ids.includes(p._id)));
+      setSelected(new Set());
+      setBulkDeleting(false);
+    }
   };
 
   const togglePublish = async (id: string) => {
@@ -530,59 +602,123 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
         </button>
       </div>
 
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.25)",
+          borderRadius: 10, padding: "10px 14px", marginBottom: 14, flexWrap: "wrap",
+        }}>
+          <span style={{ fontSize: 12, color: C.text }}>
+            {selected.size} pick{selected.size > 1 ? "s" : ""} sélectionné{selected.size > 1 ? "s" : ""}
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={clearSelection} style={{ background: C.dark4, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+              Annuler
+            </button>
+            <button onClick={handleBulkDelete} disabled={bulkDeleting} style={{
+              background: C.red, border: "none", color: "#fff", borderRadius: 6,
+              padding: "6px 14px", fontSize: 11, fontWeight: 700, cursor: bulkDeleting ? "not-allowed" : "pointer",
+              fontFamily: "inherit", opacity: bulkDeleting ? 0.6 : 1,
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+              <Icons.trash /> {bulkDeleting ? "Suppression…" : `Supprimer (${selected.size})`}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Desktop table */}
       <div className="admin-table-desktop">
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "28px 2fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={allFilteredSelected}
+              onChange={toggleSelectAll}
+              style={{ cursor: "pointer", width: 14, height: 14 }}
+            />
             <span>Titre</span><span>Ligue</span><span>Date</span><span>Cotes / Prix</span><span>Statut</span><span>Actions</span>
           </div>
           {filtered.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun pick trouvé.</div>}
-          {filtered.map((p, i) => (
-            <div key={p._id}
-              style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", gap: 8, borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, transition: "background 0.15s" }}
-              onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.dark4)}
-              onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.title}</div>
-                <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{p.matches.length} sélection{p.matches.length !== 1 ? "s" : ""}</div>
+          {filtered.map((p, i) => {
+            const isSelected = selected.has(p._id);
+            return (
+              <div key={p._id}
+                style={{ display: "grid", gridTemplateColumns: "28px 2fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", gap: 8, borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, background: isSelected ? "rgba(201,168,76,0.05)" : "transparent", transition: "background 0.15s" }}
+                onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = C.dark4; }}
+                onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleSelect(p._id)}
+                  style={{ cursor: "pointer", width: 14, height: 14 }}
+                />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{p.title}</div>
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{p.matches.length} sélection{p.matches.length !== 1 ? "s" : ""}</div>
+                </div>
+                <div style={{ fontSize: 11, color: C.muted }}>{p.league}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>{formatDate(p.match_date)}</div>
+                <div>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.gold }}>x{p.total_odds}</div>
+                  <div style={{ fontSize: 10, color: C.muted }}>{formatCFA(p.price)}</div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <Badge outcome={p.outcome} />
+                  <Badge outcome={p.is_published ? "live" : "draft"} />
+                </div>
+                <PickActions pick={p} onEdit={() => { setEditPick(p); setShowForm(true); }} onDelete={() => handleDelete(p._id)} onToggle={() => togglePublish(p._id)} />
               </div>
-              <div style={{ fontSize: 11, color: C.muted }}>{p.league}</div>
-              <div style={{ fontSize: 11, color: C.muted }}>{formatDate(p.match_date)}</div>
-              <div>
-                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.gold }}>x{p.total_odds}</div>
-                <div style={{ fontSize: 10, color: C.muted }}>{formatCFA(p.price)}</div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <Badge outcome={p.outcome} />
-                <Badge outcome={p.is_published ? "live" : "draft"} />
-              </div>
-              <PickActions pick={p} onEdit={() => { setEditPick(p); setShowForm(true); }} onDelete={() => handleDelete(p._id)} onToggle={() => togglePublish(p._id)} />
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
       {/* Mobile cards */}
       <div className="admin-cards-mobile">
         {filtered.length === 0 && <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "32px 0" }}>Aucun pick trouvé.</div>}
-        {filtered.map((p) => (
-          <div key={p._id} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, gap: 8 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>{p.title}</div>
-                <div style={{ fontSize: 10, color: C.muted }}>{p.league} · {formatDate(p.match_date)}</div>
-              </div>
-              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.gold, flexShrink: 0 }}>x{p.total_odds}</div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ display: "flex", gap: 6 }}>
-                <Badge outcome={p.outcome} />
-                <Badge outcome={p.is_published ? "live" : "draft"} />
-              </div>
-              <PickActions pick={p} onEdit={() => { setEditPick(p); setShowForm(true); }} onDelete={() => handleDelete(p._id)} onToggle={() => togglePublish(p._id)} />
-            </div>
+        {filtered.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 2px" }}>
+            <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} style={{ cursor: "pointer", width: 14, height: 14 }} />
+            <span style={{ fontSize: 11, color: C.muted }}>Tout sélectionner</span>
           </div>
-        ))}
+        )}
+        {filtered.map((p) => {
+          const isSelected = selected.has(p._id);
+          return (
+            <div key={p._id} style={{
+              background: isSelected ? "rgba(201,168,76,0.05)" : C.dark3,
+              borderTop: `1px solid ${isSelected ? C.goldDark : C.border}`,
+              borderRight: `1px solid ${isSelected ? C.goldDark : C.border}`,
+              borderBottom: `1px solid ${isSelected ? C.goldDark : C.border}`,
+              borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`,
+              borderRadius: 10, padding: 14, marginBottom: 10,
+            }}>              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, gap: 8 }}>
+                <div style={{ display: "flex", gap: 10, minWidth: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelect(p._id)}
+                    style={{ cursor: "pointer", width: 14, height: 14, marginTop: 3, flexShrink: 0 }}
+                  />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>{p.title}</div>
+                    <div style={{ fontSize: 10, color: C.muted }}>{p.league} · {formatDate(p.match_date)}</div>
+                  </div>
+                </div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.gold, flexShrink: 0 }}>x{p.total_odds}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <Badge outcome={p.outcome} />
+                  <Badge outcome={p.is_published ? "live" : "draft"} />
+                </div>
+                <PickActions pick={p} onEdit={() => { setEditPick(p); setShowForm(true); }} onDelete={() => handleDelete(p._id)} onToggle={() => togglePublish(p._id)} />
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {(showForm || editPick) && (
@@ -604,7 +740,6 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
     </div>
   );
 }
-
 // ─── Users Tab ──────────────────────────────────────────────────────────────────
 function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoading: boolean; picks: Pick[] }) {
   const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);

@@ -6,7 +6,13 @@ import { CompoundBetBanner } from "./CompoundBanner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Match {
-    prediction: string;
+    home: string;
+    away: string;
+    tip: string;
+    odd: number;
+    league?: string;
+    confidence?: number;
+    sources?: string[];
     outcome: "PENDING" | "WIN" | "LOSS";
 }
 
@@ -37,9 +43,9 @@ const TIER_META: Record<
     string,
     { label: string; emoji: string; color: string; bg: string; border: string; desc: string }
 > = {
-    safe:  { label: "Safe",  emoji: "🛡️", color: "#22C55E", bg: "rgba(34,197,94,0.08)",   border: "rgba(34,197,94,0.25)",   desc: "Haute confiance · Cotes prudentes" },
-    value: { label: "Value", emoji: "⚡", color: "#C9A84C", bg: "rgba(201,168,76,0.08)",  border: "rgba(201,168,76,0.25)",  desc: "Bon équilibre risque / rendement" },
-    bold:  { label: "Bold",  emoji: "🔥", color: "#EF4444", bg: "rgba(239,68,68,0.08)",   border: "rgba(239,68,68,0.25)",   desc: "Cotes élevées · Plus risqué" },
+    safe: { label: "Safe", emoji: "🛡️", color: "#22C55E", bg: "rgba(34,197,94,0.08)", border: "rgba(34,197,94,0.25)", desc: "Haute confiance · Cotes prudentes" },
+    value: { label: "Value", emoji: "⚡", color: "#C9A84C", bg: "rgba(201,168,76,0.08)", border: "rgba(201,168,76,0.25)", desc: "Bon équilibre risque / rendement" },
+    bold: { label: "Bold", emoji: "🔥", color: "#EF4444", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.25)", desc: "Cotes élevées · Plus risqué" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -75,9 +81,9 @@ function parsePrediction(raw: string): {
 } {
     // Split on " | " separators
     const parts = raw.split(" | ");
-    const main  = parts[0] ?? raw; // "Bayern vs Dortmund — 1 @ 1.44"
+    const main = parts[0] ?? raw; // "Bayern vs Dortmund — 1 @ 1.44"
     const leaguePart = parts[1] ?? "";
-    const confPart   = parts[2] ?? ""; // "conf:78 [✓Vista+Vital]"
+    const confPart = parts[2] ?? ""; // "conf:78 [✓Vista+Vital]"
 
     // Extract teams + tip + odd from main
     const dashIdx = main.lastIndexOf(" — ");
@@ -209,9 +215,9 @@ const IconFail = () => (
 // ─── Outcome Badge ────────────────────────────────────────────────────────────
 const OutcomeBadge = ({ outcome }: { outcome: "PENDING" | "WIN" | "LOSS" }) => {
     const styles: Record<string, React.CSSProperties> = {
-        WIN:     { background: "rgba(34,197,94,0.12)",  color: "#22C55E", border: "1px solid rgba(34,197,94,0.25)"  },
-        LOSS:    { background: "rgba(239,68,68,0.12)",  color: "#EF4444", border: "1px solid rgba(239,68,68,0.25)"  },
-        PENDING: { background: "rgba(201,168,76,0.1)",  color: "#C9A84C", border: "1px solid rgba(201,168,76,0.25)" },
+        WIN: { background: "rgba(34,197,94,0.12)", color: "#22C55E", border: "1px solid rgba(34,197,94,0.25)" },
+        LOSS: { background: "rgba(239,68,68,0.12)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.25)" },
+        PENDING: { background: "rgba(201,168,76,0.1)", color: "#C9A84C", border: "1px solid rgba(201,168,76,0.25)" },
     };
     const labels = { WIN: "WIN", LOSS: "LOSS", PENDING: "LIVE" };
     return (
@@ -353,10 +359,10 @@ const MomoLogo = ({ op }: { op: "mtn" | "orange" }) => (
 
 export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess: () => void; onBack: () => void }) {
     const { user } = useAuth();
-    const [step, setStep]         = useState<PayStep>("form");
-    const [phone, setPhone]       = useState(user?.phone ?? "");
+    const [step, setStep] = useState<PayStep>("form");
+    const [phone, setPhone] = useState(user?.phone ?? "");
     const [operator, setOperator] = useState<"mtn" | "orange">("mtn");
-    const [transId, setTransId]   = useState<string | null>(null);
+    const [transId, setTransId] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string>("");
     const [pollCount, setPollCount] = useState(0);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -400,7 +406,7 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
                 const data = await res.json();
                 if (!data?.status) return;
                 if (data.status === "SUCCESSFUL") { clearPolling(); setStep("success"); }
-                else if (data.status === "FAILED")  { clearPolling(); setErrorMsg("Paiement refusé par l'opérateur."); setStep("failed"); }
+                else if (data.status === "FAILED") { clearPolling(); setErrorMsg("Paiement refusé par l'opérateur."); setStep("failed"); }
                 else if (data.status === "EXPIRED") { clearPolling(); setErrorMsg("La session de paiement a expiré."); setStep("expired"); }
             } catch { /* keep polling */ }
         }, 3000);
@@ -602,11 +608,10 @@ const borderColors = { WIN: "#22C55E", LOSS: "#EF4444", PENDING: "#C9A84C" };
 
 function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void }) {
     const { user } = useAuth();
-    const isPending    = pick.outcome === "PENDING";
-    const isUnlocked   = user?.unlockedPickIds?.includes(pick._id);
-    const tierMeta     = pick.tier ? TIER_META[pick.tier] : null;
-    const accentColor  = tierMeta?.color ?? "#C9A84C";
-    const accentBorder = tierMeta?.border ?? "rgba(201,168,76,0.3)";
+    const isPending = pick.outcome === "PENDING";
+    const isUnlocked = user?.unlockedPickIds?.includes(pick._id);
+    const tierMeta = pick.tier ? TIER_META[pick.tier] : null;
+    const accentColor = "#C9A84C";
 
     return (
         <div
@@ -625,19 +630,18 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
                 el.style.borderLeft = `3px solid ${borderColors[pick.outcome]}`;
             }}
         >
-            {/* Tier header strip for automated picks */}
-            {tierMeta && (
-                <div style={{
-                    background: tierMeta.bg, borderBottom: `1px solid ${tierMeta.border}`,
-                    padding: "6px 14px", display: "flex", alignItems: "center", justifyContent: "space-between",
-                }}>
-                    <span style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: tierMeta.color, fontWeight: 700 }}>
-                        {tierMeta.emoji} Combo {tierMeta.label}
-                    </span>
-                    <span style={{ fontSize: 9, color: tierMeta.color, opacity: 0.7 }}>{tierMeta.desc}</span>
-                </div>
-            )}
-
+{/* Tier header strip for automated picks — neutral, no risk coloring */}
+{tierMeta && (
+    <div style={{
+        background: "rgba(201,168,76,0.06)", borderBottom: "1px solid #2A3140",
+        padding: "6px 14px", display: "flex", alignItems: "center", justifyContent: "space-between",
+    }}>
+        <span style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#C9A84C", fontWeight: 700 }}>
+            Combo {tierMeta.label}
+        </span>
+        <span style={{ fontSize: 9, color: "#7A8399" }}>{tierMeta.desc}</span>
+    </div>
+)}
             <div style={{ padding: 16 }}>
                 {/* Top row: league + outcome */}
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
@@ -655,16 +659,6 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
                 <div style={{ fontSize: "clamp(13px, 3.5vw, 15px)", fontWeight: 600, color: "#E8EAF0", lineHeight: 1.4, marginBottom: 10, wordBreak: "break-word" }}>
                     {pick.title}
                 </div>
-
-                {/* Confidence bar (automated picks only) */}
-                {pick.avg_confidence != null && (
-                    <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 9, letterSpacing: "1.5px", textTransform: "uppercase", color: "#7A8399", marginBottom: 4, fontWeight: 600 }}>
-                            Confiance algorithme
-                        </div>
-                        <ConfidenceBar value={pick.avg_confidence} />
-                    </div>
-                )}
 
                 {/* Bottom row: odds + matches count + CTA */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #2A3140", paddingTop: 12, gap: 8, flexWrap: "wrap" }}>
@@ -755,58 +749,20 @@ function LockedPredictions({ pick, onUnlock }: { pick: Pick; onUnlock: () => voi
 
 // ─── Enriched Prediction Row ──────────────────────────────────────────────────
 function PredictionRow({ match }: { match: Match }) {
-    const parsed   = parsePrediction(match.prediction);
-    const isEnrich = parsed.conf !== null || parsed.crossVal.length > 0;
-
     return (
         <div style={{ padding: "14px 0", borderBottom: "1px solid #2A3140" }}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                    {/* Teams */}
-                    <div style={{ fontSize: 13, color: "#E8EAF0", lineHeight: 1.4, marginBottom: isEnrich ? 6 : 0 }}>
-                        {parsed.teams || match.prediction}
-                    </div>
-
-                    {isEnrich && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                            {/* Tip badge */}
-                            {parsed.tip && (
-                                <span style={{
-                                    fontSize: 9, fontWeight: 700, letterSpacing: "1.5px",
-                                    background: "#222830", border: "1px solid #2A3140",
-                                    color: "#C9A84C", padding: "2px 7px", borderRadius: 3,
-                                    textTransform: "uppercase",
-                                }}>
-                                    {parsed.tip}
-                                    {parsed.odd && <span style={{ color: "#7A8399" }}> @ {parsed.odd}</span>}
-                                </span>
-                            )}
-                            {/* Confidence pill */}
-                            {parsed.conf !== null && (
-                                <span style={{
-                                    fontSize: 9, fontWeight: 700,
-                                    color: parsed.conf >= 70 ? "#22C55E" : parsed.conf >= 50 ? "#C9A84C" : "#EF4444",
-                                    background: parsed.conf >= 70 ? "rgba(34,197,94,0.1)" : parsed.conf >= 50 ? "rgba(201,168,76,0.1)" : "rgba(239,68,68,0.1)",
-                                    padding: "2px 7px", borderRadius: 3, letterSpacing: "1px",
-                                }}>
-                                    conf {parsed.conf}%
-                                </span>
-                            )}
-                            {/* Cross-validation sources */}
-                            {parsed.crossVal.map((src) => (
-                                <span key={src} style={{
-                                    fontSize: 9, color: "#22C55E", background: "rgba(34,197,94,0.08)",
-                                    border: "1px solid rgba(34,197,94,0.2)", padding: "2px 7px",
-                                    borderRadius: 3, letterSpacing: "1px",
-                                }}>
-                                    ✓ {src}
-                                </span>
-                            ))}
-                        </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E8EAF0", lineHeight: 1.4 }}>
+                    {match.home} vs {match.away}
+                    <span style={{ color: "#7A8399" }}> | </span>
+                    <span style={{ color: "#C9A84C", fontWeight: 700 }}>{match.tip}</span>
+                    {match.odd != null && (
+                        <>
+                            <span style={{ color: "#7A8399" }}> | </span>
+                            <span style={{ color: "#7A8399" }}>{match.odd}</span>
+                        </>
                     )}
                 </div>
-
-                {/* Outcome icon */}
                 <div style={{
                     width: 22, height: 22, borderRadius: "50%", display: "flex",
                     alignItems: "center", justifyContent: "center", flexShrink: 0,
@@ -827,14 +783,14 @@ type ModalView = "detail" | "auth" | "payment";
 function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
     const overlayRef = useRef<HTMLDivElement>(null);
     const { user, refreshUser } = useAuth();
-    const isPending         = pick.outcome === "PENDING";
+    const isPending = pick.outcome === "PENDING";
     const isAlreadyUnlocked = user?.unlockedPickIds?.includes(pick._id) ?? false;
-    const tierMeta          = pick.tier ? TIER_META[pick.tier] : null;
+    const tierMeta = pick.tier ? TIER_META[pick.tier] : null;
 
     const getInitialView = (): ModalView => {
-        if (!isPending)         return "detail";
-        if (isAlreadyUnlocked)  return "detail";
-        if (!user)              return "auth";
+        if (!isPending) return "detail";
+        if (isAlreadyUnlocked) return "detail";
+        if (!user) return "auth";
         return "payment";
     };
 
@@ -893,19 +849,6 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
 
                 {view === "detail" && (
                     <>
-                        {/* Tier banner at top of modal */}
-                        {tierMeta && (
-                            <div style={{
-                                background: tierMeta.bg, border: `1px solid ${tierMeta.border}`,
-                                borderRadius: 8, padding: "8px 14px", marginBottom: 16,
-                                display: "flex", alignItems: "center", justifyContent: "space-between",
-                            }}>
-                                <span style={{ fontSize: 11, color: tierMeta.color, fontWeight: 700, letterSpacing: "1px", textTransform: "uppercase" }}>
-                                    {tierMeta.emoji} Combo {tierMeta.label}
-                                </span>
-                                <span style={{ fontSize: 10, color: tierMeta.color, opacity: 0.8 }}>{tierMeta.desc}</span>
-                            </div>
-                        )}
 
                         <div style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#7A8399", marginBottom: 6 }}>{pick.league}</div>
                         <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 16, lineHeight: 1.3, color: "#E8EAF0" }}>{pick.title}</div>
@@ -919,16 +862,6 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
                             <div style={{ marginLeft: "auto" }}><OutcomeBadge outcome={pick.outcome} /></div>
                         </div>
 
-                        {/* Overall confidence bar */}
-                        {pick.avg_confidence != null && (
-                            <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: "1px solid #2A3140" }}>
-                                <div style={{ fontSize: 9, letterSpacing: "1.5px", textTransform: "uppercase", color: "#7A8399", marginBottom: 6, fontWeight: 600 }}>
-                                    Confiance globale du combo
-                                </div>
-                                <ConfidenceBar value={pick.avg_confidence} />
-                            </div>
-                        )}
-
                         {canViewPredictions ? (
                             <div>
                                 {pick.matches.map((m, i) => (
@@ -941,7 +874,7 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
                     </>
                 )}
 
-                {view === "auth"    && <AuthGate onSuccess={() => setView("payment")} />}
+                {view === "auth" && <AuthGate onSuccess={() => setView("payment")} />}
                 {view === "payment" && <MomoPayment pick={pick} onSuccess={handlePaymentSuccess} onBack={onClose} />}
             </div>
         </div>
@@ -952,15 +885,15 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
 type FilterType = "ALL" | "safe" | "value" | "bold" | string;
 
 function FilterBar({ active, onChange, picks }: { active: FilterType; onChange: (l: FilterType) => void; picks: Pick[] }) {
-    const hasTiers  = picks.some((p) => p.tier);
-    const leagues   = useMemo(() => Array.from(new Set(picks.map((p) => p.league))), [picks]);
+    const hasTiers = picks.some((p) => p.tier);
+    const leagues = useMemo(() => Array.from(new Set(picks.map((p) => p.league))), [picks]);
 
     const filters: { id: FilterType; label: string }[] = [
         { id: "ALL", label: "Tous" },
         ...(hasTiers ? [
-            { id: "safe",  label: "🛡️ Safe"  },
+            { id: "safe", label: "🛡️ Safe" },
             { id: "value", label: "⚡ Value" },
-            { id: "bold",  label: "🔥 Bold"  },
+            { id: "bold", label: "🔥 Bold" },
         ] : []),
         ...leagues.map((l) => ({ id: l, label: l })),
     ];
@@ -989,11 +922,11 @@ function FilterBar({ active, onChange, picks }: { active: FilterType; onChange: 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function PremiumPicksPage() {
     const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
-    const [historyOpen, setHistoryOpen]   = useState(false);
+    const [historyOpen, setHistoryOpen] = useState(false);
     const [selectedPick, setSelectedPick] = useState<Pick | null>(null);
-    const [picks, setPicks]               = useState<Pick[]>([]);
-    const [loading, setLoading]           = useState(true);
-    const [error, setError]               = useState<string | null>(null);
+    const [picks, setPicks] = useState<Pick[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const { user } = useAuth();
 
     useEffect(() => {
@@ -1006,9 +939,9 @@ export default function PremiumPicksPage() {
                 const data = await res.json();
                 if (cancelled) return;
                 let resolved: Pick[] = [];
-                if (Array.isArray(data))             resolved = data;
+                if (Array.isArray(data)) resolved = data;
                 else if (Array.isArray(data?.picks)) resolved = data.picks;
-                else if (Array.isArray(data?.data))  resolved = data.data;
+                else if (Array.isArray(data?.data)) resolved = data.data;
                 setPicks(resolved.filter((p) => p.is_published !== false));
             } catch (err) {
                 if (!cancelled) { setError(err instanceof Error ? err.message : "Erreur inconnue"); setPicks([]); }
@@ -1020,15 +953,15 @@ export default function PremiumPicksPage() {
     }, []);
 
     const filtered = useMemo(() => {
-        if (activeFilter === "ALL")    return picks;
-        if (activeFilter === "safe"  || activeFilter === "value" || activeFilter === "bold")
+        if (activeFilter === "ALL") return picks;
+        if (activeFilter === "safe" || activeFilter === "value" || activeFilter === "bold")
             return picks.filter((p) => p.tier === activeFilter);
         return picks.filter((p) => p.league === activeFilter);
     }, [picks, activeFilter]);
 
-    const recentPicks  = useMemo(() => filtered.filter((p) => p.match_date.split("T")[0] >= RECENT_CUTOFF), [filtered]);
-    const historyPicks = useMemo(() => filtered.filter((p) => p.match_date.split("T")[0] <  RECENT_CUTOFF), [filtered]);
-    const groupedRecent  = useMemo(() => groupByDate(recentPicks),  [recentPicks]);
+    const recentPicks = useMemo(() => filtered.filter((p) => p.match_date.split("T")[0] >= RECENT_CUTOFF), [filtered]);
+    const historyPicks = useMemo(() => filtered.filter((p) => p.match_date.split("T")[0] < RECENT_CUTOFF), [filtered]);
+    const groupedRecent = useMemo(() => groupByDate(recentPicks), [recentPicks]);
     const groupedHistory = useMemo(() => groupByDate(historyPicks), [historyPicks]);
 
     if (loading) {
