@@ -14,6 +14,15 @@
 //      stays PENDING if any leg's result still can't be found).
 //   4. Saves updated outcomes/scores back to Mongo.
 //
+// DIAGNOSTIC LOGGING: this route now logs the specific reason a match
+// couldn't be graded — either the league's results table came back empty
+// (likely a league-slug mismatch between SoccerVital's predictions page
+// and results page), or the league had results but this specific match
+// wasn't found in them (usually just means the game hasn't finished yet).
+// Without this, "stuck" picks were indistinguishable from "not played
+// yet" picks — this was used to debug a real incident where picks looked
+// stuck but were actually just correctly waiting for kickoff.
+//
 // LIMITATIONS (be aware of these):
 //   - No fixture ID exists for scraped picks, so matching relies on fuzzy
 //     team-name comparison within the stored league, narrowed by date when
@@ -78,8 +87,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, message: "Nothing to grade", log });
     }
 
-    // Cache league results within this run so multiple picks sharing a
-    // league only trigger one scrape each.
     const leagueResultsCache = new Map<string, Awaited<ReturnType<typeof getLeagueResults>>>();
     const getResultsCached = async (league: string) => {
       if (!leagueResultsCache.has(league)) {
@@ -91,22 +98,18 @@ export async function GET(req: NextRequest) {
     let gradedPicks = 0;
     let stillPending = 0;
     let skippedNoLeague = 0;
+    let skippedNoMatch = 0;
 
     for (const pick of pendingPicks) {
       let anyUpdated = false;
 
       for (const match of pick.matches) {
-        if (match.outcome !== Outcome.PENDING) continue; // already graded (e.g. manually)
+        if (match.outcome !== Outcome.PENDING) continue;
         if (!match.home || !match.away) {
           warn(`Pick ${pick._id}: match missing home/away — needs manual grading`);
           continue;
         }
 
-        // Fall back to the pick's top-level league when the match doesn't
-        // carry its own (e.g. manually created picks in the admin form,
-        // where only pick.league is set, not match.league). "Mixed" combos
-        // genuinely can't fall back to a single league, so those still
-        // require a per-match league to auto-grade.
         const league = match.league || (pick.league !== "Mixed" ? pick.league : null);
         if (!league) {
           warn(`Pick ${pick._id}: match "${match.home} vs ${match.away}" has no resolvable league — needs manual grading`);
@@ -116,19 +119,25 @@ export async function GET(req: NextRequest) {
 
         const results = await getResultsCached(league);
 
-        // Prefer the match's own stored date; fall back to the pick's
-        // match_date for legs saved before per-match `date` existed.
-        // findMatchResult() itself degrades to team-name-only matching if
-        // targetDate ends up null, so old picks never get stuck.
+        if (results.length === 0) {
+          warn(`Pick ${pick._id}: league "${league}" returned 0 results from SoccerVital — check slugifyLeague("${league}") against the real URL, or the site may be blocking/rate-limiting the scrape`);
+        }
+
         const targetDate = match.date ?? pick.match_date ?? null;
         const result = findMatchResult(match.home, match.away, results, targetDate);
 
-        if (!result) continue; // not found (or outside date tolerance) — leave PENDING, try again next run
+        if (!result) {
+          const dateStr = targetDate ? new Date(targetDate).toISOString().split("T")[0] : "none";
+          warn(`Pick ${pick._id}: no result found for "${match.home} vs ${match.away}" in league "${league}" (target date: ${dateStr}, ${results.length} result(s) available in that league) — leaving PENDING`);
+          skippedNoMatch++;
+          continue;
+        }
 
         const outcome = gradeTip(match.tip ?? "", result.homeGoals, result.awayGoals);
         match.outcome = outcome as Outcome;
         match.score = `${result.homeGoals}:${result.awayGoals}`;
         anyUpdated = true;
+        info(`Pick ${pick._id}: graded "${match.home} vs ${match.away}" → ${outcome} (${result.homeGoals}:${result.awayGoals}) matched against result dated ${result.date}`);
       }
 
       const legOutcomes = pick.matches.map((m) => m.outcome as "PENDING" | "WIN" | "LOSS");
@@ -149,13 +158,14 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    info(`${gradedPicks} pick(s) fully graded, ${stillPending} still awaiting results, ${skippedNoLeague} match(es) skipped for missing league`);
+    info(`${gradedPicks} pick(s) fully graded, ${stillPending} still awaiting results, ${skippedNoLeague} match(es) skipped for missing league, ${skippedNoMatch} match(es) had a league but no matching result`);
 
     return NextResponse.json({
       ok: true,
       gradedPicks,
       stillPending,
       skippedNoLeague,
+      skippedNoMatch,
       totalChecked: pendingPicks.length,
       log,
     });

@@ -1,3 +1,25 @@
+// ─── app/api/cron/morning-picks/route.ts (SoccerVital odds version) ──────────
+//
+// WHAT THIS DOES:
+//   - Confidence comes from a heuristic (tip specificity + O/U consistency +
+//     form GAP between the two sides — see lib/predictionEngine.ts), since
+//     SoccerVital publishes no numeric confidence of its own.
+//   - Odds for 1X2/DC picks are SoccerVital's own published decimal odds
+//     (real numbers from their site, not invented) — see predictionEngine's
+//     realOddForTip(). They are NOT live bookmaker market prices, so they
+//     may differ from what any actual sportsbook offers at bet time.
+//   - The "Safe" tier requires a minimum form GAP (win rate + opponent loss
+//     rate combined, not just isolated win rate — see formGapScore) AND is
+//     constrained to a tight 2.00–2.50 total-odds band on just 2 legs. This
+//     deliberately trades "biggest possible combo" for "smallest, most
+//     defensible combo" — Safe is meant to be the tier where the pick with
+//     the single strongest signal always leads, not diluted by extra legs.
+//   - No fixture IDs exist from scraped sources, so automatic result grading
+//     is NOT wired up here. Picks are created as PENDING and need either
+//     manual grading or a separate results-only data source (see
+//     app/api/cron/grade-picks/route.ts).
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
 import PickModel, { Outcome } from "@/models/Picks";
@@ -7,12 +29,23 @@ import { getTodayWAT } from "@/lib/soccervital";
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MIN_CONFIDENCE = 45;
 
+// minFormGap (0–1, or null): the minimum required form-gap (see
+// formGapScore in predictionEngine.ts) between the tipped side and its
+// opponent. Only enforced where set — Safe requires a genuine form
+// mismatch backing the tip; Value/Bold stay gap-agnostic since they lean
+// more on odds/confidence than on a "clear favourite" narrative.
+//
+// Safe is deliberately narrow: 2 legs, odds must land between 2.00 and
+// 2.50 total. On days where no 1-2 leg combination from the gap-qualified
+// pool lands in that band, Safe simply won't produce a pick — that's
+// expected behavior, not a bug, given how tight the band is.
 const TIERS = [
-  { id: "safe",  label: "Safe",  size: 3, minConf: 65, maxOdds: 3.50,  minOdds: 1.50, price: 200, minFormGap: 0.4 as number | null },
+  { id: "safe",  label: "Safe",  size: 2, minConf: 65, maxOdds: 2.50,  minOdds: 2.00, price: 200, minFormGap: 0.4 as number | null },
   { id: "value", label: "Value", size: 3, minConf: 50, maxOdds: 7.00,  minOdds: 2.50, price: 350, minFormGap: null as number | null },
   { id: "bold",  label: "Bold",  size: 4, minConf: 45, maxOdds: 25.0,  minOdds: 4.00, price: 500, minFormGap: null as number | null },
 ] as const;
 
+// ─── Auth guard ───────────────────────────────────────────────────────────────
 function isCronAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true;
@@ -20,6 +53,7 @@ function isCronAuthorized(req: NextRequest): boolean {
   return auth === `Bearer ${secret}`;
 }
 
+// ─── Main ─────────────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   if (!isCronAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -32,10 +66,6 @@ export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
-    // Single shared "today in WAT" used consistently for both the
-    // SoccerVital date param AND the saved pick's match_date, so the
-    // fixtures we scrape and the date we stamp on the pick can never
-    // drift apart the way they did before.
     const todayWAT = getTodayWAT();
     const dateStr = todayWAT.toISOString().split("T")[0];
     const dayStart = new Date(dateStr + "T00:00:00");
@@ -44,12 +74,6 @@ export async function GET(req: NextRequest) {
     info(`Running morning-picks for ${dateStr} (requesting this exact date from SoccerVital)`);
 
     // ── 0. Idempotency guard ──────────────────────────────────────────────────
-    // Prevents duplicate combos if this cron is accidentally triggered twice
-    // for the same day (manual re-run, a retry-window cron entry, etc.).
-    // Without this, a second successful run would create a second full set
-    // of Safe/Value/Bold picks for the same date, and buyers could end up
-    // seeing (and being confused by, or double-charged conceptually across)
-    // two "Safe" picks dated today.
     const alreadyRanToday = await PickModel.exists({
       is_automated: true,
       match_date: { $gte: dayStart, $lte: dayEnd },
@@ -74,7 +98,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, message: "No predictions today", log });
     }
 
-    // Quick distribution snapshot for debugging — top 5 by confidence
     const top5 = [...allPicks].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
     for (const p of top5) {
       const gapStr = p.formGap !== null ? p.formGap.toFixed(2) : "n/a";
@@ -98,11 +121,6 @@ export async function GET(req: NextRequest) {
 
     // ── 3. Build tiered combos ────────────────────────────────────────────────
     const createdPicks: string[] = [];
-    // usedKeys now accumulates across ALL tiers (not just Safe) — a match
-    // used in Safe can't reappear in Value, and a match used in Safe or
-    // Value can't reappear in Bold. This is what actually prevents Value
-    // and Bold from silently containing identical legs, which the
-    // simulation earlier surfaced as a real (pre-existing) bug.
     const usedKeys = new Set<string>();
     const keyOf = (p: PredictionPick) => `${p.home}|${p.away}`;
 
@@ -112,15 +130,15 @@ export async function GET(req: NextRequest) {
         .filter((p) => tier.minFormGap === null || (p.formGap !== null && p.formGap >= tier.minFormGap))
         .sort((a, b) => (b.formGap ?? -1) - (a.formGap ?? -1));
 
-      if (candidates.length < 2) {
-        warn(`Tier "${tier.label}": not enough candidates (${candidates.length}) after confidence${tier.minFormGap !== null ? "+form-gap" : ""}+dedup filter — skip`);
+      if (candidates.length < 1) {
+        warn(`Tier "${tier.label}": no candidates after confidence${tier.minFormGap !== null ? "+form-gap" : ""}+dedup filter — skip`);
         continue;
       }
 
       const selected = pickCombo(candidates, tier.size, tier.maxOdds, tier.minOdds);
 
-      if (selected.length < 2) {
-        warn(`Tier "${tier.label}": could not build combo with ≥2 games — skip`);
+      if (selected.length < 1) {
+        warn(`Tier "${tier.label}": could not build a combo — skip`);
         continue;
       }
 
@@ -128,12 +146,11 @@ export async function GET(req: NextRequest) {
         selected.reduce((acc, s) => acc * s.odd, 1).toFixed(2)
       );
 
-      if (totalOdds < tier.minOdds) {
-        warn(`Tier "${tier.label}": combo odds ${totalOdds} below floor of ${tier.minOdds} — skip`);
+      if (totalOdds < tier.minOdds || totalOdds > tier.maxOdds) {
+        warn(`Tier "${tier.label}": best achievable odds ${totalOdds} fell outside the required ${tier.minOdds}–${tier.maxOdds} band — skip`);
         continue;
       }
 
-      // Every tier now reserves its legs, not just Safe.
       for (const s of selected) usedKeys.add(keyOf(s));
 
       const price = tier.price;
@@ -231,7 +248,7 @@ function pickCombo(
   }
 
   total = selected.reduce((acc, s) => acc * s.odd, 1);
-  while (total > maxOdds && selected.length > 2) {
+  while (total > maxOdds && selected.length > 1) {
     selected.sort((a, b) => b.odd - a.odd);
     selected.shift();
     total = selected.reduce((acc, s) => acc * s.odd, 1);

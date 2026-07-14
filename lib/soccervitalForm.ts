@@ -1,7 +1,7 @@
 // ─── lib/soccervitalForm.ts ──────────────────────────────────────────────────
 // Scrapes each league's "Latest results" table from SoccerVital's league page.
 // Exposes both:
-//   - getLeagueForm(): aggregated last-5 win/loss form per team (used by
+//   - getLeagueForm(): aggregated last-5 win/draw/loss form per team (used by
 //     predictionEngine.ts for confidence scoring)
 //   - getLeagueResults(): the raw match list with scores (used by
 //     app/api/cron/grade-picks/route.ts to grade finished picks)
@@ -21,6 +21,13 @@ import * as cheerio from "cheerio";
 export interface TeamForm {
   played: number;
   wins: number;
+  /** Explicit counts alongside `wins` — previously only `wins`/`played`
+   *  were tracked, which meant a team that draws constantly (DDDDD, 0%
+   *  win rate) and a team that loses constantly (LLLLL, 0% win rate)
+   *  scored identically in formGapScore. That collapsed a real distinction:
+   *  "doesn't win much" is not the same signal as "loses a lot". */
+  draws: number;
+  losses: number;
   form: string; // e.g. "WLDWW", most recent first
 }
 
@@ -196,16 +203,18 @@ async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry
     const form = new Map<string, TeamForm>();
     for (const [key, ms] of teamMatches) {
       let wins = 0;
+      let draws = 0;
+      let losses = 0;
       let formStr = "";
       for (const m of ms) {
         const isHome = normName(m.home) === key;
         const won = isHome ? m.homeGoals > m.awayGoals : m.awayGoals > m.homeGoals;
         const drew = m.homeGoals === m.awayGoals;
         if (won) { wins++; formStr += "W"; }
-        else if (drew) formStr += "D";
-        else formStr += "L";
+        else if (drew) { draws++; formStr += "D"; }
+        else { losses++; formStr += "L"; }
       }
-      form.set(key, { played: ms.length, wins, form: formStr });
+      form.set(key, { played: ms.length, wins, draws, losses, form: formStr });
     }
 
     return { results, form, ts: Date.now() };
@@ -289,9 +298,5 @@ export function findMatchResult(
     }
   }
 
-  // If we had a date but nothing parsed/matched within tolerance, don't
-  // silently fall back to a team-only guess — that defeats the whole
-  // point. Leave it unresolved (caller keeps the leg PENDING) rather
-  // than risk grading against the wrong fixture.
   return best;
 }

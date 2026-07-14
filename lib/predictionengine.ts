@@ -9,12 +9,16 @@
 //   - Tip specificity (how decisive SoccerVital's own pick is)
 //   - Consistency between the 1X2 tip and the Over/Under signal
 //   - League weight (currently flat, hook for future tuning)
-//   - Form GAP: not just the favoured team's recent record in isolation,
-//     but how much stronger it is relative to the opponent's — e.g. a team
-//     on WWWWW facing a team on LLWDL is a much stronger signal than two
-//     teams both on WWWWW, which the old isolated-form scoring couldn't
-//     distinguish. A tip backing the team in WORSE recent form is treated
-//     as a red flag (score drops below neutral), not given free credit.
+//   - Form GAP: combines a side's own win rate WITH the opponent's loss
+//     rate (not just isolated win rate). A team on WWDWW (never loses)
+//     facing a team on LLDLL (rarely wins) scores as a genuinely strong
+//     signal. Critically, a team on DDDWD (draws constantly, 20% win
+//     rate, 0% loss rate) facing a team on LLLWL (also 20% win rate, but
+//     80% loss rate) is now correctly distinguished — the old isolated
+//     win-rate scoring saw these as identical (both 20%) and missed the
+//     real signal that the second team is falling apart. A tip backing
+//     the team in worse form/higher loss rate is treated as a red flag
+//     (score drops below neutral), not given free credit.
 //
 // IMPORTANT CAVEAT: Odds are SoccerVital's own published prices, not a live
 // bookmaker market feed — they may differ from an actual sportsbook by bet
@@ -45,10 +49,10 @@ export interface PredictionPick {
   odd: number;
   isEstimatedOdd: boolean;
   sources: string[];
-  /** -1..1. How much stronger the tipped side's recent form is vs the
-   *  opponent's. Positive = tip backs the side in better form. Negative =
-   *  tip backs the side in WORSE form (red flag). Null when form data is
-   *  missing for either side and a gap can't be computed. */
+  /** -1..1. How much stronger the tipped side's combined win-rate +
+   *  opponent-loss-rate signal is vs the reverse. Positive = tip backs
+   *  the stronger side. Negative = tip backs the weaker side (red flag).
+   *  Null when form data is missing for either side. */
   formGap: number | null;
   breakdown: ConfidenceBreakdown;
 }
@@ -94,48 +98,65 @@ function consistencyScore(tip: string, goals: string): number {
 // ─── Form GAP scoring (0–30) ───────────────────────────────────────────────────
 
 /**
- * Scores the FORM GAP between the two sides, not just the favoured team's
- * form in isolation. A team on WWWWW facing LLWDL is a much stronger signal
- * than a team on WWWWW facing another WWWWW — the old isolated-form scoring
- * couldn't tell those apart, since it only ever looked at one side.
+ * Scores the favoured side using BOTH win rate and loss rate, not win rate
+ * alone. Previously a team on DDDDD (0% win rate, 0% loss rate — draws
+ * constantly) and a team on LLLLL (0% win rate, 100% loss rate — loses
+ * constantly) scored identically, because only wins/played was measured.
+ * That's a real gap: "doesn't win much" and "loses a lot" are different
+ * signals, and the difference is exactly what separates a genuinely safe
+ * pick from a risky one.
  *
- * For draw/hedge tips (X, 12) with no clear favoured side, a large gap
- * argues AGAINST the tip rather than for it — a big form mismatch usually
- * points toward a decisive result, not a draw, so it's scored as a
- * negative signal rather than ignored.
+ * The human heuristic this encodes: back the side with HIGH win rate and
+ * LOW loss rate, when the opponent has HIGH loss rate and LOW win rate —
+ * i.e. a team that rarely draws or loses, facing a team that rarely wins
+ * or draws. Two teams that both draw a lot (low win rate, low loss rate on
+ * both sides) is a genuinely different, more uncertain matchup than one
+ * side being in freefall — and should score lower, not the same.
  */
 function formGapScore(
   tip: string,
   homeForm: TeamForm | null,
   awayForm: TeamForm | null
 ): { score: number; gap: number | null } {
-  const winRate = (f: TeamForm | null) => (f && f.played > 0 ? f.wins / f.played : null);
-  const homeWr = winRate(homeForm);
-  const awayWr = winRate(awayForm);
+  const rates = (f: TeamForm | null) => {
+    if (!f || f.played === 0) return null;
+    return { winRate: f.wins / f.played, lossRate: f.losses / f.played };
+  };
 
-  if (homeWr === null || awayWr === null) {
+  const homeRates = rates(homeForm);
+  const awayRates = rates(awayForm);
+
+  if (homeRates === null || awayRates === null) {
     return { score: 10, gap: null }; // no data on one side — neutral, can't measure a gap
   }
 
   const favoursHome = tip === "1" || tip === "1X";
   const favoursAway = tip === "2" || tip === "X2";
 
+  // "Strength" combines a side's own win rate with the OPPONENT's loss
+  // rate — this is what actually captures "team A wins a lot AND team B
+  // loses a lot", not just "team A's win rate is higher than team B's".
   let gap: number;
   if (favoursHome) {
-    gap = homeWr - awayWr; // positive = home (the favoured side) is in better form
+    const favouredStrength = (homeRates.winRate + awayRates.lossRate) / 2;
+    const opponentStrength = (awayRates.winRate + homeRates.lossRate) / 2;
+    gap = favouredStrength - opponentStrength;
   } else if (favoursAway) {
-    gap = awayWr - homeWr; // positive = away (the favoured side) is in better form
+    const favouredStrength = (awayRates.winRate + homeRates.lossRate) / 2;
+    const opponentStrength = (homeRates.winRate + awayRates.lossRate) / 2;
+    gap = favouredStrength - opponentStrength;
   } else {
-    // Draw / "12" / no clear favourite: a big gap either way argues AGAINST
-    // this tip (a lopsided form gap points toward a decisive result), so
-    // invert it — the bigger the mismatch, the worse this tip looks.
-    gap = -Math.abs(homeWr - awayWr);
+    // Draw / "12" / no clear favourite: a big gap either way argues
+    // AGAINST this tip — a lopsided strength gap usually points toward a
+    // decisive result, not a draw — so invert it.
+    const homeStrength = (homeRates.winRate + awayRates.lossRate) / 2;
+    const awayStrength = (awayRates.winRate + homeRates.lossRate) / 2;
+    gap = -Math.abs(homeStrength - awayStrength);
   }
 
-  // Map gap (-1..1) to a 0-30 score. gap=0 (identical form) sits at the
-  // midpoint (15); gap=+1 (e.g. WWWWW vs LLLLL) maxes out at 30; a
-  // negative gap (tipping the team in worse form) drops below 15 instead
-  // of getting free credit like the old isolated-form scoring did.
+  // Map gap (-1..1) to a 0-30 score. gap=0 sits at the midpoint (15);
+  // gap=+1 maxes out at 30; a negative gap (tipping the weaker side)
+  // drops below 15 instead of getting free credit.
   const score = Math.round(((gap + 1) / 2) * 30);
   return { score: Math.max(0, Math.min(30, score)), gap };
 }
@@ -216,7 +237,7 @@ function scoreMatch(
       odd: Math.min(Math.max(estimatedOdd, 1.05), 4.5),
       isEstimatedOdd: true,
       sources: ["Vital"],
-      formGap, // same underlying gap; not tip-directional for O/U but kept for visibility
+      formGap,
       breakdown: {
         specificityScore: 30,
         consistencyScore: cons,
