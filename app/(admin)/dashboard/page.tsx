@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import SoccerVitalImportModal from "@/components/SoccerVitalImportModal";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -76,11 +77,11 @@ const Icons = {
     </svg>
   ),
   settings: () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-    <circle cx="8" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.4" />
-    <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M3.5 12.5l1.4-1.4M11.1 4.9l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-  </svg>
-),
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <circle cx="8" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M3.5 12.5l1.4-1.4M11.1 4.9l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  ),
   plus: () => (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -128,6 +129,18 @@ const Icons = {
       <path d="M14 20l4 4 8-8" stroke="#C9A84C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  home: () => (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M2 6.5L7 2l5 4.5V12a1 1 0 01-1 1H3a1 1 0 01-1-1V6.5z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.5 13V8.5h3V13" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  alert: () => (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+      <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6.5 4v3.2M6.5 9h.01" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 // ─── Colors ────────────────────────────────────────────────────────────────────
@@ -139,6 +152,40 @@ const C = {
 };
 
 // ─── Utilities ─────────────────────────────────────────────────────────────────
+function genId() { return Math.random().toString(36).slice(2, 9); }
+
+// Backend strips _id from matches before saving (see handleSave's payload
+// mapping in PickFormModal), so any pick re-loaded for editing comes back
+// with every match missing _id. If left undefined, toggle/delete logic
+// that matches on mx._id === m._id would treat every match as the same
+// match (they'd all share the value `undefined`) — causing a tick or
+// delete on one row to silently apply to every row. Re-generate a fresh
+// local id per match whenever a pick is loaded into the form.
+function hydrateMatchIds(p: Pick): Pick {
+  return {
+    ...p,
+    matches: p.matches.map((m) => ({ ...m, _id: m._id || genId() })),
+  };
+}
+
+// A pick is "stale-pending" if it's still PENDING more than this many days
+// past its match_date. Correlates with SoccerVital's results table being a
+// rolling window (only ~20 recent results per league) — a match that
+// hasn't graded within a few days has likely scrolled off that window
+// entirely, meaning grade-picks will keep silently failing to find it
+// forever rather than it just being "not played yet".
+const STALE_PENDING_DAYS = 4;
+
+function daysSinceMatch(matchDateStr: string): number {
+  const matchDate = new Date(matchDateStr.split("T")[0] + "T12:00:00");
+  const now = new Date();
+  return Math.floor((now.getTime() - matchDate.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function isStalePending(pick: Pick): boolean {
+  return pick.outcome === "PENDING" && daysSinceMatch(pick.match_date) > STALE_PENDING_DAYS;
+}
+
 function SubscriptionBadge({ subscription }: { subscription?: ApiUser["subscription"] }) {
   const isActive = subscription?.status === "ACTIVE" && subscription.expiresAt && new Date(subscription.expiresAt) > new Date();
   if (!isActive) {
@@ -150,11 +197,9 @@ function SubscriptionBadge({ subscription }: { subscription?: ApiUser["subscript
     </span>
   );
 }
-function genId() { return Math.random().toString(36).slice(2, 9); }
 function formatCFA(n: number) { return n.toLocaleString("fr-FR") + " FCFA"; }
 function formatDate(d: string) {
   if (!d) return "—";
-  // Strip to YYYY-MM-DD whether input is a full ISO string or date-only
   const dateOnly = d.split("T")[0];
   return new Date(dateOnly + "T12:00:00").toLocaleDateString("fr-FR", {
     day: "numeric",
@@ -213,6 +258,77 @@ function Spinner({ size = 40 }: { size?: number }) {
   );
 }
 
+// ─── Simple SVG line chart (no external chart library needed) ─────────────────
+function LineChart({ data, height = 180 }: { data: { label: string; value: number }[]; height?: number }) {
+  if (data.length === 0) {
+    return <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>Aucune donnée</div>;
+  }
+  const max = Math.max(...data.map((d) => d.value), 1);
+  const width = 100;
+  const padY = 10;
+  const usableH = height - padY * 2;
+  const stepX = data.length > 1 ? width / (data.length - 1) : 0;
+
+  const points = data.map((d, i) => {
+    const x = data.length > 1 ? i * stepX : width / 2;
+    const y = padY + usableH - (d.value / max) * usableH;
+    return { x, y, ...d };
+  });
+
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  const areaD = `${pathD} L ${points[points.length - 1].x} ${height - padY} L ${points[0].x} ${height - padY} Z`;
+
+  return (
+    <div style={{ padding: "16px" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height, overflow: "visible" }} preserveAspectRatio="none">
+        <path d={areaD} fill="url(#goldFade)" opacity={0.15} />
+        <defs>
+          <linearGradient id="goldFade" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={C.gold} stopOpacity="0.5" />
+            <stop offset="100%" stopColor={C.gold} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={pathD} fill="none" stroke={C.gold} strokeWidth="0.6" vectorEffect="non-scaling-stroke" />
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="0.8" fill={C.gold} vectorEffect="non-scaling-stroke" />
+        ))}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+        {data.map((d, i) => (
+          (data.length <= 8 || i % Math.ceil(data.length / 8) === 0) ? (
+            <span key={i} style={{ fontSize: 9, color: C.muted }}>{d.label}</span>
+          ) : <span key={i} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Simple horizontal bar distribution chart ──────────────────────────────────
+function OutcomeBarChart({ wins, losses, pending }: { wins: number; losses: number; pending: number }) {
+  const total = wins + losses + pending || 1;
+  const rows = [
+    { label: "Win", value: wins, color: C.green },
+    { label: "Loss", value: losses, color: C.red },
+    { label: "En cours", value: pending, color: C.gold },
+  ];
+  return (
+    <div style={{ padding: "16px" }}>
+      {rows.map((r) => (
+        <div key={r.label} style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+            <span style={{ fontSize: 11, color: C.text }}>{r.label}</span>
+            <span style={{ fontSize: 11, color: r.color, fontWeight: 700 }}>{r.value}</span>
+          </div>
+          <div style={{ background: C.dark4, borderRadius: 4, height: 8, overflow: "hidden" }}>
+            <div style={{ height: "100%", borderRadius: 4, width: `${(r.value / total) * 100}%`, background: r.color, transition: "width 0.5s ease" }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (p: Pick) => void; onClose: () => void }) {
   const isNew = !pick;
   const defaultForm = (): Pick => ({
@@ -221,9 +337,9 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
     league: "Premier League", outcome: "PENDING", is_published: false, matches: [],
   });
 
-  const [form, setForm] = useState<Pick>(pick ? { ...pick } : defaultForm());
+  const [form, setForm] = useState<Pick>(pick ? hydrateMatchIds(pick) : defaultForm());
   useEffect(() => {
-    setForm(pick ? { ...pick } : defaultForm());
+    setForm(pick ? hydrateMatchIds(pick) : defaultForm());
   }, [pick]);
   const [saving, setSaving] = useState(false);
   const [newMatch, setNewMatch] = useState({ home: "", away: "", tip: "1", odd: 1.8 });
@@ -243,7 +359,7 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
         tip: newMatch.tip,
         odd: newMatch.odd,
         outcome: "PENDING",
-        date: f.match_date, // inherit the pick's date at time of adding
+        date: f.match_date,
       }],
     }));
     setNewMatch({ home: "", away: "", tip: "1", odd: 1.8 });
@@ -255,7 +371,6 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
       const method = isNew ? "POST" : "PUT";
       const url = isNew ? "/api/picks" : `/api/picks/${form._id}`;
 
-      // Strip frontend-generated _id from matches before saving
       const payload = {
         ...form,
         matches: form.matches.map(({ _id, ...rest }) => rest),
@@ -352,7 +467,6 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
           <div>
             <label style={lStyle}>Sélections ({form.matches.length})</label>
 
-            {/* Add match row */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto auto", gap: 6, marginBottom: 8 }}>
               <input style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.home}
                 onChange={(e) => setNewMatch((m) => ({ ...m, home: e.target.value }))} placeholder="Domicile" />
@@ -375,7 +489,7 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
                 const next: Match["outcome"] = m.outcome === "PENDING" ? "WIN" : m.outcome === "WIN" ? "LOSS" : "PENDING";
                 setForm((f) => ({
                   ...f,
-                  matches: f.matches.map((mx) => mx._id === m._id ? { ...mx, outcome: next } : mx),
+                  matches: f.matches.map((mx, mxIdx) => mxIdx === idx ? { ...mx, outcome: next } : mx),
                 }));
               };
               const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : C.faint;
@@ -399,7 +513,7 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
                   >
                     {tickLabel}
                   </button>
-                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((mx) => mx._id !== m._id) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2 }}>
+                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((_, mxIdx) => mxIdx !== idx) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2 }}>
                     <Icons.close />
                   </button>
                 </div>
@@ -531,7 +645,8 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
     );
   }), [picks, search, filterOutcome, filterLeague]);
 
-  // Clear selections that no longer exist in the filtered/current list
+  const stalePicks = useMemo(() => picks.filter(isStalePending), [picks]);
+
   useEffect(() => {
     setSelected((prev) => {
       const validIds = new Set(picks.map((p) => p._id));
@@ -614,6 +729,27 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
 
   return (
     <div>
+      {stalePicks.length > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+          background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.25)",
+          borderRadius: 10, padding: "10px 14px", marginBottom: 14, flexWrap: "wrap",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.red, fontSize: 12 }}>
+            <Icons.alert />
+            <span>
+              {stalePicks.length} pick{stalePicks.length > 1 ? "s" : ""} en attente depuis plus de {STALE_PENDING_DAYS} jours — probablement introuvable(s) automatiquement, à graduer manuellement.
+            </span>
+          </div>
+          <button
+            onClick={() => { setFilterOutcome("PENDING"); setSearch(""); }}
+            style={{ background: C.dark4, border: `1px solid ${C.border}`, color: C.text, borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+          >
+            Voir les picks en attente
+          </button>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         <input style={{ ...iStyle, flex: 1, minWidth: 140 }} placeholder="Rechercher…" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -702,7 +838,14 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
                   <div style={{ fontSize: 10, color: C.muted }}>{formatCFA(p.price)}</div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <Badge outcome={p.outcome} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <Badge outcome={p.outcome} />
+                    {isStalePending(p) && (
+                      <span title={`En attente depuis ${daysSinceMatch(p.match_date)} jours`} style={{ color: C.red, display: "flex", alignItems: "center" }}>
+                        <Icons.alert />
+                      </span>
+                    )}
+                  </div>
                   <Badge outcome={p.is_published ? "live" : "draft"} />
                 </div>
                 <PickActions pick={p} onEdit={() => { setEditPick(p); setShowForm(true); }} onDelete={() => handleDelete(p._id)} onToggle={() => togglePublish(p._id)} />
@@ -747,8 +890,13 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
                 <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.gold, flexShrink: 0 }}>x{p.total_odds}</div>
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", gap: 6 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <Badge outcome={p.outcome} />
+                  {isStalePending(p) && (
+                    <span title={`En attente depuis ${daysSinceMatch(p.match_date)} jours`} style={{ color: C.red, display: "flex", alignItems: "center" }}>
+                      <Icons.alert />
+                    </span>
+                  )}
                   <Badge outcome={p.is_published ? "live" : "draft"} />
                 </div>
                 <PickActions pick={p} onEdit={() => { setEditPick(p); setShowForm(true); }} onDelete={() => handleDelete(p._id)} onToggle={() => togglePublish(p._id)} />
@@ -777,6 +925,7 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
     </div>
   );
 }
+
 // ─── Users Tab ──────────────────────────────────────────────────────────────────
 function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoading: boolean; picks: Pick[] }) {
   const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);
@@ -802,7 +951,6 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
     return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
   }
 
-  // Same "is this subscription currently active" check used everywhere else
   const isActiveSubscriber = (u: ApiUser) =>
     u.subscription?.status === "ACTIVE" && u.subscription.expiresAt && new Date(u.subscription.expiresAt) > new Date();
 
@@ -811,9 +959,6 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
     const wins = unlocked.filter((p) => p.outcome === "WIN").length;
     const pickRev = unlocked.reduce((s, p) => s + p.price, 0);
     const subscribed = isActiveSubscriber(u);
-    // Estimate — see note in RevenueTab: this uses the current settings
-    // price, so it's approximate for subscribers who joined before a
-    // price change.
     const subRev = subscribed && subPrice != null ? subPrice : 0;
     const rev = pickRev + subRev;
     const avatar = (
@@ -836,7 +981,6 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
           placeholder="Rechercher par numéro ou rôle…" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
 
-      {/* Desktop table */}
       <div className="admin-table-desktop">
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
@@ -872,7 +1016,6 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
         </div>
       </div>
 
-      {/* Mobile cards */}
       <div className="admin-cards-mobile">
         {filtered.length === 0 && <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "32px 0" }}>Aucun utilisateur.</div>}
         {filtered.map((u) => {
@@ -911,6 +1054,7 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
     </div>
   );
 }
+
 // ─── Revenue Tab ───────────────────────────────────────────────────────────────
 function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const today = new Date().toISOString().split("T")[0];
@@ -939,10 +1083,6 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
     [users, filteredPicks]
   );
 
-  // Subscription revenue can't be filtered by the pick date-range picker
-  // (subscriptions aren't tied to a match_date) — this counts anyone whose
-  // subscription STARTED within the selected window, using the current
-  // settings price as an estimate of what they paid.
   const subscriptionRevenue = useMemo(() => {
     if (subPrice == null) return 0;
     return users.filter((u) => {
@@ -986,11 +1126,25 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const finished = filteredPicks.filter((p) => p.outcome !== "PENDING");
   const winRate = finished.length > 0 ? Math.round((filteredPicks.filter((p) => p.outcome === "WIN").length / finished.length) * 100) : 0;
 
+  const dailyRevenue = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of filteredPicks) {
+      const day = p.match_date.split("T")[0];
+      const unlocks = users.filter((u) => u.unlockedPickIds.includes(p._id)).length;
+      map.set(day, (map.get(day) || 0) + unlocks * p.price);
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([day, value]) => ({
+        label: new Date(day + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" }),
+        value,
+      }));
+  }, [filteredPicks, users]);
+
   const iStyle: React.CSSProperties = { background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 12, padding: "8px 12px", fontFamily: "inherit", outline: "none" };
 
   return (
     <div>
-      {/* Date filter — unchanged */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 22, background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", flexWrap: "wrap" }}>
         <span style={{ fontSize: 10, color: C.muted, letterSpacing: "1.5px", textTransform: "uppercase", fontWeight: 600 }}>Période</span>
         <input type="date" style={iStyle} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
@@ -1004,7 +1158,6 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
         ))}
       </div>
 
-      {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 12 }}>
         <StatCard label="Revenu Total" value={totalRevenue >= 1000 ? `${(totalRevenue / 1000).toFixed(0)}K` : totalRevenue} sub={formatCFA(totalRevenue)} accent />
         <StatCard label="Débloquages" value={totalUnlocks} sub={`${filteredPicks.length} picks`} />
@@ -1015,6 +1168,11 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
 
       <div style={{ fontSize: 11, color: C.muted, marginBottom: 22 }}>
         Répartition: <span style={{ color: C.gold }}>{formatCFA(pickRevenue)}</span> picks · <span style={{ color: C.gold }}>{formatCFA(subscriptionRevenue)}</span> abonnements
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 16 }}>
+        <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Revenu par jour (picks)</div>
+        <LineChart data={dailyRevenue} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
@@ -1058,6 +1216,8 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
 function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const finished = picks.filter((p) => p.outcome !== "PENDING");
   const wins = finished.filter((p) => p.outcome === "WIN").length;
+  const losses = finished.filter((p) => p.outcome === "LOSS").length;
+  const pendingCount = picks.filter((p) => p.outcome === "PENDING").length;
   const winRate = finished.length > 0 ? Math.round((wins / finished.length) * 100) : 0;
 
   const pickRevenue = users.reduce((sum, u) =>
@@ -1088,6 +1248,23 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
     .map((u) => ({ u, rev: u.unlockedPickIds.reduce((s, pid) => { const p = picks.find((pk) => pk._id === pid); return s + (p ? p.price : 0); }, 0) }))
     .sort((a, b) => b.rev - a.rev).slice(0, 5);
 
+  const revenueTrend = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of picks) {
+      const day = p.match_date.split("T")[0];
+      const unlocks = users.filter((u) => u.unlockedPickIds.includes(p._id)).length;
+      if (unlocks === 0) continue;
+      map.set(day, (map.get(day) || 0) + unlocks * p.price);
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-14)
+      .map(([day, value]) => ({
+        label: new Date(day + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" }),
+        value,
+      }));
+  }, [picks, users]);
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 24 }}>
@@ -1098,7 +1275,17 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
         <StatCard label="Abonnés Actifs" value={activeSubscribers.length} sub={`sur ${users.length} utilisateurs`} />
       </div>
 
-      {/* rest unchanged — recentPicks / topUsers sections stay as-is */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, marginBottom: 16 }}>
+        <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Revenu (14 derniers jours)</div>
+          <LineChart data={revenueTrend} height={160} />
+        </div>
+        <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Répartition des résultats</div>
+          <OutcomeBarChart wins={wins} losses={losses} pending={pendingCount} />
+        </div>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Activité Récente</div>
@@ -1137,6 +1324,7 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
     </div>
   );
 }
+
 function SettingsTab() {
   const [price, setPrice] = useState<number | null>(null);
   const [inputValue, setInputValue] = useState("");
@@ -1255,6 +1443,7 @@ function SettingsTab() {
     </div>
   );
 }
+
 // ─── Access Denied ─────────────────────────────────────────────────────────────
 function AccessDenied() {
   const router = useRouter();
@@ -1276,7 +1465,6 @@ function AccessDenied() {
 type Tab = "overview" | "picks" | "users" | "revenue" | "settings";
 
 export default function AdminDashboard() {
-  // ── Auth guard ────────────────────────────────────────────────────────────
   const { user, loading: authLoading, logout } = useAuth();
   const router = useRouter();
 
@@ -1287,7 +1475,6 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
 
-  // ── Fetch picks (admin sees all, published + unpublished) ─────────────────
   useEffect(() => {
     if (!user || user.role !== "ADMIN") return;
     let cancelled = false;
@@ -1308,7 +1495,6 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, [user]);
 
-  // ── Fetch real users from /api/users ──────────────────────────────────────
   useEffect(() => {
     if (!user || user.role !== "ADMIN") return;
     let cancelled = false;
@@ -1319,7 +1505,6 @@ export default function AdminDashboard() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (cancelled) return;
-        // Handle common API shapes: [], { users: [] }, { data: [] }
         const resolved: ApiUser[] = Array.isArray(data) ? data
           : Array.isArray(data?.users) ? data.users
             : Array.isArray(data?.data) ? data.data : [];
@@ -1330,7 +1515,6 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, [user]);
 
-  // ── Auth loading screen ───────────────────────────────────────────────────
   if (authLoading) {
     return (
       <>
@@ -1348,7 +1532,6 @@ export default function AdminDashboard() {
     );
   }
 
-  // ── Access denied if not logged in or not admin ───────────────────────────
   if (!user || user.role !== "ADMIN") {
     return (
       <>
@@ -1400,7 +1583,6 @@ export default function AdminDashboard() {
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-        /* Responsive: sidebar + table/card switching */
         .admin-sidebar { display: flex; }
         .admin-hamburger { display: none; }
         .admin-table-desktop { display: block; }
@@ -1416,21 +1598,22 @@ export default function AdminDashboard() {
 
       <div style={{ minHeight: "100vh", background: C.dark, display: "flex" }}>
 
-        {/* ── Desktop Sidebar ── */}
         <aside className="admin-sidebar" style={{ width: 210, flexShrink: 0, background: C.dark2, borderRight: `1px solid ${C.border}`, flexDirection: "column", position: "sticky", top: 0, height: "100vh" }}>
           <div style={{ padding: "22px 18px 18px", borderBottom: `1px solid ${C.border}` }}>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 11, letterSpacing: "4px", color: C.gold, textTransform: "uppercase", marginBottom: 3 }}>Coupon Sûr</div>
             <div style={{ fontSize: 10, color: C.muted, letterSpacing: "1px" }}>Administration</div>
           </div>
           <nav style={{ padding: "10px 8px", flex: 1 }}><NavItems /></nav>
-          <div style={{ padding: "14px 8px", borderTop: `1px solid ${C.border}` }}>
+          <div style={{ padding: "14px 8px", borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 4 }}>
+            <Link href="/" target="_blank" style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 12px", borderRadius: 8, background: "transparent", color: C.gold, fontSize: 12, fontFamily: "inherit", textDecoration: "none" }}>
+              <Icons.home />Voir le site (live)
+            </Link>
             <button onClick={handleLogout} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: "pointer", background: "transparent", color: C.muted, fontSize: 12, fontFamily: "inherit" }}>
               <Icons.logout />Déconnexion
             </button>
           </div>
         </aside>
 
-        {/* ── Mobile Sidebar Drawer ── */}
         {sidebarOpen && (
           <div style={{ position: "fixed", inset: 0, zIndex: 300, display: "flex", animation: "fadeIn 0.2s ease" }}>
             <div style={{ width: 230, background: C.dark2, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -1444,7 +1627,10 @@ export default function AdminDashboard() {
                 </button>
               </div>
               <nav style={{ padding: "10px 8px", flex: 1 }}><NavItems /></nav>
-              <div style={{ padding: "14px 8px", borderTop: `1px solid ${C.border}` }}>
+              <div style={{ padding: "14px 8px", borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 4 }}>
+                <Link href="/" target="_blank" style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 12px", borderRadius: 8, background: "transparent", color: C.gold, fontSize: 12, fontFamily: "inherit", textDecoration: "none" }}>
+                  <Icons.home />Voir le site (live)
+                </Link>
                 <button onClick={handleLogout} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: "pointer", background: "transparent", color: C.muted, fontSize: 12, fontFamily: "inherit" }}>
                   <Icons.logout />Déconnexion
                 </button>
@@ -1454,13 +1640,10 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* ── Main ── */}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
 
-          {/* Topbar */}
           <header style={{ background: C.dark2, borderBottom: `1px solid ${C.border}`, padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              {/* Hamburger – only visible on mobile via CSS class */}
               <button className="admin-hamburger" onClick={() => setSidebarOpen(true)} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, width: 34, height: 34, alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted, flexShrink: 0 }}>
                 <Icons.menu />
               </button>
@@ -1474,8 +1657,10 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            {/* Admin info */}
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Link href="/" target="_blank" className="admin-hamburger" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, width: 34, height: 34, alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.gold, flexShrink: 0, textDecoration: "none" }}>
+                <Icons.home />
+              </Link>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 12, color: C.text, fontWeight: 500 }}>{user.phone}</div>
                 <div style={{ fontSize: 9, color: C.gold, letterSpacing: "1.5px", textTransform: "uppercase" }}>Admin</div>
@@ -1486,7 +1671,6 @@ export default function AdminDashboard() {
             </div>
           </header>
 
-          {/* Tab content */}
           <main style={{ flex: 1, padding: "20px 16px", overflowY: "auto" }}>
             {picksLoading ? (
               <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>
