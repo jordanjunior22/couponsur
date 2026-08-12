@@ -192,7 +192,7 @@ export async function GET(req: NextRequest) {
         match_date: new Date(dateStr + "T12:00:00"),
         league: leagueLabel,
         outcome: Outcome.PENDING,
-        is_published: true,
+        is_published: false,
         is_automated: true,
         tier: tier.id,
         avg_confidence: avgConf,
