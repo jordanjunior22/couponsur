@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -42,6 +42,33 @@ interface ApiUser {
   };
   createdAt?: string;
   lastLoginAt?: string;
+}
+
+interface ChatMessage {
+  _id?: string;
+  sender: "USER" | "ADMIN";
+  text: string;
+  createdAt: string;
+}
+
+interface Conversation {
+  _id: string;
+  user: string | null;
+  phone: string;
+  status: "OPEN" | "RESOLVED";
+  messages: ChatMessage[];
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+interface Announcement {
+  _id: string;
+  title: string;
+  body: string;
+  type: "INFO" | "WARNING" | "SUCCESS";
+  isActive: boolean;
+  expiresAt: string | null;
+  createdAt: string;
 }
 
 const LEAGUES = [
@@ -139,6 +166,18 @@ const Icons = {
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
       <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" strokeWidth="1.3" />
       <path d="M6.5 4v3.2M6.5 9h.01" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  ),
+  messages: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M1.5 3.5h13v8a1 1 0 01-1 1H5l-3.5 3v-3h-1a1 1 0 01-1-1v-8z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  announcements: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M1.5 6.5v3a1 1 0 001 1h1.3l6.7 3V2.5l-6.7 3H2.5a1 1 0 00-1 1z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 10.5v2.3a1 1 0 001 1h.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M12.8 6a2.4 2.4 0 010 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   ),
 };
@@ -1444,6 +1483,465 @@ function SettingsTab() {
   );
 }
 
+// ─── Conversation Thread Modal ─────────────────────────────────────────────────
+function ConversationModal({ conversation, onClose, onUpdate }: { conversation: Conversation; onClose: () => void; onUpdate: (c: Conversation) => void }) {
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [togglingStatus, setTogglingStatus] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [conversation.messages.length]);
+
+  const handleReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = reply.trim();
+    if (!text || sending) return;
+    setSending(true);
+    try {
+      const res = await fetch(`/api/admin/conversations/${conversation._id}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        onUpdate(data.data);
+        setReply("");
+      }
+    } catch { /* keep draft on failure */ }
+    finally { setSending(false); }
+  };
+
+  const toggleStatus = async () => {
+    const nextStatus = conversation.status === "OPEN" ? "RESOLVED" : "OPEN";
+    setTogglingStatus(true);
+    try {
+      const res = await fetch(`/api/admin/conversations/${conversation._id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      const data = await res.json();
+      if (data?.success) onUpdate(data.data);
+    } catch { /* leave as-is on failure */ }
+    finally { setTogglingStatus(false); }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 480, height: "min(80vh, 620px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+          <div>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.text, letterSpacing: 1 }}>{conversation.phone}</div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{conversation.user ? "Compte lié" : "Visiteur non connecté"}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={toggleStatus} disabled={togglingStatus} style={{
+              background: conversation.status === "OPEN" ? C.gold : C.dark4, color: conversation.status === "OPEN" ? C.dark : C.text,
+              border: `1px solid ${conversation.status === "OPEN" ? C.gold : C.border}`, borderRadius: 6, padding: "6px 12px",
+              fontSize: 11, fontWeight: 700, cursor: togglingStatus ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: togglingStatus ? 0.6 : 1, whiteSpace: "nowrap",
+            }}>
+              {conversation.status === "OPEN" ? "Marquer résolu" : "Rouvrir"}
+            </button>
+            <button onClick={onClose} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted, flexShrink: 0 }}>
+              <Icons.close />
+            </button>
+          </div>
+        </div>
+
+        <div ref={listRef} style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {conversation.messages.length === 0 ? (
+            <div style={{ margin: "auto", color: C.muted, fontSize: 12 }}>Aucun message pour l’instant.</div>
+          ) : (
+            conversation.messages.map((m, i) => (
+              <div key={m._id || i} style={{
+                alignSelf: m.sender === "ADMIN" ? "flex-end" : "flex-start",
+                maxWidth: "78%",
+                background: m.sender === "ADMIN" ? C.gold : C.dark4,
+                color: m.sender === "ADMIN" ? C.dark : C.text,
+                border: m.sender === "ADMIN" ? "none" : `1px solid ${C.border}`,
+                borderRadius: 12,
+                borderBottomRightRadius: m.sender === "ADMIN" ? 3 : 12,
+                borderBottomLeftRadius: m.sender === "USER" ? 3 : 12,
+                padding: "9px 12px",
+                fontSize: 13,
+                lineHeight: 1.5,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}>
+                {m.text}
+                <div style={{ fontSize: 9, marginTop: 3, opacity: 0.6 }}>
+                  {new Date(m.createdAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <form onSubmit={handleReply} style={{ display: "flex", gap: 8, padding: 14, borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
+          <input
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            placeholder="Répondre…"
+            maxLength={2000}
+            style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 20, color: C.text, fontSize: 13, padding: "10px 14px", outline: "none", fontFamily: "inherit", minWidth: 0 }}
+          />
+          <button
+            type="submit"
+            disabled={!reply.trim() || sending}
+            style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 20, padding: "0 18px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: (!reply.trim() || sending) ? 0.5 : 1, whiteSpace: "nowrap" }}
+          >
+            {sending ? "…" : "Envoyer"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Messages Tab ───────────────────────────────────────────────────────────────
+function MessagesTab({ conversations, setConversations, loading }: { conversations: Conversation[]; setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>; loading: boolean }) {
+  const [filterStatus, setFilterStatus] = useState<"ALL" | "OPEN" | "RESOLVED">("ALL");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const filtered = useMemo(
+    () => conversations.filter((c) => filterStatus === "ALL" || c.status === filterStatus),
+    [conversations, filterStatus]
+  );
+
+  const openCount = conversations.filter((c) => c.status === "OPEN").length;
+  const selected = conversations.find((c) => c._id === openId) || null;
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Supprimer cette conversation ?")) return;
+    setBusyId(id);
+    try { await fetch(`/api/admin/conversations/${id}`, { method: "DELETE", credentials: "include" }); } catch { /* optimistic */ }
+    setConversations((prev) => prev.filter((x) => x._id !== id));
+    setBusyId(null);
+  };
+
+  const handleUpdate = (updated: Conversation) => {
+    setConversations((prev) => prev.map((x) => (x._id === updated._id ? updated : x)));
+  };
+
+  const iStyle: React.CSSProperties = { background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 12, padding: "8px 12px", fontFamily: "inherit", outline: "none" };
+
+  if (loading) {
+    return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <select style={{ ...iStyle, cursor: "pointer" }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}>
+          <option value="ALL">Toutes les conversations</option>
+          <option value="OPEN">Ouvertes</option>
+          <option value="RESOLVED">Résolues</option>
+        </select>
+        {openCount > 0 && (
+          <span style={{ fontSize: 11, color: C.gold, background: "rgba(201,168,76,0.1)", border: `1px solid ${C.goldDark}`, padding: "4px 10px", borderRadius: 6 }}>
+            {openCount} en attente
+          </span>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ padding: "48px 0", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucune conversation.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {filtered.map((c) => {
+            const last = c.messages[c.messages.length - 1];
+            const awaitingReply = c.status === "OPEN" && last?.sender === "USER";
+            return (
+              <div key={c._id} onClick={() => setOpenId(c._id)} style={{
+                background: C.dark3, border: `1px solid ${C.border}`, borderLeft: `3px solid ${awaitingReply ? C.gold : c.status === "OPEN" ? C.blue : C.green}`,
+                borderRadius: 10, padding: "14px 16px", cursor: "pointer", transition: "background 0.15s",
+              }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = C.dark4)}
+                onMouseLeave={(e) => (e.currentTarget.style.background = C.dark3)}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 6, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{c.phone}</div>
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>
+                      {new Date(c.lastMessageAt).toLocaleString("fr-FR")}
+                      {c.user && <span> · compte lié</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    {awaitingReply && (
+                      <span style={{ fontSize: 9, color: C.gold, background: "rgba(201,168,76,0.1)", border: `1px solid ${C.goldDark}`, padding: "2px 7px", borderRadius: 4, fontWeight: 700, letterSpacing: "0.5px" }}>
+                        À RÉPONDRE
+                      </span>
+                    )}
+                    <Badge outcome={c.status === "OPEN" ? "draft" : "live"} />
+                  </div>
+                </div>
+                {last && (
+                  <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 10 }}>
+                    {last.sender === "ADMIN" ? "Vous: " : ""}{last.text}
+                  </p>
+                )}
+                <div style={{ display: "flex", gap: 8 }} onClick={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={() => handleDelete(c._id)}
+                    disabled={busyId === c._id}
+                    style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 6, color: C.red, padding: "5px 10px", fontSize: 11, cursor: busyId === c._id ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <Icons.trash /> Supprimer
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {selected && (
+        <ConversationModal conversation={selected} onClose={() => setOpenId(null)} onUpdate={handleUpdate} />
+      )}
+    </div>
+  );
+}
+
+// ─── Announcement Form Modal ────────────────────────────────────────────────────
+function AnnouncementFormModal({ announcement, onSave, onClose }: { announcement: Announcement | null; onSave: (a: Announcement) => void; onClose: () => void }) {
+  const isNew = !announcement;
+  const [title, setTitle] = useState(announcement?.title ?? "");
+  const [body, setBody] = useState(announcement?.body ?? "");
+  const [type, setType] = useState<Announcement["type"]>(announcement?.type ?? "INFO");
+  const [expiresAt, setExpiresAt] = useState(announcement?.expiresAt ? announcement.expiresAt.split("T")[0] : "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    if (!title.trim() || !body.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = {
+        title: title.trim(),
+        body: body.trim(),
+        type,
+        expiresAt: expiresAt || null,
+      };
+      const res = await fetch(
+        isNew ? "/api/admin/announcements" : `/api/admin/announcements/${announcement!._id}`,
+        {
+          method: isNew ? "POST" : "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec de l'enregistrement");
+      onSave(data.data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Échec de l'enregistrement");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const iStyle: React.CSSProperties = {
+    background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
+    color: C.text, fontSize: 13, padding: "10px 12px", width: "100%",
+    fontFamily: "inherit", outline: "none",
+  };
+  const lStyle: React.CSSProperties = {
+    fontSize: 10, letterSpacing: "1.5px", color: C.muted,
+    textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6,
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 480, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1 }}>
+            {isNew ? "Nouvelle annonce" : "Modifier l'annonce"}
+          </div>
+          <button onClick={onClose} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted }}>
+            <Icons.close />
+          </button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={lStyle}>Titre</label>
+            <input style={iStyle} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex: Maintenance ce soir" maxLength={120} />
+          </div>
+          <div>
+            <label style={lStyle}>Message</label>
+            <textarea style={{ ...iStyle, resize: "vertical", minHeight: 90, fontFamily: "inherit" }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Détails de l'annonce…" maxLength={2000} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={lStyle}>Type</label>
+              <select style={{ ...iStyle, cursor: "pointer" }} value={type} onChange={(e) => setType(e.target.value as Announcement["type"])}>
+                <option value="INFO">Info</option>
+                <option value="WARNING">Avertissement</option>
+                <option value="SUCCESS">Succès</option>
+              </select>
+            </div>
+            <div>
+              <label style={lStyle}>Expire le (optionnel)</label>
+              <input type="date" style={iStyle} value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
+            </div>
+          </div>
+
+          {error && (
+            <div style={{ fontSize: 12, padding: "8px 12px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.red }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, paddingTop: 6 }}>
+            <button onClick={onClose} style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: "12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              Annuler
+            </button>
+            <button onClick={handleSave} disabled={saving || !title.trim() || !body.trim()} style={{ flex: 2, background: saving ? C.goldDark : C.gold, border: "none", color: C.dark, borderRadius: 8, padding: "12px", fontSize: 12, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", letterSpacing: "1px", opacity: (!title.trim() || !body.trim()) ? 0.5 : 1 }}>
+              {saving ? "Enregistrement…" : isNew ? "Publier" : "Enregistrer"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Announcements Tab ──────────────────────────────────────────────────────────
+const ANNOUNCEMENT_TYPE_LABEL: Record<Announcement["type"], { label: string; color: string }> = {
+  INFO: { label: "INFO", color: C.blue },
+  WARNING: { label: "AVERTISSEMENT", color: C.gold },
+  SUCCESS: { label: "SUCCÈS", color: C.green },
+};
+
+function AnnouncementsTab({ announcements, setAnnouncements, loading }: { announcements: Announcement[]; setAnnouncements: React.Dispatch<React.SetStateAction<Announcement[]>>; loading: boolean }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editAnnouncement, setEditAnnouncement] = useState<Announcement | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const isExpired = (a: Announcement) => !!a.expiresAt && new Date(a.expiresAt) < new Date();
+
+  const handleSave = (a: Announcement) => {
+    setAnnouncements((prev) => {
+      const idx = prev.findIndex((x) => x._id === a._id);
+      if (idx >= 0) { const next = [...prev]; next[idx] = a; return next; }
+      return [a, ...prev];
+    });
+    setShowForm(false);
+    setEditAnnouncement(null);
+  };
+
+  const toggleActive = async (a: Announcement) => {
+    setBusyId(a._id);
+    try {
+      const res = await fetch(`/api/admin/announcements/${a._id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !a.isActive }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setAnnouncements((prev) => prev.map((x) => (x._id === a._id ? data.data : x)));
+      }
+    } catch { /* leave as-is on failure */ }
+    finally { setBusyId(null); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Supprimer cette annonce ?")) return;
+    setBusyId(id);
+    try { await fetch(`/api/admin/announcements/${id}`, { method: "DELETE", credentials: "include" }); } catch { /* optimistic */ }
+    setAnnouncements((prev) => prev.filter((x) => x._id !== id));
+    setBusyId(null);
+  };
+
+  if (loading) {
+    return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+        <button onClick={() => { setEditAnnouncement(null); setShowForm(true); }}
+          style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+          <Icons.plus /> Nouvelle annonce
+        </button>
+      </div>
+
+      {announcements.length === 0 ? (
+        <div style={{ padding: "48px 0", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucune annonce.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {announcements.map((a) => {
+            const expired = isExpired(a);
+            const tLabel = ANNOUNCEMENT_TYPE_LABEL[a.type] || ANNOUNCEMENT_TYPE_LABEL.INFO;
+            const live = a.isActive && !expired;
+            return (
+              <div key={a._id} style={{
+                background: C.dark3, border: `1px solid ${C.border}`, borderLeft: `3px solid ${live ? tLabel.color : C.faint}`,
+                borderRadius: 10, padding: "14px 16px", opacity: live ? 1 : 0.65,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 6, flexWrap: "wrap" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{a.title}</div>
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>
+                      {new Date(a.createdAt).toLocaleDateString("fr-FR")}
+                      {a.expiresAt && <span> · {expired ? "expirée le" : "expire le"} {new Date(a.expiresAt).toLocaleDateString("fr-FR")}</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    <span style={{ fontSize: 9, color: tLabel.color, background: `${tLabel.color}1A`, border: `1px solid ${tLabel.color}40`, padding: "2px 7px", borderRadius: 4, fontWeight: 700, letterSpacing: "0.5px" }}>
+                      {tLabel.label}
+                    </span>
+                    <Badge outcome={live ? "live" : "draft"} />
+                  </div>
+                </div>
+                <p style={{ fontSize: 13, color: C.text, lineHeight: 1.6, whiteSpace: "pre-wrap", marginBottom: 12 }}>{a.body}</p>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => toggleActive(a)}
+                    disabled={busyId === a._id}
+                    style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: a.isActive ? C.green : C.muted, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: busyId === a._id ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: busyId === a._id ? 0.6 : 1 }}
+                  >
+                    {a.isActive ? "Désactiver" : "Activer"}
+                  </button>
+                  <button onClick={() => { setEditAnnouncement(a); setShowForm(true); }} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+                    <Icons.edit /> Modifier
+                  </button>
+                  <button
+                    onClick={() => handleDelete(a._id)}
+                    disabled={busyId === a._id}
+                    style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 6, color: C.red, padding: "6px 12px", fontSize: 11, cursor: busyId === a._id ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <Icons.trash /> Supprimer
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {(showForm || editAnnouncement) && (
+        <AnnouncementFormModal announcement={editAnnouncement} onSave={handleSave} onClose={() => { setShowForm(false); setEditAnnouncement(null); }} />
+      )}
+    </div>
+  );
+}
+
 // ─── Access Denied ─────────────────────────────────────────────────────────────
 function AccessDenied() {
   const router = useRouter();
@@ -1462,7 +1960,7 @@ function AccessDenied() {
 }
 
 // ─── Main Admin Dashboard ───────────────────────────────────────────────────────
-type Tab = "overview" | "picks" | "users" | "revenue" | "settings";
+type Tab = "overview" | "picks" | "users" | "revenue" | "messages" | "announcements" | "settings";
 
 export default function AdminDashboard() {
   const { user, loading: authLoading, logout } = useAuth();
@@ -1474,6 +1972,10 @@ export default function AdminDashboard() {
   const [picksLoading, setPicksLoading] = useState(true);
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [announcementsLoading, setAnnouncementsLoading] = useState(true);
 
   useEffect(() => {
     if (!user || user.role !== "ADMIN") return;
@@ -1515,6 +2017,48 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, [user]);
 
+  useEffect(() => {
+    if (!user || user.role !== "ADMIN") return;
+    let cancelled = false;
+
+    const fetchConversations = async (showSpinner: boolean) => {
+      try {
+        if (showSpinner) setConversationsLoading(true);
+        const res = await fetch("/api/admin/conversations", { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const resolved: Conversation[] = Array.isArray(data?.data) ? data.data : [];
+        setConversations(resolved);
+      } catch (e) { console.error("Conversations fetch:", e); }
+      finally { if (!cancelled && showSpinner) setConversationsLoading(false); }
+    };
+
+    fetchConversations(true);
+    // Light polling so new visitor messages show up (and the sidebar
+    // badge updates) without the admin needing to switch tabs and back.
+    const interval = setInterval(() => fetchConversations(false), 15000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || user.role !== "ADMIN") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setAnnouncementsLoading(true);
+        const res = await fetch("/api/admin/announcements", { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const resolved: Announcement[] = Array.isArray(data?.data) ? data.data : [];
+        setAnnouncements(resolved);
+      } catch (e) { console.error("Announcements fetch:", e); }
+      finally { if (!cancelled) setAnnouncementsLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
   if (authLoading) {
     return (
       <>
@@ -1550,11 +2094,20 @@ export default function AdminDashboard() {
     router.push("/");
   };
 
-  const tabs: { id: Tab; label: string; icon: React.FC }[] = [
+  // Only count conversations actually awaiting a reply, not every open
+  // one — a thread the admin already answered but the user hasn't
+  // replied to yet shouldn't nag the sidebar badge.
+  const awaitingReplyCount = conversations.filter(
+    (c) => c.status === "OPEN" && c.messages[c.messages.length - 1]?.sender === "USER"
+  ).length;
+
+  const tabs: { id: Tab; label: string; icon: React.FC; badge?: number }[] = [
     { id: "overview", label: "Dashboard", icon: Icons.dashboard },
     { id: "picks", label: "Picks", icon: Icons.picks },
     { id: "users", label: "Utilisateurs", icon: Icons.users },
     { id: "revenue", label: "Revenus", icon: Icons.revenue },
+    { id: "messages", label: "Messages", icon: Icons.messages, badge: awaitingReplyCount || undefined },
+    { id: "announcements", label: "Annonces", icon: Icons.announcements },
     { id: "settings", label: "Paramètres", icon: Icons.settings },
   ];
 
@@ -1564,6 +2117,11 @@ export default function AdminDashboard() {
         <button key={t.id} onClick={() => { setTab(t.id); setSidebarOpen(false); }}
           style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 12px", borderRadius: 8, border: "none", cursor: "pointer", background: tab === t.id ? "rgba(201,168,76,0.1)" : "transparent", color: tab === t.id ? C.gold : C.muted, fontSize: 13, fontWeight: tab === t.id ? 600 : 400, fontFamily: "inherit", marginBottom: 2, textAlign: "left", borderLeft: tab === t.id ? `2px solid ${C.gold}` : "2px solid transparent", transition: "all 0.15s" }}>
           <t.icon />{t.label}
+          {!!t.badge && (
+            <span style={{ marginLeft: "auto", background: C.gold, color: C.dark, fontSize: 10, fontWeight: 700, borderRadius: 10, padding: "1px 7px", lineHeight: "16px" }}>
+              {t.badge}
+            </span>
+          )}
         </button>
       ))}
     </>
@@ -1680,6 +2238,8 @@ export default function AdminDashboard() {
                 {tab === "picks" && <PicksTab picks={picks} setPicks={setPicks} />}
                 {tab === "users" && <UsersTab users={users} usersLoading={usersLoading} picks={picks} />}
                 {tab === "revenue" && <RevenueTab picks={picks} users={users} />}
+                {tab === "messages" && <MessagesTab conversations={conversations} setConversations={setConversations} loading={conversationsLoading} />}
+                {tab === "announcements" && <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} loading={announcementsLoading} />}
                 {tab === "settings" && <SettingsTab />}
               </>
             )}

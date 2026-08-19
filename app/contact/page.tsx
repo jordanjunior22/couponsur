@@ -1,19 +1,20 @@
 import Link from "next/link";
+
 export default function ContactPage() {
     return (
         <main className="max-w-2xl mx-auto px-4 py-10 text-sm">
             <h1 className="text-2xl font-bold mb-6">Nous contacter</h1>
 
-            <p>Pour toute question ou assistance :</p>
-
-            <ul className="mt-4 space-y-2">
-                <li>WhatsApp : +237 XXX XXX XXX</li>
-                <li>Email : support@votresite.com</li>
-            </ul>
+            <p>
+                Une question ou un problème ? Cliquez sur la bulle de discussion en
+                bas à droite de l’écran pour nous écrire directement — un membre de
+                notre équipe vous répond, en personne.
+            </p>
 
             <p className="mt-4">
                 Nous répondons généralement sous 24h.
             </p>
+
             {/* ─── Back Home Button ───────────────────────── */}
             <div className="mt-8">
                 <Link

@@ -61,7 +61,7 @@ export function Footer() {
             <div style={colHeadStyle}>À propos</div>
             <div style={linkColStyle}>
               <FooterLink href="/about">Qui sommes-nous</FooterLink>
-              {/* <FooterLink href="/contact">Nous contacter</FooterLink> */}
+              <FooterLink href="/contact">Nous contacter</FooterLink>
               {/* <FooterLink href="/faq">FAQ</FooterLink> */}
             </div>
           </div>
@@ -111,7 +111,7 @@ export function Footer() {
           <div style={{ display: "flex", gap: 16 }}>
             <FooterLink href="/privacy-policy" small>Confidentialité</FooterLink>
             <FooterLink href="/terms" small>CGU</FooterLink>
-            {/* <FooterLink href="/contact" small>Contact</FooterLink> */}
+            <FooterLink href="/contact" small>Contact</FooterLink>
           </div>
         </div>
 

@@ -5,6 +5,8 @@ import { AuthProvider } from "@/context/AuthContext";
 import { LoadWrapper } from "@/components/LoadWrapper";
 import Script from "next/script";
 import PWAInstallButton from "@/components/PWAInstallButton";
+import ChatWidget from "@/components/ChatWidget";
+import AnnouncementBanner from "@/components/AnnouncementBanner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -69,8 +71,10 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <AuthProvider>
           <LoadWrapper>
+            <AnnouncementBanner />
             {children}
             <PWAInstallButton />
+            <ChatWidget />
           </LoadWrapper>
         </AuthProvider>
       </body>
