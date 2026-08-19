@@ -195,8 +195,20 @@ function Hero({ picks }: { picks: Pick[] }) {
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "clamp(28px, 7vw, 40px)", color: "#E8EAF0", letterSpacing: 2, marginBottom: 8 }}>
         Pronostics Football Premium
       </div>
-      <div style={{ fontSize: 13, color: "#7A8399", marginBottom: 20, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 13, color: "#7A8399", marginBottom: 12, lineHeight: 1.6 }}>
         Sélections quotidiennes à partir de 200 FCFA — Safe, Value et Bold pour chaque profil.
+      </div>
+      <div style={{
+        display: "inline-flex", alignItems: "flex-start", gap: 8, textAlign: "left",
+        background: "rgba(201,168,76,0.04)", border: "1px solid rgba(201,168,76,0.12)",
+        borderRadius: 8, padding: "10px 14px", marginBottom: 20, maxWidth: 480,
+      }}>
+        <span style={{ fontSize: 13, flexShrink: 0, marginTop: 1 }}>⚠️</span>
+        <p style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.6, margin: 0 }}>
+          Pariez à vos propres risques : nos pronostics sont fournis à titre indicatif
+          et ne garantissent aucun résultat. Ne misez que ce que vous pouvez vous
+          permettre de perdre — nous déclinons toute responsabilité quant à vos pertes.
+        </p>
       </div>
       {(winRate !== null || todayCount > 0) && (
         <div style={{ display: "flex", justifyContent: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
