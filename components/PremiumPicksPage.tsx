@@ -14,6 +14,7 @@ export interface Match {
   league?: string;
   confidence?: number;
   sources?: string[];
+  kickoff?: string | null;
   outcome: "PENDING" | "WIN" | "LOSS";
 }
 
@@ -798,6 +799,7 @@ function LockedPredictions({ pick, onUnlock }: { pick: Pick; onUnlock: () => voi
         <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 0", borderBottom: "1px solid #2A3140", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E8EAF0", lineHeight: 1.4 }}>
             {m.home} vs {m.away}
+            {m.kickoff && <span style={{ color: "#7A8399", fontSize: 12 }}> · {m.kickoff}</span>}
             <span style={{ color: "#7A8399" }}> | </span>
             <span style={{ display: "inline-block", filter: "blur(4px)", userSelect: "none", color: "#C9A84C", fontWeight: 700 }}>{m.tip}</span>
           </div>
@@ -827,6 +829,7 @@ function PredictionRow({ match }: { match: Match }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#E8EAF0", lineHeight: 1.4 }}>
           {match.home} vs {match.away}
+          {match.kickoff && <span style={{ color: "#7A8399", fontSize: 12 }}> · {match.kickoff}</span>}
           <span style={{ color: "#7A8399" }}> | </span>
           <span style={{ color: "#C9A84C", fontWeight: 700 }}>{match.tip}</span>
           {match.odd != null && (

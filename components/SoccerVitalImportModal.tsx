@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
+import DecimalInput from "./DecimalInput";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface ScrapedMatch {
@@ -20,6 +21,7 @@ interface CreatedMatch {
     away: string;
     tip: string;
     odd: number;
+    kickoff?: string | null;
     league?: string;
     outcome: "PENDING" | "WIN" | "LOSS";
 }
@@ -39,6 +41,10 @@ interface CreatedPick {
 interface Props {
     onClose: () => void;
     onPickCreated: (pick: CreatedPick) => void;
+    /** Admin-manageable tip/market options. Falls back to the historical
+     *  hardcoded list below if omitted, so this component keeps working
+     *  standalone. */
+    tipOptions?: string[];
 }
 
 // ─── Colors ───────────────────────────────────────────────────────────────────
@@ -94,7 +100,7 @@ function Steps({ current }: { current: 1 | 2 }) {
 }
 
 // ─── Main Modal ───────────────────────────────────────────────────────────────
-export default function SoccerVitalImportModal({ onClose, onPickCreated }: Props) {
+export default function SoccerVitalImportModal({ onClose, onPickCreated, tipOptions }: Props) {
     // ── State: scraping ────────────────────────────────────────────────────────
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -270,6 +276,7 @@ export default function SoccerVitalImportModal({ onClose, onPickCreated }: Props
                     away: m.away,
                     tip,
                     odd: oddForTip(m, tip),
+                    kickoff: m.time || null,
                     league: m.league,
                     outcome: "PENDING",
                     date: matchDate,
@@ -309,7 +316,8 @@ export default function SoccerVitalImportModal({ onClose, onPickCreated }: Props
     };
 
     const scrapedLeagues = Object.keys(byLeague).sort();
-    const ALL_TIPS = ["1", "X", "2", "1X", "X2", "12", "BTTS", "O 2.5", "U 2.5", "O 1.5", "U 1.5", "DNB"];
+    const FALLBACK_TIPS = ["1", "X", "2", "1X", "X2", "12", "BTTS", "O 2.5", "U 2.5", "O 1.5", "U 1.5", "DNB"];
+    const ALL_TIPS = tipOptions && tipOptions.length > 0 ? tipOptions : FALLBACK_TIPS;
 
     // ─── Render ────────────────────────────────────────────────────────────────
     return (
@@ -636,7 +644,7 @@ export default function SoccerVitalImportModal({ onClose, onPickCreated }: Props
                                 </div>
                                 <div>
                                     <label style={lStyle}>Cotes Totales (auto-calculées)</label>
-                                    <input type="number" style={iStyle} value={totalOdds} min={1} step={0.01} onChange={(e) => setTotalOdds(Number(e.target.value))} />
+                                    <DecimalInput style={iStyle} value={totalOdds} onChange={setTotalOdds} />
                                 </div>
                             </div>
 

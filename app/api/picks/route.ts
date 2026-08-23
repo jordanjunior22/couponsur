@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
             league,
             matches,
             is_published,
+            is_estimated_odds,
         } = body;
 
         if (!title || !price || !total_odds || !match_date || !league || !matches) {
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
             league,
             matches,
             is_published: is_published ?? false,
+            is_estimated_odds: is_estimated_odds ?? false,
         });
 
         return NextResponse.json(

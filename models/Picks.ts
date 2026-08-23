@@ -28,6 +28,11 @@ export interface IMatch {
    *  grade-picks to disambiguate re-matches (same two teams playing
    *  again later) instead of matching on team names alone. */
   date?: Date | null;
+  /** Kickoff time of this leg, "HH:mm" 24h local time (e.g. "20:00").
+   *  Optional/nullable so existing picks created before this field
+   *  existed keep working unchanged. Kept separate from `date` (which
+   *  grading logic relies on) to avoid touching that behavior. */
+  kickoff?: string | null;
 }
 // ─── Pick Interface ──────────────────────────────────────
 export interface IPick extends Document {
@@ -68,6 +73,7 @@ const MatchSchema = new Schema<IMatch>(
     confidence: { type: Number, default: null },
     sources:    { type: [String], default: undefined },
     date:       { type: Date, default: null },
+    kickoff:    { type: String, default: null },
   },
   { _id: false }
 );

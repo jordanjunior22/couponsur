@@ -35,22 +35,54 @@ export async function PUT(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { subscriptionMonthlyPrice } = body;
+    const { subscriptionMonthlyPrice, tipOptions } = body;
 
-    if (
-      subscriptionMonthlyPrice === undefined ||
-      typeof subscriptionMonthlyPrice !== "number" ||
-      subscriptionMonthlyPrice <= 0
-    ) {
+    const update: Record<string, unknown> = {};
+
+    if (subscriptionMonthlyPrice !== undefined) {
+      if (typeof subscriptionMonthlyPrice !== "number" || subscriptionMonthlyPrice <= 0) {
+        return NextResponse.json(
+          { success: false, message: "subscriptionMonthlyPrice must be a positive number" },
+          { status: 400 }
+        );
+      }
+      update.subscriptionMonthlyPrice = subscriptionMonthlyPrice;
+    }
+
+    if (tipOptions !== undefined) {
+      if (
+        !Array.isArray(tipOptions) ||
+        tipOptions.length === 0 ||
+        !tipOptions.every((t) => typeof t === "string" && t.trim().length > 0)
+      ) {
+        return NextResponse.json(
+          { success: false, message: "tipOptions must be a non-empty array of non-empty strings" },
+          { status: 400 }
+        );
+      }
+      // Trim + dedupe (case-sensitive — "O 2.5" and "o 2.5" are kept distinct
+      // on purpose, admins can manage capitalization themselves) while
+      // preserving the order the admin arranged them in.
+      const seen = new Set<string>();
+      update.tipOptions = tipOptions
+        .map((t: string) => t.trim())
+        .filter((t) => {
+          if (seen.has(t)) return false;
+          seen.add(t);
+          return true;
+        });
+    }
+
+    if (Object.keys(update).length === 0) {
       return NextResponse.json(
-        { success: false, message: "subscriptionMonthlyPrice must be a positive number" },
+        { success: false, message: "Nothing to update" },
         { status: 400 }
       );
     }
 
     const updated = await SettingsModel.findOneAndUpdate(
       { key: "global" },
-      { $set: { subscriptionMonthlyPrice } },
+      { $set: update },
       { new: true, upsert: true }
     );
 

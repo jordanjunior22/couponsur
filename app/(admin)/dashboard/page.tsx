@@ -4,6 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import SoccerVitalImportModal from "@/components/SoccerVitalImportModal";
+import DecimalInput from "@/components/DecimalInput";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 interface Match {
@@ -14,6 +15,7 @@ interface Match {
   odd: number;
   league?: string;
   date?: string;
+  kickoff?: string;
   outcome: "PENDING" | "WIN" | "LOSS";
 }
 
@@ -75,6 +77,11 @@ const LEAGUES = [
   "Premier League", "Ligue 1", "La Liga", "Serie A",
   "Bundesliga", "UCL", "MLS", "Eredivisie", "Mix"
 ];
+
+// Fallback used before /api/admin/settings responds (or if it ever fails) —
+// mirrors the admin-managed tipOptions default in models/Settings.ts so the
+// picker never comes up empty.
+const DEFAULT_TIPS = ["1", "X", "2", "1X", "X2", "12", "BTTS", "O 2.5", "U 2.5", "O 1.5", "U 1.5", "DNB"];
 
 // ─── Icons ─────────────────────────────────────────────────────────────────────
 const Icons = {
@@ -368,7 +375,7 @@ function OutcomeBarChart({ wins, losses, pending }: { wins: number; losses: numb
   );
 }
 
-function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (p: Pick) => void; onClose: () => void }) {
+function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | null; onSave: (p: Pick) => void; onClose: () => void; tipOptions: string[] }) {
   const isNew = !pick;
   const defaultForm = (): Pick => ({
     _id: genId(), title: "", price: 2000, total_odds: 2.0,
@@ -381,11 +388,11 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
     setForm(pick ? hydrateMatchIds(pick) : defaultForm());
   }, [pick]);
   const [saving, setSaving] = useState(false);
-  const [newMatch, setNewMatch] = useState({ home: "", away: "", tip: "1", odd: 1.8 });
+  const [newMatch, setNewMatch] = useState({ home: "", away: "", tip: "1", odd: 1.8, kickoff: "" });
 
   const set = (key: keyof Pick, val: unknown) => setForm((f) => ({ ...f, [key]: val }));
 
-  const TIPS = ["1", "X", "2", "1X", "X2", "12", "BTTS", "O 2.5", "U 2.5", "DNB"];
+  const TIPS = tipOptions.length > 0 ? tipOptions : DEFAULT_TIPS;
 
   const addMatch = () => {
     if (!newMatch.home.trim() || !newMatch.away.trim()) return;
@@ -397,12 +404,28 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
         away: newMatch.away.trim(),
         tip: newMatch.tip,
         odd: newMatch.odd,
+        kickoff: newMatch.kickoff || undefined,
         outcome: "PENDING",
         date: f.match_date,
       }],
     }));
-    setNewMatch({ home: "", away: "", tip: "1", odd: 1.8 });
+    setNewMatch({ home: "", away: "", tip: "1", odd: 1.8, kickoff: "" });
   };
+
+  // Auto-calculate total odds as the product of every selection's odd,
+  // whenever the selections change (add/remove/edit) — mirrors the
+  // auto-recalc already used in SoccerVitalImportModal. Skipped on the
+  // very first render so simply opening an existing pick for editing
+  // doesn't silently overwrite a total_odds the admin set on purpose
+  // (e.g. a boosted combined price).
+  const skipAutoCalc = useRef(true);
+  useEffect(() => {
+    if (skipAutoCalc.current) { skipAutoCalc.current = false; return; }
+    if (form.matches.length === 0) return;
+    const product = form.matches.reduce((acc, m) => acc * (Number(m.odd) > 0 ? Number(m.odd) : 1), 1);
+    set("total_odds", Math.round(product * 100) / 100);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.matches]);
   const handleSave = async () => {
     if (!form.title.trim()) return;
     setSaving(true);
@@ -481,8 +504,8 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
               <input type="number" style={iStyle} value={form.price} onChange={(e) => set("price", Number(e.target.value))} />
             </div>
             <div>
-              <label style={lStyle}>Cotes totales</label>
-              <input type="number" step="0.1" style={iStyle} value={form.total_odds} onChange={(e) => set("total_odds", Number(e.target.value))} />
+              <label style={lStyle}>Cotes totales <span style={{ color: C.muted, textTransform: "none", fontWeight: 400, letterSpacing: 0 }}>(auto)</span></label>
+              <DecimalInput style={iStyle} value={form.total_odds} onChange={(n) => set("total_odds", n)} />
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -506,7 +529,7 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
           <div>
             <label style={lStyle}>Sélections ({form.matches.length})</label>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto auto", gap: 6, marginBottom: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto auto auto", gap: 6, marginBottom: 8 }}>
               <input style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.home}
                 onChange={(e) => setNewMatch((m) => ({ ...m, home: e.target.value }))} placeholder="Domicile" />
               <input style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.away}
@@ -516,8 +539,10 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
                 onChange={(e) => setNewMatch((m) => ({ ...m, tip: e.target.value }))}>
                 {TIPS.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
-              <input type="number" step="0.01" style={{ ...iStyle, fontSize: 12, padding: "8px 10px", width: 70 }} value={newMatch.odd}
-                onChange={(e) => setNewMatch((m) => ({ ...m, odd: Number(e.target.value) }))} placeholder="Cote" />
+              <DecimalInput style={{ ...iStyle, fontSize: 12, padding: "8px 10px", width: 70 }} value={newMatch.odd}
+                onChange={(n) => setNewMatch((m) => ({ ...m, odd: n }))} placeholder="Cote" />
+              <input type="time" style={{ ...iStyle, fontSize: 12, padding: "8px 10px", width: 100 }} value={newMatch.kickoff}
+                onChange={(e) => setNewMatch((m) => ({ ...m, kickoff: e.target.value }))} title="Heure du coup d'envoi (optionnel)" />
               <button onClick={addMatch} style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center" }}>
                 <Icons.plus />
               </button>
@@ -531,13 +556,30 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
                   matches: f.matches.map((mx, mxIdx) => mxIdx === idx ? { ...mx, outcome: next } : mx),
                 }));
               };
+              const updateMatch = (patch: Partial<Match>) => setForm((f) => ({
+                ...f,
+                matches: f.matches.map((mx, mxIdx) => mxIdx === idx ? { ...mx, ...patch } : mx),
+              }));
               const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : C.faint;
               const tickLabel = m.outcome === "WIN" ? "✓" : m.outcome === "LOSS" ? "✗" : "·";
               return (
                 <div key={m._id ?? idx} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
-                  <div style={{ flex: 1, fontSize: 12, color: C.text }}>
-                    {m.home} vs {m.away} — <span style={{ color: C.gold, fontWeight: 700 }}>{m.tip}</span>
-                    <span style={{ color: C.muted }}> @ {m.odd}</span>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: C.text }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 4 }}>
+                      {m.home} vs {m.away}
+                      {m.kickoff && <span style={{ color: C.muted }}> · {m.kickoff}</span>}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <select style={{ ...iStyle, fontSize: 11, padding: "4px 6px", cursor: "pointer", width: "auto" }} value={m.tip}
+                        onChange={(e) => updateMatch({ tip: e.target.value })}>
+                        {TIPS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <span style={{ color: C.muted }}>@</span>
+                      <DecimalInput style={{ ...iStyle, fontSize: 11, padding: "4px 6px", width: 56 }} value={m.odd}
+                        onChange={(n) => updateMatch({ odd: n })} />
+                      <input type="time" style={{ ...iStyle, fontSize: 11, padding: "4px 6px", width: 84 }} value={m.kickoff ?? ""}
+                        onChange={(e) => updateMatch({ kickoff: e.target.value || undefined })} title="Heure du coup d'envoi (optionnel)" />
+                    </div>
                   </div>
                   <button
                     onClick={toggleOutcome}
@@ -552,7 +594,7 @@ function PickFormModal({ pick, onSave, onClose }: { pick: Pick | null; onSave: (
                   >
                     {tickLabel}
                   </button>
-                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((_, mxIdx) => mxIdx !== idx) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2 }}>
+                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((_, mxIdx) => mxIdx !== idx) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2, flexShrink: 0 }}>
                     <Icons.close />
                   </button>
                 </div>
@@ -670,6 +712,22 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
   const [editPick, setEditPick] = useState<Pick | null>(null);
   const [search, setSearch] = useState("");
   const [filterOutcome, setFilterOutcome] = useState("ALL");
+  // Admin-manageable tip/market options (1, X, 2, 1X, …) — see Paramètres
+  // › Gestion des pronostics. Falls back to DEFAULT_TIPS until this loads.
+  const [tipOptions, setTipOptions] = useState<string[]>(DEFAULT_TIPS);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data?.data?.tipOptions) && data.data.tipOptions.length > 0) {
+          setTipOptions(data.data.tipOptions);
+        }
+      } catch (e) { console.error("Tip options fetch:", e); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const [filterLeague, setFilterLeague] = useState("ALL");
   const [showImport, setShowImport] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -946,10 +1004,11 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
       </div>
 
       {(showForm || editPick) && (
-        <PickFormModal pick={editPick} onSave={handleSave} onClose={() => { setShowForm(false); setEditPick(null); }} />
+        <PickFormModal pick={editPick} onSave={handleSave} onClose={() => { setShowForm(false); setEditPick(null); }} tipOptions={tipOptions} />
       )}
       {showImport && (
         <SoccerVitalImportModal
+          tipOptions={tipOptions}
           onClose={() => setShowImport(false)}
           onPickCreated={(pick) => {
             const normalized = {
@@ -1371,6 +1430,12 @@ function SettingsTab() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
+  // ── Tips manager (admin-editable list of selectable tip/market labels) ──
+  const [tipOptions, setTipOptions] = useState<string[]>(DEFAULT_TIPS);
+  const [newTip, setNewTip] = useState("");
+  const [tipSaving, setTipSaving] = useState(false);
+  const [tipSaveMsg, setTipSaveMsg] = useState<string | null>(null);
+
   useEffect(() => {
     (async () => {
       try {
@@ -1379,6 +1444,9 @@ function SettingsTab() {
         if (data?.success) {
           setPrice(data.data.subscriptionMonthlyPrice);
           setInputValue(String(data.data.subscriptionMonthlyPrice));
+          if (Array.isArray(data.data.tipOptions) && data.data.tipOptions.length > 0) {
+            setTipOptions(data.data.tipOptions);
+          }
         }
       } catch (e) {
         console.error("Settings fetch:", e);
@@ -1415,6 +1483,43 @@ function SettingsTab() {
     }
   };
 
+  const saveTipOptions = async (next: string[]) => {
+    setTipSaving(true);
+    setTipSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipOptions: next }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setTipOptions(data.data.tipOptions);
+        setTipSaveMsg("Enregistré avec succès.");
+      } else {
+        setTipSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setTipSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setTipSaving(false);
+      setTimeout(() => setTipSaveMsg(null), 3000);
+    }
+  };
+
+  const addTip = () => {
+    const t = newTip.trim();
+    if (!t || tipOptions.includes(t)) return;
+    saveTipOptions([...tipOptions, t]);
+    setNewTip("");
+  };
+
+  const removeTip = (t: string) => {
+    if (tipOptions.length <= 1) return; // keep at least one option selectable
+    saveTipOptions(tipOptions.filter((x) => x !== t));
+  };
+
   const iStyle: React.CSSProperties = {
     background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
     color: C.text, fontSize: 14, padding: "10px 12px", width: "100%",
@@ -1426,7 +1531,7 @@ function SettingsTab() {
   }
 
   return (
-    <div style={{ maxWidth: 480 }}>
+    <div style={{ maxWidth: 480, display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
           Abonnement
@@ -1476,6 +1581,75 @@ function SettingsTab() {
             color: saveMsg.includes("succès") ? C.green : C.red,
           }}>
             {saveMsg}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+          Pronostics
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+          Gestion des pronostics
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+          Options proposées (1, X, 2, 1X…) lors de l'ajout d'une sélection à un pick. Les picks déjà créés ne sont pas affectés.
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+          {tipOptions.map((t) => (
+            <span key={t} style={{
+              display: "flex", alignItems: "center", gap: 6,
+              background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6,
+              padding: "5px 6px 5px 10px", fontSize: 12, color: C.text, fontWeight: 600,
+            }}>
+              {t}
+              <button
+                onClick={() => removeTip(t)}
+                disabled={tipSaving || tipOptions.length <= 1}
+                title={tipOptions.length <= 1 ? "Au moins une option est requise" : "Retirer"}
+                style={{ background: "none", border: "none", cursor: tipOptions.length <= 1 ? "not-allowed" : "pointer", color: C.muted, padding: 0, display: "flex", opacity: tipOptions.length <= 1 ? 0.4 : 1 }}
+              >
+                <Icons.close />
+              </button>
+            </span>
+          ))}
+        </div>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+          Ajouter une option
+        </label>
+        <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+          <input
+            style={iStyle}
+            value={newTip}
+            onChange={(e) => setNewTip(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addTip()}
+            placeholder="Ex: BTTS, O 3.5, HT 1…"
+          />
+          <button
+            onClick={addTip}
+            disabled={tipSaving || !newTip.trim() || tipOptions.includes(newTip.trim())}
+            style={{
+              background: tipSaving ? C.goldDark : C.gold, border: "none", color: C.dark,
+              borderRadius: 8, padding: "0 20px", fontSize: 12, fontWeight: 700,
+              cursor: (tipSaving || !newTip.trim()) ? "not-allowed" : "pointer",
+              fontFamily: "inherit", letterSpacing: "0.5px", whiteSpace: "nowrap",
+              opacity: (tipSaving || !newTip.trim() || tipOptions.includes(newTip.trim())) ? 0.5 : 1,
+            }}
+          >
+            {tipSaving ? "…" : "Ajouter"}
+          </button>
+        </div>
+
+        {tipSaveMsg && (
+          <div style={{
+            fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 4,
+            background: tipSaveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${tipSaveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+            color: tipSaveMsg.includes("succès") ? C.green : C.red,
+          }}>
+            {tipSaveMsg}
           </div>
         )}
       </div>
