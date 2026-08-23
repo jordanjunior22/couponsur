@@ -463,9 +463,30 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
+    <div className="pf-overlay" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 540, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
+      <style>{`
+        .pf-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .pf-add-row { display: grid; grid-template-columns: 1.4fr 1.4fr 0.9fr 0.8fr 1fr auto; gap: 6px; margin-bottom: 8px; }
+        .pf-match-row { display: flex; align-items: center; gap: 8px; background: ${C.dark4}; border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; border: 1px solid ${C.border}; }
+        .pf-match-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+        .pf-match-controls select { width: auto; min-width: 60px; }
+        .pf-match-controls .pf-odd-input { width: 60px; }
+        .pf-match-controls input[type=time] { width: 88px; }
+        .pf-icon-btn { width: 30px; height: 30px; }
+
+        @media (max-width: 560px) {
+          .pf-overlay { padding: 0 !important; align-items: flex-end !important; }
+          .pf-modal { max-width: 100% !important; width: 100% !important; max-height: 94vh !important; border-radius: 16px 16px 0 0 !important; padding: 16px !important; }
+          .pf-grid-2 { grid-template-columns: 1fr; gap: 10px; }
+          .pf-add-row { grid-template-columns: 1fr 1fr; }
+          .pf-add-row > input, .pf-add-row > select, .pf-add-row > .pf-decimal { width: 100% !important; }
+          .pf-add-btn { grid-column: span 2; width: 100%; justify-content: center !important; padding: 12px !important; }
+          .pf-match-controls select, .pf-match-controls .pf-odd-input, .pf-match-controls input[type=time] { flex: 1 1 80px; width: auto; }
+          .pf-icon-btn { width: 36px !important; height: 36px !important; }
+        }
+      `}</style>
+      <div className="pf-modal" style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 540, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
           <div>
@@ -476,7 +497,7 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
               {isNew ? "Créer un Pick" : form.title || "Sans titre"}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted }}>
+          <button onClick={onClose} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted, flexShrink: 0 }}>
             <Icons.close />
           </button>
         </div>
@@ -486,7 +507,7 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
             <label style={lStyle}>Titre</label>
             <input style={iStyle} value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="Ex: PL Banker of the Week" />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className="pf-grid-2">
             <div>
               <label style={lStyle}>Ligue</label>
               <select style={{ ...iStyle, cursor: "pointer" }} value={form.league} onChange={(e) => set("league", e.target.value)}>
@@ -498,7 +519,7 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
               <input type="date" style={iStyle} value={form.match_date} onChange={(e) => set("match_date", e.target.value)} />
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className="pf-grid-2">
             <div>
               <label style={lStyle}>Prix (FCFA)</label>
               <input type="number" style={iStyle} value={form.price} onChange={(e) => set("price", Number(e.target.value))} />
@@ -508,7 +529,7 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
               <DecimalInput style={iStyle} value={form.total_odds} onChange={(n) => set("total_odds", n)} />
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className="pf-grid-2">
             <div>
               <label style={lStyle}>Résultat</label>
               <select style={{ ...iStyle, cursor: "pointer" }} value={form.outcome} onChange={(e) => set("outcome", e.target.value as Pick["outcome"])}>
@@ -529,21 +550,21 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
           <div>
             <label style={lStyle}>Sélections ({form.matches.length})</label>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto auto auto", gap: 6, marginBottom: 8 }}>
+            <div className="pf-add-row">
               <input style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.home}
                 onChange={(e) => setNewMatch((m) => ({ ...m, home: e.target.value }))} placeholder="Domicile" />
               <input style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.away}
                 onChange={(e) => setNewMatch((m) => ({ ...m, away: e.target.value }))} placeholder="Extérieur"
                 onKeyDown={(e) => e.key === "Enter" && addMatch()} />
-              <select style={{ ...iStyle, fontSize: 12, padding: "8px 10px", cursor: "pointer", width: "auto" }} value={newMatch.tip}
+              <select style={{ ...iStyle, fontSize: 12, padding: "8px 10px", cursor: "pointer" }} value={newMatch.tip}
                 onChange={(e) => setNewMatch((m) => ({ ...m, tip: e.target.value }))}>
                 {TIPS.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
-              <DecimalInput style={{ ...iStyle, fontSize: 12, padding: "8px 10px", width: 70 }} value={newMatch.odd}
+              <DecimalInput className="pf-decimal" style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.odd}
                 onChange={(n) => setNewMatch((m) => ({ ...m, odd: n }))} placeholder="Cote" />
-              <input type="time" style={{ ...iStyle, fontSize: 12, padding: "8px 10px", width: 100 }} value={newMatch.kickoff}
+              <input type="time" style={{ ...iStyle, fontSize: 12, padding: "8px 10px" }} value={newMatch.kickoff}
                 onChange={(e) => setNewMatch((m) => ({ ...m, kickoff: e.target.value }))} title="Heure du coup d'envoi (optionnel)" />
-              <button onClick={addMatch} style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center" }}>
+              <button className="pf-add-btn" onClick={addMatch} style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center" }}>
                 <Icons.plus />
               </button>
             </div>
@@ -563,29 +584,30 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
               const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : C.faint;
               const tickLabel = m.outcome === "WIN" ? "✓" : m.outcome === "LOSS" ? "✗" : "·";
               return (
-                <div key={m._id ?? idx} style={{ display: "flex", alignItems: "center", gap: 8, background: C.dark4, borderRadius: 8, padding: "8px 12px", marginBottom: 6, border: `1px solid ${C.border}` }}>
+                <div key={m._id ?? idx} className="pf-match-row">
                   <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: C.text }}>
-                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 4 }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {m.home} vs {m.away}
                       {m.kickoff && <span style={{ color: C.muted }}> · {m.kickoff}</span>}
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <select style={{ ...iStyle, fontSize: 11, padding: "4px 6px", cursor: "pointer", width: "auto" }} value={m.tip}
+                    <div className="pf-match-controls">
+                      <select style={{ ...iStyle, fontSize: 11, padding: "5px 6px", cursor: "pointer" }} value={m.tip}
                         onChange={(e) => updateMatch({ tip: e.target.value })}>
                         {TIPS.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                       <span style={{ color: C.muted }}>@</span>
-                      <DecimalInput style={{ ...iStyle, fontSize: 11, padding: "4px 6px", width: 56 }} value={m.odd}
+                      <DecimalInput className="pf-odd-input" style={{ ...iStyle, fontSize: 11, padding: "5px 6px" }} value={m.odd}
                         onChange={(n) => updateMatch({ odd: n })} />
-                      <input type="time" style={{ ...iStyle, fontSize: 11, padding: "4px 6px", width: 84 }} value={m.kickoff ?? ""}
+                      <input type="time" style={{ ...iStyle, fontSize: 11, padding: "5px 6px" }} value={m.kickoff ?? ""}
                         onChange={(e) => updateMatch({ kickoff: e.target.value || undefined })} title="Heure du coup d'envoi (optionnel)" />
                     </div>
                   </div>
                   <button
                     onClick={toggleOutcome}
                     title={`Résultat: ${m.outcome} — cliquer pour changer`}
+                    className="pf-icon-btn"
                     style={{
-                      width: 26, height: 26, borderRadius: 6, border: `1.5px solid ${tickColor}`,
+                      borderRadius: 6, border: `1.5px solid ${tickColor}`,
                       background: m.outcome === "PENDING" ? "transparent" : `${tickColor}22`,
                       color: tickColor, fontSize: 14, fontWeight: 700, cursor: "pointer",
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
@@ -594,7 +616,7 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
                   >
                     {tickLabel}
                   </button>
-                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((_, mxIdx) => mxIdx !== idx) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, padding: 2, flexShrink: 0 }}>
+                  <button onClick={() => setForm((f) => ({ ...f, matches: f.matches.filter((_, mxIdx) => mxIdx !== idx) }))} className="pf-icon-btn" style={{ background: "none", border: "none", cursor: "pointer", color: C.red, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                     <Icons.close />
                   </button>
                 </div>
