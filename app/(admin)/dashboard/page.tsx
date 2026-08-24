@@ -642,12 +642,41 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
 }
 
 // ─── User Detail Modal ──────────────────────────────────────────────────────────
-function UserDetailModal({ user, picks, subPrice, onClose }: { user: ApiUser; picks: Pick[]; subPrice: number | null; onClose: () => void }) {
+function UserDetailModal({ user, picks, subPrice, onClose, onActivated }: { user: ApiUser; picks: Pick[]; subPrice: number | null; onClose: () => void; onActivated: (updated: ApiUser) => void }) {
   const unlockedPicks = picks.filter((p) => user.unlockedPickIds.includes(p._id));
   const pickRevenue = unlockedPicks.reduce((sum, p) => sum + p.price, 0);
   const isActiveSubscriber = user.subscription?.status === "ACTIVE" && user.subscription.expiresAt && new Date(user.subscription.expiresAt) > new Date();
   const subRevenue = isActiveSubscriber && subPrice != null ? subPrice : 0;
   const revenue = pickRevenue + subRevenue;
+
+  const [activating, setActivating] = useState(false);
+  const [activateMsg, setActivateMsg] = useState<string | null>(null);
+
+  const handleActivate = async () => {
+    if (!confirm(`Activer manuellement l'abonnement de ${user.phone} pour 30 jours ?\n\nÀ utiliser seulement si ce client a réellement payé mais n'a pas été débloqué (privilégiez d'abord "Réconcilier les paiements" dans l'onglet Revenus s'il existe un paiement correspondant).`)) return;
+    setActivating(true);
+    setActivateMsg(null);
+    try {
+      const res = await fetch(`/api/admin/users/${user._id}/activate-subscription`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 30 }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        onActivated(data.data);
+        setActivateMsg("Abonnement activé avec succès.");
+      } else {
+        setActivateMsg(data.message || "Échec de l'activation.");
+      }
+    } catch {
+      setActivateMsg("Erreur réseau lors de l'activation.");
+    } finally {
+      setActivating(false);
+      setTimeout(() => setActivateMsg(null), 4000);
+    }
+  };
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
@@ -686,6 +715,29 @@ function UserDetailModal({ user, picks, subPrice, onClose }: { user: ApiUser; pi
         {subRevenue > 0 && (
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 16 }}>
             Répartition: <span style={{ color: C.gold }}>{formatCFA(pickRevenue)}</span> picks · <span style={{ color: C.gold }}>{formatCFA(subRevenue)}</span> abonnement
+          </div>
+        )}
+
+        {user.role !== "ADMIN" && (
+          <div style={{ marginBottom: 20 }}>
+            <button
+              onClick={handleActivate}
+              disabled={activating}
+              style={{
+                width: "100%", background: "none", border: `1px solid ${isActiveSubscriber ? C.border : "rgba(201,168,76,0.4)"}`,
+                color: isActiveSubscriber ? C.muted : C.gold, borderRadius: 8, padding: "10px 12px",
+                fontSize: 12, fontWeight: 600, cursor: activating ? "not-allowed" : "pointer",
+                fontFamily: "inherit", opacity: activating ? 0.6 : 1,
+              }}
+              title="Réservé au support : accorde l'abonnement sans paiement correspondant retrouvé"
+            >
+              {activating ? "Activation…" : isActiveSubscriber ? "Prolonger l'abonnement de 30 jours (manuel)" : "Activer l'abonnement manuellement (30 jours)"}
+            </button>
+            {activateMsg && (
+              <div style={{ fontSize: 11, color: activateMsg.includes("succès") ? C.green : C.red, marginTop: 6, textAlign: "center" }}>
+                {activateMsg}
+              </div>
+            )}
           </div>
         )}
 
@@ -1047,7 +1099,7 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
 }
 
 // ─── Users Tab ──────────────────────────────────────────────────────────────────
-function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoading: boolean; picks: Pick[] }) {
+function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; setUsers: React.Dispatch<React.SetStateAction<ApiUser[]>>; usersLoading: boolean; picks: Pick[] }) {
   const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);
   const [search, setSearch] = useState("");
   const [subPrice, setSubPrice] = useState<number | null>(null);
@@ -1170,7 +1222,18 @@ function UsersTab({ users, usersLoading, picks }: { users: ApiUser[]; usersLoadi
         })}
       </div>
 
-      {selectedUser && <UserDetailModal user={selectedUser} picks={picks} subPrice={subPrice} onClose={() => setSelectedUser(null)} />}
+      {selectedUser && (
+        <UserDetailModal
+          user={selectedUser}
+          picks={picks}
+          subPrice={subPrice}
+          onClose={() => setSelectedUser(null)}
+          onActivated={(updated) => {
+            setUsers((prev) => prev.map((x) => (x._id === updated._id ? updated : x)));
+            setSelectedUser(updated);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1182,6 +1245,30 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const [dateFrom, setDateFrom] = useState(thirtyAgo);
   const [dateTo, setDateTo] = useState(today);
   const [subPrice, setSubPrice] = useState<number | null>(null);
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileResult, setReconcileResult] = useState<{
+    checked: number; fulfilled: number; stillPending: number; failedOrExpired: number; errors: number; truncated: boolean;
+  } | null>(null);
+  const [reconcileError, setReconcileError] = useState<string | null>(null);
+
+  const handleReconcile = async () => {
+    setReconciling(true);
+    setReconcileError(null);
+    setReconcileResult(null);
+    try {
+      const res = await fetch("/api/admin/payments/reconcile", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (data?.success) {
+        setReconcileResult(data.data);
+      } else {
+        setReconcileError(data.message || "Échec de la réconciliation.");
+      }
+    } catch {
+      setReconcileError("Erreur réseau lors de la réconciliation.");
+    } finally {
+      setReconciling(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -1288,6 +1375,72 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
 
       <div style={{ fontSize: 11, color: C.muted, marginBottom: 22 }}>
         Répartition: <span style={{ color: C.gold }}>{formatCFA(pickRevenue)}</span> picks · <span style={{ color: C.gold }}>{formatCFA(subscriptionRevenue)}</span> abonnements
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18, marginBottom: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+              Paiements
+            </div>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.text, letterSpacing: 1 }}>
+              Réconcilier les paiements
+            </div>
+          </div>
+          <button
+            onClick={handleReconcile}
+            disabled={reconciling}
+            style={{
+              background: reconciling ? C.goldDark : C.gold, border: "none", color: C.dark,
+              borderRadius: 8, padding: "10px 20px", fontSize: 12, fontWeight: 700,
+              cursor: reconciling ? "not-allowed" : "pointer", fontFamily: "inherit",
+              letterSpacing: "0.5px", whiteSpace: "nowrap",
+            }}
+          >
+            {reconciling ? "Vérification…" : "Réconcilier maintenant"}
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.6, marginBottom: reconcileResult || reconcileError ? 14 : 0 }}>
+          Si un paiement a été confirmé par l&apos;opérateur mais que la notification (webhook) ne nous est jamais parvenue, l&apos;abonnement ou le pick reste bloqué en attente — c&apos;est ce qui peut expliquer un client qui a payé mais n&apos;a pas accès. Ce bouton revérifie chaque paiement encore en attente directement auprès de l&apos;opérateur et active automatiquement ceux qui ont réellement été payés.
+        </div>
+
+        {reconcileError && (
+          <div style={{ fontSize: 12, padding: "10px 12px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.red }}>
+            {reconcileError}
+          </div>
+        )}
+
+        {reconcileResult && (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginBottom: reconcileResult.fulfilled > 0 ? 10 : 0 }}>
+              {[
+                { label: "Vérifiés", val: reconcileResult.checked, color: C.text },
+                { label: "Activés", val: reconcileResult.fulfilled, color: C.green },
+                { label: "Toujours en attente", val: reconcileResult.stillPending, color: C.gold },
+                { label: "Échoués/expirés", val: reconcileResult.failedOrExpired, color: C.red },
+              ].map(({ label, val, color }) => (
+                <div key={label} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 8px", textAlign: "center" }}>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color }}>{val}</div>
+                  <div style={{ fontSize: 9, color: C.muted, letterSpacing: "0.5px", textTransform: "uppercase", marginTop: 2 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+            {reconcileResult.fulfilled > 0 && (
+              <div style={{ fontSize: 12, color: C.green }}>
+                ✅ {reconcileResult.fulfilled} client{reconcileResult.fulfilled > 1 ? "s" : ""} qui avai{reconcileResult.fulfilled > 1 ? "ent" : "t"} payé sans être activé{reconcileResult.fulfilled > 1 ? "s" : ""} vien{reconcileResult.fulfilled > 1 ? "nent" : "t"} d&apos;être débloqué{reconcileResult.fulfilled > 1 ? "s" : ""}.
+              </div>
+            )}
+            {reconcileResult.fulfilled === 0 && reconcileResult.checked > 0 && (
+              <div style={{ fontSize: 12, color: C.muted }}>Aucun paiement bloqué trouvé — tout est déjà à jour.</div>
+            )}
+            {reconcileResult.checked === 0 && (
+              <div style={{ fontSize: 12, color: C.muted }}>Aucun paiement en attente à vérifier.</div>
+            )}
+            {reconcileResult.truncated && (
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Plus de 200 paiements en attente — relancez pour continuer.</div>
+            )}
+          </div>
+        )}
       </div>
 
       <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 16 }}>
@@ -2432,7 +2585,7 @@ export default function AdminDashboard() {
               <>
                 {tab === "overview" && <OverviewTab picks={picks} users={users} />}
                 {tab === "picks" && <PicksTab picks={picks} setPicks={setPicks} />}
-                {tab === "users" && <UsersTab users={users} usersLoading={usersLoading} picks={picks} />}
+                {tab === "users" && <UsersTab users={users} setUsers={setUsers} usersLoading={usersLoading} picks={picks} />}
                 {tab === "revenue" && <RevenueTab picks={picks} users={users} />}
                 {tab === "messages" && <MessagesTab conversations={conversations} setConversations={setConversations} loading={conversationsLoading} />}
                 {tab === "announcements" && <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} loading={announcementsLoading} />}

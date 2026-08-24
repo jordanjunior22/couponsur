@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
 import PaymentModel from "@/models/Payment";
-import Pick from "@/models/Picks";
-import UserModel from "@/models/Users";
-import { paymentStatus, isFapshiError } from "@/utils/fapshi";
-import { sendServerEvent } from "@/lib/metaConversions";
+import { fulfillPaymentByTransId } from "@/lib/paymentFulfillment";
 
 // ── Full Fapshi webhook payload shape (from their docs) ────────────────────
 interface FapshiWebhookBody {
@@ -70,109 +67,20 @@ export async function POST(req: NextRequest) {
   switch (body.status) {
 
     case "SUCCESSFUL": {
-      if (payment.status === "SUCCESSFUL") {
-        console.log(`Webhook: transId=${body.transId} already SUCCESSFUL, skipping`);
-        return NextResponse.json({ received: true });
-      }
+      // Delegates to the same fulfillment logic the client status-poll
+      // endpoint uses — re-verifies against Fapshi itself (never trusts
+      // this webhook body blindly) and is idempotent, so it's harmless if
+      // the poll already fulfilled this transId first.
+      const result = await fulfillPaymentByTransId(body.transId);
 
-      const verified = await paymentStatus(body.transId);
-
-      if (isFapshiError(verified)) {
-        console.error(`Webhook: verification failed for ${body.transId}:`, verified.message);
-        return NextResponse.json({ received: true });
-      }
-
-      if (verified.status !== "SUCCESSFUL") {
-        console.warn(`Webhook: verification returned ${verified.status} for ${body.transId}`);
-        return NextResponse.json({ received: true });
-      }
-
-      if (verified.amount !== payment.amount) {
-        console.error(`Webhook: amount mismatch for ${body.transId} — expected ${payment.amount}, got ${verified.amount}`);
-        await PaymentModel.updateOne({ fapshiTransId: body.transId }, { status: "FAILED" });
-        return NextResponse.json({ received: true });
-      }
-
-      await PaymentModel.updateOne(
-        { fapshiTransId: body.transId },
-        { status: "SUCCESSFUL", dateConfirmed: new Date() }
-      );
-
-      const userFilter = payment.userId
-        ? { _id: payment.userId }
-        : { phone: payment.phone };
-
-      if (payment.paymentType === "SUBSCRIPTION") {
-        const now = new Date();
-        const expiresAt = new Date(now);
-        expiresAt.setMonth(expiresAt.getMonth() + 1);
-
-        const updateResult = await UserModel.updateOne(userFilter, {
-          $set: {
-            "subscription.status": "ACTIVE",
-            "subscription.plan": "MONTHLY",
-            "subscription.startedAt": now,
-            "subscription.expiresAt": expiresAt,
-          },
-        });
-
-        if (updateResult.matchedCount === 0) {
-          console.error(`Webhook: user not found for subscription activation`, userFilter);
-        } else {
-          console.log(`✅ Activated subscription for user`, userFilter, `until ${expiresAt.toISOString()}`);
-        }
-
-        // Server-side Purchase event — event_id MUST match the client-side
-        // one fired in SubscribePayment's success screen (`sub-purchase-${transId}`)
-        await sendServerEvent({
-          eventName: "Purchase",
-          eventId: `sub-purchase-${body.transId}`,
-          value: payment.amount,
-          currency: "XAF",
-          contentName: "Abonnement Mensuel",
-          contentType: "product",
-          userPhone: payment.phone,
-          country: "cm",
-          clientIp: payment.clientIp ?? undefined,
-          userAgent: payment.userAgent ?? undefined,
-          fbc: payment.fbc ?? undefined,
-          fbp: payment.fbp ?? undefined,
-          sourceUrl: payment.sourceUrl ?? undefined,
-        });
+      if (result.outcome === "error") {
+        console.error(`Webhook: fulfillment failed for ${body.transId}:`, result.message);
+      } else if (result.outcome === "not_successful") {
+        console.warn(`Webhook: verification returned ${result.fapshiStatus} for ${body.transId}`);
+      } else if (result.outcome === "amount_mismatch") {
+        console.error(`Webhook: amount mismatch for ${body.transId}`);
       } else {
-        if (!payment.pickId) {
-          console.error(`Webhook: PICK payment ${payment._id} has no pickId — skipping unlock`);
-          return NextResponse.json({ received: true });
-        }
-
-        const updateResult = await UserModel.updateOne(userFilter, {
-          $addToSet: { unlockedPickIds: payment.pickId },
-        });
-
-        if (updateResult.matchedCount === 0) {
-          console.error(`Webhook: user not found with filter`, userFilter);
-        } else {
-          console.log(`✅ Unlocked pick ${payment.pickId} for user`, userFilter);
-        }
-
-        // Server-side Purchase event — event_id MUST match the client-side
-        // one fired in MomoPayment's success screen (`purchase-${transId}`)
-        const pick = await Pick.findById(payment.pickId).select("title");
-        await sendServerEvent({
-          eventName: "Purchase",
-          eventId: `purchase-${body.transId}`,
-          value: payment.amount,
-          currency: "XAF",
-          contentName: pick?.title,
-          contentType: "product",
-          userPhone: payment.phone,
-          country: "cm",
-          clientIp: payment.clientIp ?? undefined,
-          userAgent: payment.userAgent ?? undefined,
-          fbc: payment.fbc ?? undefined,
-          fbp: payment.fbp ?? undefined,
-          sourceUrl: payment.sourceUrl ?? undefined,
-        });
+        console.log(`Webhook: ${body.transId} → ${result.outcome}`);
       }
 
       return NextResponse.json({ received: true });
