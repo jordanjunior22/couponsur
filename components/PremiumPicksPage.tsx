@@ -954,30 +954,81 @@ export default function PremiumPicksPage() {
   const [error, setError]                 = useState<string | null>(null);
   const [showSubscribe, setShowSubscribe] = useState(false);
   const [visibleCount, setVisibleCount]   = useState(PAGE_SIZE);   // ← pagination
+  const [newPicksBanner, setNewPicksBanner] = useState<number | null>(null);
   const { user, hasActiveSubscription, refreshUser } = useAuth();
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true); setError(null);
-        const res = await fetch("/api/picks");
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        const data = await res.json();
-        if (cancelled) return;
-        let resolved: Pick[] = [];
-        if (Array.isArray(data))             resolved = data;
-        else if (Array.isArray(data?.picks)) resolved = data.picks;
-        else if (Array.isArray(data?.data))  resolved = data.data;
-        setPicks(resolved.filter((p) => p.is_published !== false));
-      } catch (err) {
-        if (!cancelled) { setError(err instanceof Error ? err.message : "Erreur inconnue"); setPicks([]); }
-      } finally {
-        if (!cancelled) setLoading(false);
+  // Kept outside React state so the polling/focus refresh below can diff
+  // "what we already had" vs "what just came back" without re-subscribing
+  // effects every time `picks` changes.
+  const picksRef = useRef<Pick[]>([]);
+  const isMountedRef = useRef(true);
+  const bannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const fetchPicks = useCallback(async (showSpinner: boolean) => {
+    try {
+      if (showSpinner) { setLoading(true); setError(null); }
+      const res = await fetch("/api/picks");
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+      if (!isMountedRef.current) return;
+      let resolved: Pick[] = [];
+      if (Array.isArray(data))             resolved = data;
+      else if (Array.isArray(data?.picks)) resolved = data.picks;
+      else if (Array.isArray(data?.data))  resolved = data.data;
+      const published = resolved.filter((p) => p.is_published !== false);
+
+      // Background refreshes (polling / tab refocus) are otherwise silent —
+      // surface a small "new picks" nudge when the list actually grew, so
+      // visitors notice without needing to hit reload themselves.
+      if (!showSpinner && picksRef.current.length > 0) {
+        const previousIds = new Set(picksRef.current.map((p) => p._id));
+        const newCount = published.filter((p) => !previousIds.has(p._id)).length;
+        if (newCount > 0) {
+          setNewPicksBanner(newCount);
+          clearTimeout(bannerTimeoutRef.current);
+          bannerTimeoutRef.current = setTimeout(() => setNewPicksBanner(null), 6000);
+        }
       }
-    })();
-    return () => { cancelled = true; };
+
+      picksRef.current = published;
+      setPicks(published);
+    } catch (err) {
+      // A background refresh failing is not worth interrupting the visitor
+      // over — they still have the last good list. Only surface an error
+      // for the initial load.
+      if (showSpinner && isMountedRef.current) {
+        setError(err instanceof Error ? err.message : "Erreur inconnue");
+        setPicks([]);
+      }
+    } finally {
+      if (showSpinner && isMountedRef.current) setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetchPicks(true);
+
+    // Real-time-ish updates without a websocket/SSE backend: a light
+    // interval poll (same pattern as the admin dashboard's conversation
+    // polling) plus an immediate refresh whenever the visitor comes back
+    // to this tab — covers the common "left it open, missed the new pick"
+    // case as well as "posted a pick, buyer's tab updates on its own".
+    const interval = setInterval(() => fetchPicks(false), 60000);
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === "visible") fetchPicks(false);
+    };
+    document.addEventListener("visibilitychange", onFocusOrVisible);
+    window.addEventListener("focus", onFocusOrVisible);
+
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+      clearTimeout(bannerTimeoutRef.current);
+      document.removeEventListener("visibilitychange", onFocusOrVisible);
+      window.removeEventListener("focus", onFocusOrVisible);
+    };
+  }, [fetchPicks]);
 
   // Reset pagination whenever filter changes
   useEffect(() => { setVisibleCount(PAGE_SIZE); }, [activeFilter]);
@@ -1049,6 +1100,25 @@ export default function PremiumPicksPage() {
   return (
     <>
       <GlobalStyles />
+      {newPicksBanner !== null && (
+        <div
+          role="status"
+          onClick={() => {
+            setNewPicksBanner(null);
+            document.getElementById("today-picks")?.scrollIntoView({ behavior: "smooth" });
+          }}
+          style={{
+            position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 60,
+            background: "linear-gradient(135deg, #C9A84C, #E8C97A)", color: "#0A0C0F",
+            borderRadius: 999, padding: "10px 18px", fontSize: 12, fontWeight: 700,
+            display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+            boxShadow: "0 8px 24px rgba(201,168,76,0.35)", animation: "fadeIn 0.25s ease",
+            letterSpacing: "0.3px", whiteSpace: "nowrap",
+          }}
+        >
+          🔥 {newPicksBanner} nouveau{newPicksBanner > 1 ? "x" : ""} pick{newPicksBanner > 1 ? "s" : ""} disponible{newPicksBanner > 1 ? "s" : ""}
+        </div>
+      )}
       <main style={{ minHeight: "100vh", background: "#0A0C0F", paddingBottom: 80 }}>
         <Hero picks={picks} />
         <FilterBar active={activeFilter} onChange={setActiveFilter} picks={picks} />
