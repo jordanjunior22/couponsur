@@ -1833,7 +1833,7 @@ function SettingsTab() {
 }
 
 // ─── Conversation Thread Modal ─────────────────────────────────────────────────
-function ConversationModal({ conversation, onClose, onUpdate }: { conversation: Conversation; onClose: () => void; onUpdate: (c: Conversation) => void }) {
+function ConversationModal({ conversation, subscription, onClose, onUpdate }: { conversation: Conversation; subscription?: ApiUser["subscription"]; onClose: () => void; onUpdate: (c: Conversation) => void }) {
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [togglingStatus, setTogglingStatus] = useState(false);
@@ -1888,7 +1888,10 @@ function ConversationModal({ conversation, onClose, onUpdate }: { conversation: 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
           <div>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.text, letterSpacing: 1 }}>{conversation.phone}</div>
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{conversation.user ? "Compte lié" : "Visiteur non connecté"}</div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 2, display: "flex", alignItems: "center", gap: 6 }}>
+              <span>{conversation.user ? "Compte lié" : "Visiteur non connecté"}</span>
+              {conversation.user && <SubscriptionBadge subscription={subscription} />}
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button onClick={toggleStatus} disabled={togglingStatus} style={{
@@ -1955,10 +1958,15 @@ function ConversationModal({ conversation, onClose, onUpdate }: { conversation: 
 }
 
 // ─── Messages Tab ───────────────────────────────────────────────────────────────
-function MessagesTab({ conversations, setConversations, loading }: { conversations: Conversation[]; setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>; loading: boolean }) {
+function MessagesTab({ conversations, setConversations, loading, users }: { conversations: Conversation[]; setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>; loading: boolean; users: ApiUser[] }) {
   const [filterStatus, setFilterStatus] = useState<"ALL" | "OPEN" | "RESOLVED">("ALL");
   const [openId, setOpenId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // Conversations only store the linked account's id — cross-reference the
+  // already-loaded users list to know if that account is a paying/premium
+  // subscriber (same "active subscription" definition as the Users tab).
+  const usersById = useMemo(() => new Map(users.map((u) => [u._id, u])), [users]);
 
   const filtered = useMemo(
     () => conversations.filter((c) => filterStatus === "ALL" || c.status === filterStatus),
@@ -1967,6 +1975,7 @@ function MessagesTab({ conversations, setConversations, loading }: { conversatio
 
   const openCount = conversations.filter((c) => c.status === "OPEN").length;
   const selected = conversations.find((c) => c._id === openId) || null;
+  const selectedUser = selected?.user ? usersById.get(selected.user) : undefined;
 
   const handleDelete = async (id: string) => {
     if (!confirm("Supprimer cette conversation ?")) return;
@@ -2008,6 +2017,7 @@ function MessagesTab({ conversations, setConversations, loading }: { conversatio
           {filtered.map((c) => {
             const last = c.messages[c.messages.length - 1];
             const awaitingReply = c.status === "OPEN" && last?.sender === "USER";
+            const linkedUser = c.user ? usersById.get(c.user) : undefined;
             return (
               <div key={c._id} onClick={() => setOpenId(c._id)} style={{
                 background: C.dark3, border: `1px solid ${C.border}`, borderLeft: `3px solid ${awaitingReply ? C.gold : c.status === "OPEN" ? C.blue : C.green}`,
@@ -2030,6 +2040,7 @@ function MessagesTab({ conversations, setConversations, loading }: { conversatio
                         À RÉPONDRE
                       </span>
                     )}
+                    {c.user && <SubscriptionBadge subscription={linkedUser?.subscription} />}
                     <Badge outcome={c.status === "OPEN" ? "draft" : "live"} />
                   </div>
                 </div>
@@ -2054,7 +2065,7 @@ function MessagesTab({ conversations, setConversations, loading }: { conversatio
       )}
 
       {selected && (
-        <ConversationModal conversation={selected} onClose={() => setOpenId(null)} onUpdate={handleUpdate} />
+        <ConversationModal conversation={selected} subscription={selectedUser?.subscription} onClose={() => setOpenId(null)} onUpdate={handleUpdate} />
       )}
     </div>
   );
@@ -2587,7 +2598,7 @@ export default function AdminDashboard() {
                 {tab === "picks" && <PicksTab picks={picks} setPicks={setPicks} />}
                 {tab === "users" && <UsersTab users={users} setUsers={setUsers} usersLoading={usersLoading} picks={picks} />}
                 {tab === "revenue" && <RevenueTab picks={picks} users={users} />}
-                {tab === "messages" && <MessagesTab conversations={conversations} setConversations={setConversations} loading={conversationsLoading} />}
+                {tab === "messages" && <MessagesTab conversations={conversations} setConversations={setConversations} loading={conversationsLoading} users={users} />}
                 {tab === "announcements" && <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} loading={announcementsLoading} />}
                 {tab === "settings" && <SettingsTab />}
               </>
