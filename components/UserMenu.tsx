@@ -42,7 +42,8 @@ const formatCameroonPhone = (raw: string): string => {
 
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
-  const { user, login, signup, logout, loading: authLoading } = useAuth();
+  const { user, login, signup, logout, loading: authLoading, hasActiveSubscription } = useAuth();
+  const isSubscribed = !!user && hasActiveSubscription();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -172,6 +173,7 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
           <>
             <button onClick={() => setMenuOpen(!menuOpen)} style={avatarStyle}>
               👤
+              {isSubscribed && <span style={premiumDotStyle}>⭐</span>}
             </button>
 
             {menuOpen && (
@@ -182,6 +184,18 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
                     <span style={phoneIcon}>📱</span>
                     +237 {formatCameroonPhone(user.phone)}
                   </div>
+
+                  {isSubscribed ? (
+                    <div style={premiumStatusStyle}>
+                      ⭐ Abonné Premium
+                    </div>
+                  ) : (
+                    user.subscription?.status === "EXPIRED" && (
+                      <div style={{ ...premiumStatusStyle, color: "#EF4444", background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.25)" }}>
+                        Abonnement expiré
+                      </div>
+                    )
+                  )}
 
                   <div style={dividerStyle} />
                   {user?.role === "ADMIN" && (
@@ -367,6 +381,7 @@ const loginBtnStyle: React.CSSProperties = {
 };
 
 const avatarStyle: React.CSSProperties = {
+  position: "relative",
   width: 36,
   height: 36,
   borderRadius: "50%",
@@ -416,6 +431,31 @@ const phoneDisplayStyle: React.CSSProperties = {
 
 const phoneIcon: React.CSSProperties = {
   fontSize: 14,
+};
+
+const premiumDotStyle: React.CSSProperties = {
+  position: "absolute",
+  top: -4,
+  right: -4,
+  fontSize: 11,
+  lineHeight: 1,
+  filter: "drop-shadow(0 0 3px rgba(201,168,76,0.8))",
+};
+
+const premiumStatusStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "#C9A84C",
+  background: "rgba(201,168,76,0.1)",
+  border: "1px solid rgba(201,168,76,0.25)",
+  borderRadius: 6,
+  padding: "5px 10px",
+  margin: "0 6px 8px",
 };
 
 const dividerStyle: React.CSSProperties = {
