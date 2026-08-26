@@ -251,6 +251,98 @@ function scoreMatch(
   return picks;
 }
 
+// ─── Combo building ────────────────────────────────────────────────────────────
+// Shared by the morning-picks cron (fixed tier bands) and the buyer-facing
+// match generator (a user-chosen target odds) — both need "take the
+// strongest candidates, then nudge the selection until the total odds lands
+// in a band" and there's no reason to keep two copies of that logic.
+
+/** Picks `size` candidates (already sorted strongest-first) and swaps entries
+ *  in/out until the combined odds land within [minOdds, maxOdds], as best as
+ *  the candidate pool allows. */
+export function pickCombo(
+  candidates: PredictionPick[],
+  size: number,
+  maxOdds: number,
+  minOdds: number
+): PredictionPick[] {
+  const selected = candidates.slice(0, size);
+  let total = selected.reduce((acc, s) => acc * s.odd, 1);
+
+  if (total > maxOdds) {
+    const sorted = [...selected].sort((a, b) => b.odd - a.odd);
+    const overflow = sorted[0];
+    const pool = candidates.filter((c) => !selected.includes(c));
+    const replacement = pool
+      .filter((c) => c.odd < overflow.odd)
+      .sort((a, b) => a.odd - b.odd)
+      .pop();
+    if (replacement) selected[selected.indexOf(overflow)] = replacement;
+  }
+
+  total = selected.reduce((acc, s) => acc * s.odd, 1);
+  while (total > maxOdds && selected.length > 1) {
+    selected.sort((a, b) => b.odd - a.odd);
+    selected.shift();
+    total = selected.reduce((acc, s) => acc * s.odd, 1);
+  }
+
+  total = selected.reduce((acc, s) => acc * s.odd, 1);
+  let attempts = 0;
+  while (total < minOdds && attempts < candidates.length) {
+    const sorted = [...selected].sort((a, b) => a.odd - b.odd);
+    const weakest = sorted[0];
+    const pool = candidates.filter((c) => !selected.includes(c));
+    const replacement = pool
+      .filter((c) => c.odd > weakest.odd)
+      .sort((a, b) => b.odd - a.odd)
+      .find((c) => {
+        const projected = (total / weakest.odd) * c.odd;
+        return projected <= maxOdds;
+      });
+    if (!replacement) break;
+    selected[selected.indexOf(weakest)] = replacement;
+    total = selected.reduce((acc, s) => acc * s.odd, 1);
+    attempts++;
+  }
+
+  return selected;
+}
+
+export interface ComboResult {
+  selected: PredictionPick[];
+  totalOdds: number;
+}
+
+/**
+ * Tries combo sizes from 1 up to `maxSize` and returns whichever gets
+ * closest to `targetOdds` (within a ±25% band around it, widened slightly
+ * from pickCombo's own band since here the user picks the target, not a
+ * fixed product tier — so it's better to return the closest honest match
+ * than nothing at all). Returns null only if candidates is empty.
+ */
+export function buildComboForTargetOdds(
+  candidates: PredictionPick[],
+  maxSize: number,
+  targetOdds: number
+): ComboResult | null {
+  if (candidates.length === 0) return null;
+
+  const minOdds = targetOdds * 0.75;
+  const maxOdds = targetOdds * 1.25;
+
+  let best: ComboResult | null = null;
+  for (let size = 1; size <= Math.min(maxSize, candidates.length); size++) {
+    const combo = pickCombo(candidates, size, maxOdds, minOdds);
+    if (combo.length === 0) continue;
+    const totalOdds = parseFloat(combo.reduce((acc, s) => acc * s.odd, 1).toFixed(2));
+    if (best === null || Math.abs(totalOdds - targetOdds) < Math.abs(best.totalOdds - targetOdds)) {
+      best = { selected: combo, totalOdds };
+    }
+  }
+  return best;
+}
+
 // ─── Public entrypoint ────────────────────────────────────────────────────────
 
 export async function getPredictions(targetDate?: Date): Promise<PredictionPick[]> {

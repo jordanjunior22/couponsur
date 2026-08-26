@@ -1611,6 +1611,13 @@ function SettingsTab() {
   const [tipSaving, setTipSaving] = useState(false);
   const [tipSaveMsg, setTipSaveMsg] = useState<string | null>(null);
 
+  // ── Match generator (ephemeral, AI-assisted, not saved to DB) ───────────
+  const [genEnabled, setGenEnabled] = useState(false);
+  const [genAccess, setGenAccess] = useState<"EVERYONE" | "PREMIUM">("PREMIUM");
+  const [genCount, setGenCount] = useState(3);
+  const [genSaving, setGenSaving] = useState(false);
+  const [genSaveMsg, setGenSaveMsg] = useState<string | null>(null);
+
   useEffect(() => {
     (async () => {
       try {
@@ -1621,6 +1628,15 @@ function SettingsTab() {
           setInputValue(String(data.data.subscriptionMonthlyPrice));
           if (Array.isArray(data.data.tipOptions) && data.data.tipOptions.length > 0) {
             setTipOptions(data.data.tipOptions);
+          }
+          if (typeof data.data.matchGeneratorEnabled === "boolean") {
+            setGenEnabled(data.data.matchGeneratorEnabled);
+          }
+          if (data.data.matchGeneratorAccess === "EVERYONE" || data.data.matchGeneratorAccess === "PREMIUM") {
+            setGenAccess(data.data.matchGeneratorAccess);
+          }
+          if (typeof data.data.matchGeneratorMatchCount === "number") {
+            setGenCount(data.data.matchGeneratorMatchCount);
           }
         }
       } catch (e) {
@@ -1693,6 +1709,37 @@ function SettingsTab() {
   const removeTip = (t: string) => {
     if (tipOptions.length <= 1) return; // keep at least one option selectable
     saveTipOptions(tipOptions.filter((x) => x !== t));
+  };
+
+  const saveGeneratorSettings = async (next: { enabled?: boolean; access?: "EVERYONE" | "PREMIUM"; count?: number }) => {
+    setGenSaving(true);
+    setGenSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          matchGeneratorEnabled: next.enabled ?? genEnabled,
+          matchGeneratorAccess: next.access ?? genAccess,
+          matchGeneratorMatchCount: next.count ?? genCount,
+        }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setGenEnabled(data.data.matchGeneratorEnabled);
+        setGenAccess(data.data.matchGeneratorAccess);
+        setGenCount(data.data.matchGeneratorMatchCount);
+        setGenSaveMsg("Enregistré avec succès.");
+      } else {
+        setGenSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setGenSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setGenSaving(false);
+      setTimeout(() => setGenSaveMsg(null), 3000);
+    }
   };
 
   const iStyle: React.CSSProperties = {
@@ -1825,6 +1872,76 @@ function SettingsTab() {
             color: tipSaveMsg.includes("succès") ? C.green : C.red,
           }}>
             {tipSaveMsg}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+          Fonctionnalité
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+          Générateur de matchs (IA)
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+          Permet aux utilisateurs de générer eux-mêmes une combinaison via le moteur de pronostics, à titre indicatif — rien n&apos;est enregistré en base ni vendu.
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+            Activer la fonctionnalité
+          </label>
+          <button
+            onClick={() => { setGenEnabled(!genEnabled); saveGeneratorSettings({ enabled: !genEnabled }); }}
+            disabled={genSaving}
+            style={{
+              width: 44, height: 24, borderRadius: 12, position: "relative", cursor: genSaving ? "not-allowed" : "pointer",
+              background: genEnabled ? C.gold : C.dark4, border: `1px solid ${genEnabled ? C.gold : C.border}`,
+              transition: "background 0.15s", flexShrink: 0, padding: 0,
+            }}
+          >
+            <span style={{
+              position: "absolute", top: 2, left: genEnabled ? 22 : 2, width: 18, height: 18, borderRadius: "50%",
+              background: genEnabled ? C.dark : C.muted, transition: "left 0.15s",
+            }} />
+          </button>
+        </div>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+          Qui y a accès
+        </label>
+        <select
+          style={{ ...iStyle, cursor: genSaving ? "not-allowed" : "pointer", marginBottom: 16 }}
+          value={genAccess}
+          disabled={genSaving}
+          onChange={(e) => { const v = e.target.value as "EVERYONE" | "PREMIUM"; setGenAccess(v); saveGeneratorSettings({ access: v }); }}
+        >
+          <option value="PREMIUM">Abonnés premium uniquement</option>
+          <option value="EVERYONE">Tous les utilisateurs connectés</option>
+        </select>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+          Nombre de matchs générés
+        </label>
+        <select
+          style={{ ...iStyle, cursor: genSaving ? "not-allowed" : "pointer" }}
+          value={genCount}
+          disabled={genSaving}
+          onChange={(e) => { const v = Number(e.target.value); setGenCount(v); saveGeneratorSettings({ count: v }); }}
+        >
+          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>{n} match{n > 1 ? "s" : ""}</option>
+          ))}
+        </select>
+
+        {genSaveMsg && (
+          <div style={{
+            fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
+            background: genSaveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${genSaveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+            color: genSaveMsg.includes("succès") ? C.green : C.red,
+          }}>
+            {genSaveMsg}
           </div>
         )}
       </div>

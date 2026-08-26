@@ -23,7 +23,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
 import PickModel, { Outcome } from "@/models/Picks";
-import { getPredictions, type PredictionPick } from "@/lib/predictionengine";
+import { getPredictions, pickCombo, type PredictionPick } from "@/lib/predictionengine";
 import { getTodayWAT } from "@/lib/soccervital";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -225,53 +225,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function pickCombo(
-  candidates: PredictionPick[],
-  size: number,
-  maxOdds: number,
-  minOdds: number
-): PredictionPick[] {
-  const selected = candidates.slice(0, size);
-  let total = selected.reduce((acc, s) => acc * s.odd, 1);
-
-  if (total > maxOdds) {
-    const sorted = [...selected].sort((a, b) => b.odd - a.odd);
-    const overflow = sorted[0];
-    const pool = candidates.filter((c) => !selected.includes(c));
-    const replacement = pool
-      .filter((c) => c.odd < overflow.odd)
-      .sort((a, b) => a.odd - b.odd)
-      .pop();
-    if (replacement) selected[selected.indexOf(overflow)] = replacement;
-  }
-
-  total = selected.reduce((acc, s) => acc * s.odd, 1);
-  while (total > maxOdds && selected.length > 1) {
-    selected.sort((a, b) => b.odd - a.odd);
-    selected.shift();
-    total = selected.reduce((acc, s) => acc * s.odd, 1);
-  }
-
-  total = selected.reduce((acc, s) => acc * s.odd, 1);
-  let attempts = 0;
-  while (total < minOdds && attempts < candidates.length) {
-    const sorted = [...selected].sort((a, b) => a.odd - b.odd);
-    const weakest = sorted[0];
-    const pool = candidates.filter((c) => !selected.includes(c));
-    const replacement = pool
-      .filter((c) => c.odd > weakest.odd)
-      .sort((a, b) => b.odd - a.odd)
-      .find((c) => {
-        const projected = (total / weakest.odd) * c.odd;
-        return projected <= maxOdds;
-      });
-    if (!replacement) break;
-    selected[selected.indexOf(weakest)] = replacement;
-    total = selected.reduce((acc, s) => acc * s.odd, 1);
-    attempts++;
-  }
-
-  return selected;
-}
+// pickCombo lives in lib/predictionengine.ts now — shared with the buyer-
+// facing match generator (app/api/generate-matches), which needs the same
+// "hit a target odds band" logic but for a user-chosen target instead of a
+// fixed tier.

@@ -35,7 +35,13 @@ export async function PUT(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { subscriptionMonthlyPrice, tipOptions } = body;
+    const {
+      subscriptionMonthlyPrice,
+      tipOptions,
+      matchGeneratorEnabled,
+      matchGeneratorAccess,
+      matchGeneratorMatchCount,
+    } = body;
 
     const update: Record<string, unknown> = {};
 
@@ -71,6 +77,41 @@ export async function PUT(req: NextRequest) {
           seen.add(t);
           return true;
         });
+    }
+
+    if (matchGeneratorEnabled !== undefined) {
+      if (typeof matchGeneratorEnabled !== "boolean") {
+        return NextResponse.json(
+          { success: false, message: "matchGeneratorEnabled must be a boolean" },
+          { status: 400 }
+        );
+      }
+      update.matchGeneratorEnabled = matchGeneratorEnabled;
+    }
+
+    if (matchGeneratorAccess !== undefined) {
+      if (matchGeneratorAccess !== "EVERYONE" && matchGeneratorAccess !== "PREMIUM") {
+        return NextResponse.json(
+          { success: false, message: "matchGeneratorAccess must be EVERYONE or PREMIUM" },
+          { status: 400 }
+        );
+      }
+      update.matchGeneratorAccess = matchGeneratorAccess;
+    }
+
+    if (matchGeneratorMatchCount !== undefined) {
+      if (
+        typeof matchGeneratorMatchCount !== "number" ||
+        !Number.isInteger(matchGeneratorMatchCount) ||
+        matchGeneratorMatchCount < 1 ||
+        matchGeneratorMatchCount > 10
+      ) {
+        return NextResponse.json(
+          { success: false, message: "matchGeneratorMatchCount must be an integer between 1 and 10" },
+          { status: 400 }
+        );
+      }
+      update.matchGeneratorMatchCount = matchGeneratorMatchCount;
     }
 
     if (Object.keys(update).length === 0) {
