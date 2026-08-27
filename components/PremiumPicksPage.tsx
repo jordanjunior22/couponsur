@@ -887,7 +887,7 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
 
   return (
     <div ref={overlayRef} onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 50, backdropFilter: "blur(4px)" }}>
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 1200, backdropFilter: "blur(4px)" }}>
       <div style={{ background: "#111418", border: "1px solid #2A3140", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 600, padding: "24px 20px 40px", position: "relative", maxHeight: "90vh", overflowY: "auto", animation: "slideUp 0.3s cubic-bezier(0.32,0.72,0,1)" }}>
         <div style={{ width: 40, height: 4, background: "#3A4455", borderRadius: 2, margin: "0 auto 20px" }} />
         <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, width: 30, height: 30, background: "#222830", border: "1px solid #2A3140", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#7A8399", fontSize: 14 }}>✕</button>
@@ -1311,7 +1311,7 @@ export default function PremiumPicksPage() {
         {selectedPick && <Modal pick={selectedPick} onClose={() => setSelectedPick(null)} />}
 
         {showSubscribe && (
-          <div onClick={(e) => e.target === e.currentTarget && setShowSubscribe(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 50, backdropFilter: "blur(4px)" }}>
+          <div onClick={(e) => e.target === e.currentTarget && setShowSubscribe(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 1200, backdropFilter: "blur(4px)" }}>
             <div style={{ background: "#111418", border: "1px solid #2A3140", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 600, padding: "24px 20px 40px", position: "relative", maxHeight: "90vh", overflowY: "auto", animation: "slideUp 0.3s cubic-bezier(0.32,0.72,0,1)" }}>
               <div style={{ width: 40, height: 4, background: "#3A4455", borderRadius: 2, margin: "0 auto 20px" }} />
               <button onClick={() => setShowSubscribe(false)} style={{ position: "absolute", top: 16, right: 16, width: 30, height: 30, background: "#222830", border: "1px solid #2A3140", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#7A8399", fontSize: 14 }}>✕</button>
