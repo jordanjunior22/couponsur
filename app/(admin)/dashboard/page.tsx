@@ -46,6 +46,19 @@ interface ApiUser {
   lastLoginAt?: string;
 }
 
+interface ApiTransaction {
+  _id: string;
+  pickId?: string | null;
+  userId: { _id: string; phone: string; role: "USER" | "ADMIN" } | string | null;
+  paymentType: "PICK" | "SUBSCRIPTION";
+  phone: string;
+  amount: number;
+  fapshiTransId: string;
+  status: "PENDING" | "SUCCESSFUL" | "FAILED" | "EXPIRED";
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ChatMessage {
   _id?: string;
   sender: "USER" | "ADMIN";
@@ -185,6 +198,22 @@ const Icons = {
       <path d="M1.5 6.5v3a1 1 0 001 1h1.3l6.7 3V2.5l-6.7 3H2.5a1 1 0 00-1 1z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M6.5 10.5v2.3a1 1 0 001 1h.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M12.8 6a2.4 2.4 0 010 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  ),
+  transactions: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M3.5 1.5h9v13l-2-1.3-1.5 1.3-1.5-1.3-1.5 1.3-1.5-1.3-1 .7V1.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M5.5 5h5M5.5 7.5h5M5.5 10h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  ),
+  chevronLeft: () => (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M9 2.5L4 7l5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  chevronRight: () => (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M5 2.5L10 7l-5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
 };
@@ -1485,6 +1514,198 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   );
 }
 
+// ─── Pagination Controls ────────────────────────────────────────────────────────
+function Pagination({ page, totalPages, total, onChange }: { page: number; totalPages: number; total: number; onChange: (p: number) => void }) {
+  if (total === 0) return null;
+  const btnStyle = (disabled: boolean): React.CSSProperties => ({
+    background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6,
+    color: disabled ? C.faint : C.text, width: 30, height: 30,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    cursor: disabled ? "not-allowed" : "pointer", flexShrink: 0,
+  });
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "14px 4px" }}>
+      <span style={{ fontSize: 11, color: C.muted }}>
+        {total.toLocaleString("fr-FR")} résultat{total !== 1 ? "s" : ""} · page {page} / {totalPages}
+      </span>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button style={btnStyle(page <= 1)} disabled={page <= 1} onClick={() => onChange(page - 1)} title="Page précédente">
+          <Icons.chevronLeft />
+        </button>
+        <button style={btnStyle(page >= totalPages)} disabled={page >= totalPages} onClick={() => onChange(page + 1)} title="Page suivante">
+          <Icons.chevronRight />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Transactions Tab ───────────────────────────────────────────────────────────
+// Lists raw Payment records straight from the DB (not the derived revenue
+// numbers in the Revenue tab) so support can search/paginate every
+// transaction tied to a user — by phone, Fapshi transaction id, status or
+// type — without pulling the whole collection into the browser.
+function TransactionsTab() {
+  const [transactions, setTransactions] = useState<ApiTransaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("ALL");
+  const [paymentType, setPaymentType] = useState("ALL");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [limit] = useState(20);
+  const [pagination, setPagination] = useState({ total: 0, totalPages: 1 });
+
+  // Debounce free-text search so every keystroke doesn't fire a request.
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 350);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  // Any filter change resets back to page 1 — a stale page number past
+  // the new result set's end would otherwise render an empty page.
+  useEffect(() => { setPage(1); }, [status, paymentType, dateFrom, dateTo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+        if (search) params.set("search", search);
+        if (status !== "ALL") params.set("status", status);
+        if (paymentType !== "ALL") params.set("paymentType", paymentType);
+        if (dateFrom) params.set("dateFrom", dateFrom);
+        if (dateTo) params.set("dateTo", dateTo);
+
+        const res = await fetch(`/api/admin/transactions?${params.toString()}`, { credentials: "include" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (data?.success) {
+          setTransactions(data.data || []);
+          setPagination({ total: data.pagination?.total ?? 0, totalPages: data.pagination?.totalPages ?? 1 });
+        } else {
+          setError(data?.message || "Échec du chargement des transactions.");
+        }
+      } catch (e) {
+        console.error("Transactions fetch:", e);
+        if (!cancelled) setError("Erreur réseau lors du chargement des transactions.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [page, limit, search, status, paymentType, dateFrom, dateTo]);
+
+  const iStyle: React.CSSProperties = { background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 12, padding: "8px 12px", fontFamily: "inherit", outline: "none" };
+
+  const statusColor = (s: ApiTransaction["status"]) =>
+    s === "SUCCESSFUL" ? C.green : s === "PENDING" ? C.gold : C.red;
+  const statusLabel = (s: ApiTransaction["status"]) =>
+    s === "SUCCESSFUL" ? "Réussi" : s === "PENDING" ? "En attente" : s === "FAILED" ? "Échoué" : "Expiré";
+
+  const StatusBadge = ({ s }: { s: ApiTransaction["status"] }) => (
+    <span style={{ background: `${statusColor(s)}1F`, color: statusColor(s), border: `1px solid ${statusColor(s)}40`, fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, letterSpacing: "1px", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+      {statusLabel(s)}
+    </span>
+  );
+
+  const formatDateTime = (d: string) =>
+    new Date(d).toLocaleString("fr-FR", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const userPhone = (t: ApiTransaction) =>
+    (typeof t.userId === "object" && t.userId?.phone) || t.phone;
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          style={{ ...iStyle, flex: 1, minWidth: 200 }}
+          placeholder="Rechercher par téléphone, ID transaction ou ID utilisateur…"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+        <select style={{ ...iStyle, cursor: "pointer" }} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="ALL">Tous statuts</option>
+          <option value="SUCCESSFUL">Réussi</option>
+          <option value="PENDING">En attente</option>
+          <option value="FAILED">Échoué</option>
+          <option value="EXPIRED">Expiré</option>
+        </select>
+        <select style={{ ...iStyle, cursor: "pointer" }} value={paymentType} onChange={(e) => setPaymentType(e.target.value)}>
+          <option value="ALL">Tous types</option>
+          <option value="PICK">Pick</option>
+          <option value="SUBSCRIPTION">Abonnement</option>
+        </select>
+        <input type="date" style={iStyle} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="Du" />
+        <span style={{ color: C.muted, fontSize: 12 }}>→</span>
+        <input type="date" style={iStyle} value={dateTo} onChange={(e) => setDateTo(e.target.value)} title="Au" />
+      </div>
+
+      {error && (
+        <div style={{ fontSize: 12, padding: "10px 12px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.red, marginBottom: 16 }}>
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>
+      ) : (
+        <>
+          <div className="admin-table-desktop">
+            <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.9fr 0.9fr 1fr 1.3fr", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+                <span>Utilisateur</span><span>ID Transaction</span><span>Type</span><span>Montant</span><span>Statut</span><span>Date</span>
+              </div>
+              {transactions.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucune transaction.</div>}
+              {transactions.map((t, i) => (
+                <div key={t._id}
+                  style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.9fr 0.9fr 1fr 1.3fr", padding: "12px 16px", alignItems: "center", borderBottom: i < transactions.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                  <div style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{userPhone(t)}</div>
+                  <div style={{ fontSize: 11, color: C.muted, fontFamily: "'JetBrains Mono', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.fapshiTransId}>{t.fapshiTransId}</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{t.paymentType === "SUBSCRIPTION" ? "Abonnement" : "Pick"}</div>
+                  <div style={{ fontSize: 12, color: C.gold, fontWeight: 600 }}>{formatCFA(t.amount)}</div>
+                  <div><StatusBadge s={t.status} /></div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{formatDateTime(t.createdAt)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="admin-cards-mobile">
+            {transactions.length === 0 && <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "32px 0" }}>Aucune transaction.</div>}
+            {transactions.map((t) => (
+              <div key={t._id} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{userPhone(t)}</div>
+                  <StatusBadge s={t.status} />
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginBottom: 4 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{t.fapshiTransId}</span>
+                  <span style={{ color: C.gold, fontWeight: 700 }}>{formatCFA(t.amount)}</span>
+                </div>
+                <div style={{ display: "flex", gap: 10, fontSize: 11, color: C.muted, flexWrap: "wrap" }}>
+                  <span>{t.paymentType === "SUBSCRIPTION" ? "Abonnement" : "Pick"}</span>
+                  <span>{formatDateTime(t.createdAt)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <Pagination page={page} totalPages={pagination.totalPages} total={pagination.total} onChange={setPage} />
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Overview Tab ───────────────────────────────────────────────────────────────
 function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   const finished = picks.filter((p) => p.outcome !== "PENDING");
@@ -2437,7 +2658,7 @@ function AccessDenied() {
 }
 
 // ─── Main Admin Dashboard ───────────────────────────────────────────────────────
-type Tab = "overview" | "picks" | "users" | "revenue" | "messages" | "announcements" | "settings";
+type Tab = "overview" | "picks" | "users" | "revenue" | "transactions" | "messages" | "announcements" | "settings";
 
 export default function AdminDashboard() {
   const { user, loading: authLoading, logout } = useAuth();
@@ -2583,6 +2804,7 @@ export default function AdminDashboard() {
     { id: "picks", label: "Picks", icon: Icons.picks },
     { id: "users", label: "Utilisateurs", icon: Icons.users },
     { id: "revenue", label: "Revenus", icon: Icons.revenue },
+    { id: "transactions", label: "Transactions", icon: Icons.transactions },
     { id: "messages", label: "Messages", icon: Icons.messages, badge: awaitingReplyCount || undefined },
     { id: "announcements", label: "Annonces", icon: Icons.announcements },
     { id: "settings", label: "Paramètres", icon: Icons.settings },
@@ -2715,6 +2937,7 @@ export default function AdminDashboard() {
                 {tab === "picks" && <PicksTab picks={picks} setPicks={setPicks} />}
                 {tab === "users" && <UsersTab users={users} setUsers={setUsers} usersLoading={usersLoading} picks={picks} />}
                 {tab === "revenue" && <RevenueTab picks={picks} users={users} />}
+                {tab === "transactions" && <TransactionsTab />}
                 {tab === "messages" && <MessagesTab conversations={conversations} setConversations={setConversations} loading={conversationsLoading} users={users} />}
                 {tab === "announcements" && <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} loading={announcementsLoading} />}
                 {tab === "settings" && <SettingsTab />}
