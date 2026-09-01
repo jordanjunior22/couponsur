@@ -2010,18 +2010,28 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Activité Récente</div>
           {recentPicks.length === 0 && <div style={{ padding: "20px", textAlign: "center", color: C.muted, fontSize: 12 }}>Aucun pick</div>}
-          {recentPicks.map((p, i) => (
-            <div key={p._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 16px", borderBottom: i < recentPicks.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, gap: 10 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, color: C.text, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</div>
-                <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{p.league} · {formatDate(p.match_date)}</div>
+          {recentPicks.map((p, i) => {
+            const unlocks = users.filter((u) => u.unlockedPickIds.includes(p._id)).length;
+            const pickRevenue = unlocks * p.price;
+            return (
+              <div key={p._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 16px", borderBottom: i < recentPicks.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, gap: 10 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: C.text, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</div>
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{p.league} · {formatDate(p.match_date)} · {unlocks} débloquage{unlocks !== 1 ? "s" : ""}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: C.gold, lineHeight: 1 }}>x{p.total_odds}</div>
+                    <div style={{ fontSize: 10, color: pickRevenue > 0 ? C.gold : C.muted, marginTop: 2, whiteSpace: "nowrap" }}>{formatCFA(pickRevenue)}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {p.outcome === "PENDING" && <span className="live-dot" title="En cours" />}
+                    <Badge outcome={p.outcome} />
+                  </div>
+                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: C.gold }}>x{p.total_odds}</span>
-                <Badge outcome={p.outcome} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
@@ -3198,6 +3208,16 @@ export default function AdminDashboard() {
         select option { background: #1A1F26; color: #E8EAF0; }
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes livePulseRing {
+          0%   { box-shadow: 0 0 0 0 rgba(201,168,76,0.55); }
+          70%  { box-shadow: 0 0 0 7px rgba(201,168,76,0); }
+          100% { box-shadow: 0 0 0 0 rgba(201,168,76,0); }
+        }
+        @keyframes livePulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+        .live-dot {
+          width: 6px; height: 6px; border-radius: 50%; background: #C9A84C; flex-shrink: 0;
+          animation: livePulseRing 1.6s ease-out infinite, livePulseDot 1.6s ease-in-out infinite;
+        }
 
         .admin-sidebar { display: flex; }
         .admin-hamburger { display: none; }
