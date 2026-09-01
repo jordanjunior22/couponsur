@@ -8,14 +8,21 @@ export interface IChatMessage {
   sender: ChatSender;
   text: string;
   createdAt: Date;
+  editedAt?: Date | null;
 }
 
 export interface IConversation extends Document {
   phone: string;
   user: Types.ObjectId | null;
   status: ConversationStatus;
-  messages: IChatMessage[];
+  messages: Types.DocumentArray<IChatMessage>;
   lastMessageAt: Date;
+  // Timestamp of the last keystroke ping from each side — the other
+  // side treats it as "currently typing" while it's within a few
+  // seconds old (see TYPING_TTL_MS in the chat/admin typing routes) and
+  // stale otherwise. Not cleared on send; it just ages out.
+  userTypingAt: Date | null;
+  adminTypingAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -25,6 +32,10 @@ const ChatMessageSchema = new Schema<IChatMessage>(
     sender: { type: String, enum: ["USER", "ADMIN"], required: true },
     text: { type: String, required: true, trim: true, maxlength: 2000 },
     createdAt: { type: Date, default: Date.now },
+    // Set whenever the sender edits this message after sending it —
+    // null/absent means never edited. Lets the UI show a small
+    // "modifié" marker without keeping edit history.
+    editedAt: { type: Date, default: null },
   },
   { _id: true }
 );
@@ -57,6 +68,14 @@ const ConversationSchema = new Schema<IConversation>(
     lastMessageAt: {
       type: Date,
       default: Date.now,
+    },
+    userTypingAt: {
+      type: Date,
+      default: null,
+    },
+    adminTypingAt: {
+      type: Date,
+      default: null,
     },
   },
   {

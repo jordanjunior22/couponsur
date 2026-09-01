@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import SoccerVitalImportModal from "@/components/SoccerVitalImportModal";
 import DecimalInput from "@/components/DecimalInput";
+import TypingIndicator from "@/components/TypingIndicator";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 interface Match {
@@ -64,6 +65,7 @@ interface ChatMessage {
   sender: "USER" | "ADMIN";
   text: string;
   createdAt: string;
+  editedAt?: string | null;
 }
 
 interface Conversation {
@@ -74,6 +76,7 @@ interface Conversation {
   messages: ChatMessage[];
   lastMessageAt: string;
   createdAt: string;
+  userTypingAt?: string | null;
 }
 
 interface Announcement {
@@ -334,7 +337,9 @@ function Spinner({ size = 40 }: { size?: number }) {
 }
 
 // ─── Simple SVG line chart (no external chart library needed) ─────────────────
-function LineChart({ data, height = 180 }: { data: { label: string; value: number }[]; height?: number }) {
+function LineChart({ data, height = 180, formatValue = formatCFA }: { data: { label: string; value: number }[]; height?: number; formatValue?: (n: number) => string }) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
   if (data.length === 0) {
     return <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>Aucune donnée</div>;
   }
@@ -353,21 +358,56 @@ function LineChart({ data, height = 180 }: { data: { label: string; value: numbe
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
   const areaD = `${pathD} L ${points[points.length - 1].x} ${height - padY} L ${points[0].x} ${height - padY} Z`;
 
+  const hovered = hoverIdx !== null ? points[hoverIdx] : null;
+  const tooltipAlign = hoverIdx === 0 ? "left" : hoverIdx === points.length - 1 ? "right" : "center";
+
   return (
     <div style={{ padding: "16px" }}>
-      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height, overflow: "visible" }} preserveAspectRatio="none">
-        <path d={areaD} fill="url(#goldFade)" opacity={0.15} />
-        <defs>
-          <linearGradient id="goldFade" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={C.gold} stopOpacity="0.5" />
-            <stop offset="100%" stopColor={C.gold} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={pathD} fill="none" stroke={C.gold} strokeWidth="0.6" vectorEffect="non-scaling-stroke" />
-        {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="0.8" fill={C.gold} vectorEffect="non-scaling-stroke" />
-        ))}
-      </svg>
+      {/* Sized 1:1 with the SVG's viewBox (width%→x%, height in px→y in px,
+          since preserveAspectRatio is "none") so the tooltip can be placed
+          directly from a point's raw x/y without extra conversion. */}
+      <div style={{ position: "relative", width: "100%", height }}>
+        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height, overflow: "visible", display: "block" }} preserveAspectRatio="none">
+          <path d={areaD} fill="url(#goldFade)" opacity={0.15} />
+          <defs>
+            <linearGradient id="goldFade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.gold} stopOpacity="0.5" />
+              <stop offset="100%" stopColor={C.gold} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d={pathD} fill="none" stroke={C.gold} strokeWidth="0.6" vectorEffect="non-scaling-stroke" />
+          {hovered && (
+            <line x1={hovered.x} y1={padY} x2={hovered.x} y2={height - padY} stroke={C.border} strokeWidth="0.4" vectorEffect="non-scaling-stroke" />
+          )}
+          {points.map((p, i) => (
+            <g
+              key={i}
+              onMouseEnter={() => setHoverIdx(i)}
+              onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))}
+              onClick={() => setHoverIdx((h) => (h === i ? null : i))}
+              style={{ cursor: "pointer" }}
+            >
+              {/* Invisible, generously-sized hit target — the visible dot is tiny */}
+              <circle cx={p.x} cy={p.y} r="3.5" fill="transparent" />
+              <circle cx={p.x} cy={p.y} r={hoverIdx === i ? "1.4" : "0.8"} fill={C.gold} vectorEffect="non-scaling-stroke" />
+            </g>
+          ))}
+        </svg>
+        {hovered && (
+          <div style={{
+            position: "absolute",
+            left: `${(hovered.x / width) * 100}%`,
+            top: Math.max(0, hovered.y - 36),
+            transform: tooltipAlign === "left" ? "translateX(0)" : tooltipAlign === "right" ? "translateX(-100%)" : "translateX(-50%)",
+            background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6,
+            padding: "5px 9px", whiteSpace: "nowrap", pointerEvents: "none",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.4)", zIndex: 5,
+          }}>
+            <div style={{ color: C.muted, fontSize: 9 }}>{hovered.label}</div>
+            <div style={{ color: C.gold, fontSize: 12, fontWeight: 700 }}>{formatValue(hovered.value)}</div>
+          </div>
+        )}
+      </div>
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
         {data.map((d, i) => (
           (data.length <= 8 || i % Math.ceil(data.length / 8) === 0) ? (
@@ -681,6 +721,52 @@ function UserDetailModal({ user, picks, subPrice, onClose, onActivated }: { user
   const [activating, setActivating] = useState(false);
   const [activateMsg, setActivateMsg] = useState<string | null>(null);
 
+  // ─── Password reset (stand-in for "forgot password") ────────────────
+  // No email/SMS in this system, so a user can't self-serve a reset —
+  // support verifies them informally (chat) and an admin resets the
+  // password on this SAME account here. Nothing to sync: the account,
+  // its subscription and unlocked picks never move.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetCustom, setResetCustom] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleResetPassword = async () => {
+    setResetting(true);
+    setResetError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${user._id}/reset-password`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(resetCustom.trim() ? { newPassword: resetCustom.trim() } : {}),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setRevealedPassword(data.newPassword || resetCustom.trim());
+        setResetCustom("");
+        setResetOpen(false);
+      } else {
+        setResetError(data.message || "Échec de la réinitialisation.");
+      }
+    } catch {
+      setResetError("Erreur réseau lors de la réinitialisation.");
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const handleCopyPassword = async () => {
+    if (!revealedPassword) return;
+    try {
+      await navigator.clipboard.writeText(revealedPassword);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable — the value is still shown to copy manually */ }
+  };
+
   const handleActivate = async () => {
     if (!confirm(`Activer manuellement l'abonnement de ${user.phone} pour 30 jours ?\n\nÀ utiliser seulement si ce client a réellement payé mais n'a pas été débloqué (privilégiez d'abord "Réconcilier les paiements" dans l'onglet Revenus s'il existe un paiement correspondant).`)) return;
     setActivating(true);
@@ -770,6 +856,57 @@ function UserDetailModal({ user, picks, subPrice, onClose, onActivated }: { user
           </div>
         )}
 
+        {/* Password reset — stand-in for "forgot password" */}
+        <div style={{ marginBottom: 20 }}>
+          {revealedPassword ? (
+            <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, color: C.green, marginBottom: 6 }}>
+                Nouveau mot de passe — transmets-le au client, il ne sera plus affiché ensuite :
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <code style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", fontSize: 13, color: C.text, fontFamily: "monospace", letterSpacing: "0.5px", wordBreak: "break-all" }}>
+                  {revealedPassword}
+                </code>
+                <button onClick={handleCopyPassword} style={{ background: C.dark4, border: `1px solid ${C.border}`, color: copied ? C.green : C.muted, borderRadius: 6, padding: "6px 10px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+                  {copied ? "Copié ✓" : "Copier"}
+                </button>
+              </div>
+              <button onClick={() => setRevealedPassword(null)} style={{ background: "none", border: "none", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: "inherit", marginTop: 8, padding: 0, textDecoration: "underline" }}>
+                J&apos;ai transmis le mot de passe
+              </button>
+            </div>
+          ) : resetOpen ? (
+            <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
+                Laisse vide pour générer un mot de passe aléatoire, ou définis-en un toi-même.
+              </div>
+              <input
+                value={resetCustom}
+                onChange={(e) => setResetCustom(e.target.value)}
+                placeholder="Mot de passe personnalisé (optionnel)"
+                style={{ width: "100%", background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 12, padding: "8px 10px", fontFamily: "inherit", outline: "none", marginBottom: 8, boxSizing: "border-box" }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => { setResetOpen(false); setResetCustom(""); setResetError(null); }} style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                  Annuler
+                </button>
+                <button onClick={handleResetPassword} disabled={resetting} style={{ flex: 1, background: C.gold, border: "none", color: C.dark, borderRadius: 6, padding: "8px", fontSize: 11, fontWeight: 700, cursor: resetting ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: resetting ? 0.6 : 1 }}>
+                  {resetting ? "…" : "Confirmer"}
+                </button>
+              </div>
+              {resetError && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{resetError}</div>}
+            </div>
+          ) : (
+            <button
+              onClick={() => setResetOpen(true)}
+              style={{ width: "100%", background: "none", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: "10px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+              title="Aucun email/SMS dans ce système — vérifie l'identité du client via le chat avant de réinitialiser"
+            >
+              Réinitialiser le mot de passe
+            </button>
+          )}
+        </div>
+
         <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
           Picks débloqués
         </div>
@@ -835,6 +972,8 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
   const [showImport, setShowImport] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 20;
 
   const filtered = useMemo(() => picks.filter((p) => {
     const s = search.toLowerCase();
@@ -844,6 +983,19 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
       (filterLeague === "ALL" || p.league === filterLeague)
     );
   }), [picks, search, filterOutcome, filterLeague]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paged = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+
+  // A new search/filter always jumps back to page 1 — staying on, say,
+  // page 3 of the old result set would otherwise often land on an empty
+  // page. Clamping on totalPages separately (below) catches the other
+  // case: the list itself shrinking (a delete) past the current page.
+  useEffect(() => { setPage(1); }, [search, filterOutcome, filterLeague]);
+  useEffect(() => { setPage((p) => Math.min(p, totalPages)); }, [totalPages]);
 
   const stalePicks = useMemo(() => picks.filter(isStalePending), [picks]);
 
@@ -863,15 +1015,18 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
     });
   };
 
-  const allFilteredSelected = filtered.length > 0 && filtered.every((p) => selected.has(p._id));
+  // Scoped to the current page, not the whole filtered set — selections
+  // made on other pages are preserved (bulk-delete still acts on every
+  // id in `selected`, across pages) rather than silently dropped.
+  const allPageSelected = paged.length > 0 && paged.every((p) => selected.has(p._id));
 
-  const toggleSelectAll = () => {
+  const togglePageSelectAll = () => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (allFilteredSelected) {
-        filtered.forEach((p) => next.delete(p._id));
+      if (allPageSelected) {
+        paged.forEach((p) => next.delete(p._id));
       } else {
-        filtered.forEach((p) => next.add(p._id));
+        paged.forEach((p) => next.add(p._id));
       }
       return next;
     });
@@ -1007,18 +1162,18 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
           <div style={{ display: "grid", gridTemplateColumns: "28px 2fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, alignItems: "center", gap: 8 }}>
             <input
               type="checkbox"
-              checked={allFilteredSelected}
-              onChange={toggleSelectAll}
+              checked={allPageSelected}
+              onChange={togglePageSelectAll}
               style={{ cursor: "pointer", width: 14, height: 14 }}
             />
             <span>Titre</span><span>Ligue</span><span>Date</span><span>Cotes / Prix</span><span>Statut</span><span>Actions</span>
           </div>
           {filtered.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun pick trouvé.</div>}
-          {filtered.map((p, i) => {
+          {paged.map((p, i) => {
             const isSelected = selected.has(p._id);
             return (
               <div key={p._id}
-                style={{ display: "grid", gridTemplateColumns: "28px 2fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", gap: 8, borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, background: isSelected ? "rgba(201,168,76,0.05)" : "transparent", transition: "background 0.15s" }}
+                style={{ display: "grid", gridTemplateColumns: "28px 2fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", gap: 8, borderBottom: i < paged.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, background: isSelected ? "rgba(201,168,76,0.05)" : "transparent", transition: "background 0.15s" }}
                 onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = C.dark4; }}
                 onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
                 <input
@@ -1058,13 +1213,13 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
       {/* Mobile cards */}
       <div className="admin-cards-mobile">
         {filtered.length === 0 && <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "32px 0" }}>Aucun pick trouvé.</div>}
-        {filtered.length > 0 && (
+        {paged.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 2px" }}>
-            <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} style={{ cursor: "pointer", width: 14, height: 14 }} />
-            <span style={{ fontSize: 11, color: C.muted }}>Tout sélectionner</span>
+            <input type="checkbox" checked={allPageSelected} onChange={togglePageSelectAll} style={{ cursor: "pointer", width: 14, height: 14 }} />
+            <span style={{ fontSize: 11, color: C.muted }}>Tout sélectionner (page)</span>
           </div>
         )}
-        {filtered.map((p) => {
+        {paged.map((p) => {
           const isSelected = selected.has(p._id);
           return (
             <div key={p._id} style={{
@@ -1105,6 +1260,8 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
           );
         })}
       </div>
+
+      <Pagination page={page} totalPages={totalPages} total={filtered.length} onChange={setPage} />
 
       {(showForm || editPick) && (
         <PickFormModal pick={editPick} onSave={handleSave} onClose={() => { setShowForm(false); setEditPick(null); }} tipOptions={tipOptions} />
@@ -1280,6 +1437,15 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   } | null>(null);
   const [reconcileError, setReconcileError] = useState<string | null>(null);
 
+  // Search + pagination for the "Revenus par Pick" list below — it grows
+  // one row per pick over time, unlike the small per-league breakdown next
+  // to it, so it's the one that needs both. Client-side since picks/users
+  // are already fully loaded in the parent (no dedicated API call here).
+  const [pickSearch, setPickSearch] = useState("");
+  const [pickSort, setPickSort] = useState<"revenue" | "date">("revenue");
+  const [pickPage, setPickPage] = useState(1);
+  const PICK_PAGE_SIZE = 10;
+
   const handleReconcile = async () => {
     setReconciling(true);
     setReconcileError(null);
@@ -1309,8 +1475,21 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
     })();
   }, []);
 
+  // match_date comes back from the API as a full ISO datetime (e.g.
+  // "2025-09-01T00:00:00.000Z"), while dateFrom/dateTo are bare
+  // "YYYY-MM-DD" strings from the date inputs. Comparing them directly
+  // works for the lower bound (any same-day timestamp sorts >= the bare
+  // date) but silently breaks the upper bound: "2025-09-01" is a string
+  // prefix of "2025-09-01T00:00:00.000Z" and therefore sorts *before* it,
+  // so a pick dated exactly on dateTo (typically "today") always fails
+  // the <= check and drops out of the range — which is why today's/live
+  // data was going missing. Strip the time before comparing, same as
+  // subscriptionRevenue/newSubscribersInRange already do below.
   const filteredPicks = useMemo(() =>
-    picks.filter((p) => p.match_date >= dateFrom && p.match_date <= dateTo),
+    picks.filter((p) => {
+      const d = p.match_date.split("T")[0];
+      return d >= dateFrom && d <= dateTo;
+    }),
     [picks, dateFrom, dateTo]
   );
 
@@ -1348,8 +1527,10 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
     filteredPicks.map((p) => {
       const unlocks = users.filter((u) => u.unlockedPickIds.includes(p._id)).length;
       return { pick: p, unlocks, revenue: unlocks * p.price };
-    }).sort((a, b) => b.revenue - a.revenue),
-    [filteredPicks, users]
+    }).sort((a, b) =>
+      pickSort === "date" ? b.pick.match_date.localeCompare(a.pick.match_date) : b.revenue - a.revenue
+    ),
+    [filteredPicks, users, pickSort]
   );
 
   const byLeague = useMemo(() => {
@@ -1357,6 +1538,23 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
     perPickRevenue.forEach(({ pick, revenue }) => { map[pick.league] = (map[pick.league] || 0) + revenue; });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [perPickRevenue]);
+
+  const filteredPickRevenue = useMemo(() => {
+    const s = pickSearch.trim().toLowerCase();
+    if (!s) return perPickRevenue;
+    return perPickRevenue.filter(({ pick }) => pick.title.toLowerCase().includes(s) || pick.league.toLowerCase().includes(s));
+  }, [perPickRevenue, pickSearch]);
+
+  const pickTotalPages = Math.max(1, Math.ceil(filteredPickRevenue.length / PICK_PAGE_SIZE));
+  const pagedPickRevenue = useMemo(() => {
+    const start = (pickPage - 1) * PICK_PAGE_SIZE;
+    return filteredPickRevenue.slice(start, start + PICK_PAGE_SIZE);
+  }, [filteredPickRevenue, pickPage]);
+
+  // Any change upstream (search text, or the date range reshaping the
+  // underlying list) can leave pickPage past the new last page — reset to
+  // page 1 rather than render an empty page.
+  useEffect(() => { setPickPage(1); }, [pickSearch, pickSort, dateFrom, dateTo]);
 
   const maxRev = byLeague[0]?.[1] || 1;
   const finished = filteredPicks.filter((p) => p.outcome !== "PENDING");
@@ -1479,17 +1677,45 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Revenus par Pick</div>
-          {perPickRevenue.length === 0 ? <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>Aucune donnée</div> :
-            perPickRevenue.map(({ pick, unlocks, revenue }, i) => (
-              <div key={pick._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: i < perPickRevenue.length - 1 ? `1px solid ${C.border}` : "none", gap: 12 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, color: C.text, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pick.title}</div>
-                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{unlocks} débloquage{unlocks !== 1 ? "s" : ""}</div>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Revenus par Pick</span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                style={{ ...iStyle, padding: "6px 10px", fontSize: 11, width: 180 }}
+                placeholder="Rechercher un pick…"
+                value={pickSearch}
+                onChange={(e) => setPickSearch(e.target.value)}
+              />
+              <select
+                style={{ ...iStyle, padding: "6px 10px", fontSize: 11, cursor: "pointer" }}
+                value={pickSort}
+                onChange={(e) => setPickSort(e.target.value as "revenue" | "date")}
+              >
+                <option value="revenue">Trier par revenu</option>
+                <option value="date">Trier par date</option>
+              </select>
+            </div>
+          </div>
+          {filteredPickRevenue.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
+              {pickSearch ? "Aucun résultat pour cette recherche." : "Aucune donnée"}
+            </div>
+          ) : (
+            <>
+              {pagedPickRevenue.map(({ pick, unlocks, revenue }, i) => (
+                <div key={pick._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: i < pagedPickRevenue.length - 1 ? `1px solid ${C.border}` : "none", gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: C.text, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pick.title}</div>
+                    <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{unlocks} débloquage{unlocks !== 1 ? "s" : ""}</div>
+                  </div>
+                  <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, flexShrink: 0 }}>{formatCFA(revenue)}</div>
                 </div>
-                <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, flexShrink: 0 }}>{formatCFA(revenue)}</div>
+              ))}
+              <div style={{ padding: "0 16px" }}>
+                <Pagination page={pickPage} totalPages={pickTotalPages} total={filteredPickRevenue.length} onChange={setPickPage} />
               </div>
-            ))}
+            </>
+          )}
         </div>
 
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
@@ -2171,15 +2397,50 @@ function SettingsTab() {
 }
 
 // ─── Conversation Thread Modal ─────────────────────────────────────────────────
+// How long a typing ping stays "fresh" before the indicator hides itself
+// again, and the minimum gap between pings the reply box sends — mirrors
+// the same constants in ChatWidget.tsx.
+const TYPING_TTL_MS = 6000;
+const TYPING_PING_THROTTLE_MS = 2000;
+
 function ConversationModal({ conversation, subscription, onClose, onUpdate }: { conversation: Conversation; subscription?: ApiUser["subscription"]; onClose: () => void; onUpdate: (c: Conversation) => void }) {
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [togglingStatus, setTogglingStatus] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [busyMessageId, setBusyMessageId] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(Date.now());
+  const lastTypingPingRef = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [conversation.messages.length]);
+
+  // Faster-than-the-list poll while a thread is open, so a new visitor
+  // message and the typing indicator both show up promptly — the
+  // Messages tab's own list refresh (in the parent) only runs every 15s,
+  // which would otherwise make "typing…" feel stuck. Mirrors the same
+  // open-state poll bump ChatWidget.tsx does for the visitor side.
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    let cancelled = false;
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/admin/conversations/${conversation._id}`, { credentials: "include" });
+        const data = await res.json();
+        if (!cancelled && data?.success) onUpdate(data.data);
+      } catch { /* try again on the next tick */ }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(id); clearInterval(poll); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation._id]);
+
+  const isUserTyping = useMemo(() => {
+    if (!conversation.userTypingAt) return false;
+    return nowTick - new Date(conversation.userTypingAt).getTime() < TYPING_TTL_MS;
+  }, [conversation.userTypingAt, nowTick]);
 
   const handleReply = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2200,6 +2461,57 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
       }
     } catch { /* keep draft on failure */ }
     finally { setSending(false); }
+  };
+
+  const handleReplyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setReply(value);
+    if (!value.trim()) return;
+    const now = Date.now();
+    if (now - lastTypingPingRef.current < TYPING_PING_THROTTLE_MS) return;
+    lastTypingPingRef.current = now;
+    fetch(`/api/admin/conversations/${conversation._id}/typing`, { method: "POST", credentials: "include" })
+      .catch(() => { /* best-effort — a missed ping just means a slightly late indicator */ });
+  };
+
+  const startEdit = (m: ChatMessage) => {
+    if (!m._id) return;
+    setEditingId(m._id);
+    setEditText(m.text);
+  };
+  const cancelEdit = () => { setEditingId(null); setEditText(""); };
+
+  const saveEdit = async (id: string) => {
+    const text = editText.trim();
+    if (!text) return;
+    setBusyMessageId(id);
+    try {
+      const res = await fetch(`/api/admin/conversations/${conversation._id}/messages/${id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (data?.success) onUpdate(data.data);
+    } catch { /* leave editing open so the admin can retry */ return; }
+    finally { setBusyMessageId(null); }
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const deleteMessage = async (id: string) => {
+    if (!confirm("Supprimer ce message ?")) return;
+    setBusyMessageId(id);
+    try {
+      const res = await fetch(`/api/admin/conversations/${conversation._id}/messages/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (data?.success) onUpdate(data.data);
+    } catch { /* message just stays if the request failed */ }
+    finally { setBusyMessageId(null); }
   };
 
   const toggleStatus = async () => {
@@ -2249,35 +2561,82 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
           {conversation.messages.length === 0 ? (
             <div style={{ margin: "auto", color: C.muted, fontSize: 12 }}>Aucun message pour l’instant.</div>
           ) : (
-            conversation.messages.map((m, i) => (
-              <div key={m._id || i} style={{
-                alignSelf: m.sender === "ADMIN" ? "flex-end" : "flex-start",
-                maxWidth: "78%",
-                background: m.sender === "ADMIN" ? C.gold : C.dark4,
-                color: m.sender === "ADMIN" ? C.dark : C.text,
-                border: m.sender === "ADMIN" ? "none" : `1px solid ${C.border}`,
-                borderRadius: 12,
-                borderBottomRightRadius: m.sender === "ADMIN" ? 3 : 12,
-                borderBottomLeftRadius: m.sender === "USER" ? 3 : 12,
-                padding: "9px 12px",
-                fontSize: 13,
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}>
-                {m.text}
-                <div style={{ fontSize: 9, marginTop: 3, opacity: 0.6 }}>
-                  {new Date(m.createdAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            conversation.messages.map((m, i) => {
+              const isOwn = m.sender === "ADMIN";
+              const isEditing = isOwn && editingId === m._id;
+              const isBusy = busyMessageId === m._id;
+              return (
+                <div key={m._id || i} style={{
+                  alignSelf: isOwn ? "flex-end" : "flex-start",
+                  maxWidth: "78%",
+                  background: isOwn ? C.gold : C.dark4,
+                  color: isOwn ? C.dark : C.text,
+                  border: isOwn ? "none" : `1px solid ${C.border}`,
+                  borderRadius: 12,
+                  borderBottomRightRadius: isOwn ? 3 : 12,
+                  borderBottomLeftRadius: m.sender === "USER" ? 3 : 12,
+                  padding: "9px 12px",
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  opacity: isBusy ? 0.6 : 1,
+                }}>
+                  {isEditing ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <textarea
+                        autoFocus
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        maxLength={2000}
+                        rows={2}
+                        style={{
+                          background: "rgba(0,0,0,0.08)", border: "none", borderRadius: 6,
+                          color: C.dark, fontSize: 13, fontFamily: "inherit", padding: "6px 8px",
+                          resize: "none", outline: "none", minWidth: 200,
+                        }}
+                      />
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button type="button" onClick={cancelEdit} style={{ background: "transparent", border: "none", color: C.dark, opacity: 0.7, fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: "2px 6px" }}>
+                          Annuler
+                        </button>
+                        <button type="button" onClick={() => saveEdit(m._id!)} disabled={!editText.trim() || isBusy} style={{ background: C.dark, color: C.gold, border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: "4px 10px", opacity: !editText.trim() || isBusy ? 0.5 : 1 }}>
+                          OK
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
+                        <span style={{ fontSize: 9, opacity: 0.6 }}>
+                          {new Date(m.createdAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                          {m.editedAt ? " · modifié" : ""}
+                        </span>
+                        {isOwn && m._id && (
+                          <span style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+                            <button type="button" onClick={() => startEdit(m)} disabled={isBusy} title="Modifier" style={{ background: "none", border: "none", padding: 0, cursor: isBusy ? "not-allowed" : "pointer", opacity: 0.65, color: C.dark, display: "flex" }}>
+                              <Icons.edit />
+                            </button>
+                            <button type="button" onClick={() => deleteMessage(m._id!)} disabled={isBusy} title="Supprimer" style={{ background: "none", border: "none", padding: 0, cursor: isBusy ? "not-allowed" : "pointer", opacity: 0.65, color: C.dark, display: "flex" }}>
+                              <Icons.trash />
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
+          )}
+          {isUserTyping && (
+            <TypingIndicator align="left" bubbleColor={C.dark4} borderColor={C.border} dotColor={C.muted} />
           )}
         </div>
 
         <form onSubmit={handleReply} style={{ display: "flex", gap: 8, padding: 14, borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
           <input
             value={reply}
-            onChange={(e) => setReply(e.target.value)}
+            onChange={handleReplyChange}
             placeholder="Répondre…"
             maxLength={2000}
             style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 20, color: C.text, fontSize: 13, padding: "10px 14px", outline: "none", fontFamily: "inherit", minWidth: 0 }}

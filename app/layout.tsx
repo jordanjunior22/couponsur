@@ -7,6 +7,7 @@ import Script from "next/script";
 import PWAInstallButton from "@/components/PWAInstallButton";
 import ChatWidget from "@/components/ChatWidget";
 import AnnouncementBanner from "@/components/AnnouncementBanner";
+import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -71,6 +72,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <AuthProvider>
           <LoadWrapper>
+            <PushNotificationPrompt />
             <AnnouncementBanner />
             {children}
             <PWAInstallButton />

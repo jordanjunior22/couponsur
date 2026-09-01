@@ -4,6 +4,7 @@ import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { comboOutcome } from "@/lib/gradeHelpers";
+import { sendPushToAll } from "@/lib/webpush";
 
 // ─── GET ONE PICK (PUBLIC) ───────────────────────────────
 export async function GET(
@@ -79,6 +80,11 @@ export async function PUT(
       body.match_date = new Date(body.match_date);
     }
 
+    // Needed to detect the false→true publish transition below — a
+    // second write to fetch the "before" state, since findByIdAndUpdate
+    // only ever hands back one side of the change.
+    const wasPublished = (await Pick.findById(id).select("is_published"))?.is_published ?? false;
+
     const updatedPick = await Pick.findByIdAndUpdate(
       id,
       body,
@@ -93,6 +99,17 @@ export async function PUT(
         { success: false, message: "Pick not found" },
         { status: 404 }
       );
+    }
+
+    // Only notify on the actual publish transition — not on every edit
+    // to an already-published pick (which would spam subscribers on
+    // every typo fix or odds tweak).
+    if (!wasPublished && updatedPick.is_published) {
+      sendPushToAll({
+        title: "🔥 Nouveau pronostic disponible",
+        body: `${updatedPick.title} — ${updatedPick.league}`,
+        url: "/",
+      }).catch((e) => console.error("Push on pick publish failed:", e));
     }
 
     return NextResponse.json({

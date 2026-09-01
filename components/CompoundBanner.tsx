@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo } from "react";
+import { Fragment, useState, useMemo } from "react";
 
 function fmt(n: number) {
   return Math.round(n).toLocaleString("fr-FR");
@@ -15,38 +15,79 @@ interface BetRow {
   isGoal: boolean;
 }
 
+// Safety cap on the simulation loop — at low risk % combined with a low
+// odd, the balance can grow so slowly that "reaching the goal" would take
+// an unreasonable number of consecutive wins. We stop here and say so,
+// rather than simulate thousands of rows.
+const MAX_BETS = 500;
+
+// Presets shown as quick-pick chips. 10% is the recommended default —
+// the whole point of this rework is that a buyer no longer has to stake
+// their entire balance (100%, the old "tout miser" behavior) to see their
+// capital grow; a fixed, small fraction per bet means one loss never
+// wipes them out.
+const RISK_PRESETS = [
+  { value: 5, label: "5%" },
+  { value: 10, label: "10%", recommended: true },
+  { value: 20, label: "20%" },
+  { value: 50, label: "50%" },
+  { value: 100, label: "100% (tout)", danger: true },
+];
+
+// Condenses a long simulation down to a readable table: the first few
+// bets, every milestone/goal row, and the last few — instead of
+// rendering hundreds of rows when low risk + low odds make the climb
+// slow. Gaps in the bet number sequence are marked so the reader knows
+// rows were skipped, not that the data is missing.
+function sampleRows(rows: BetRow[], maxShown = 24): (BetRow & { gapBefore?: boolean })[] {
+  if (rows.length <= maxShown) return rows;
+  const edgeCount = 6;
+  const head = rows.slice(0, edgeCount);
+  const tail = rows.slice(-edgeCount);
+  const middle = rows.filter((r, i) => i >= edgeCount && i < rows.length - edgeCount && (r.isMilestone || r.isGoal));
+  const byN = new Map<number, BetRow>();
+  [...head, ...middle, ...tail].forEach((r) => byN.set(r.n, r));
+  const sorted = [...byN.values()].sort((a, b) => a.n - b.n);
+  return sorted.map((r, i) => ({ ...r, gapBefore: i > 0 && r.n - sorted[i - 1].n > 1 }));
+}
+
 export function CompoundBetBanner() {
   const [open, setOpen] = useState(false);
-  const [start, setStart] = useState(1000);
+  const [start, setStart] = useState(10000);
   const [odd, setOdd] = useState(1.5);
   const [goal, setGoal] = useState(100000);
+  const [riskPct, setRiskPct] = useState(10);
 
-  const { rows, bets, mult } = useMemo(() => {
+  const { rows, bets, mult, reached } = useMemo(() => {
     let balance = start;
     let bets = 0;
     const rows: BetRow[] = [];
-    const MAX = 50;
+    const stakeFraction = riskPct / 100;
 
-    while (balance < goal && bets < MAX) {
-      const mise = balance;
-      const gain = mise * odd;
+    while (balance < goal && bets < MAX_BETS) {
+      const mise = balance * stakeFraction;
+      const profit = mise * (odd - 1);
       bets++;
       const prev = balance;
-      balance = gain;
+      balance = balance + profit;
       const pct = Math.min(100, Math.round((balance / goal) * 100));
       const isMilestone = [10, 25, 50, 75].some(
         (p) => prev < goal * (p / 100) && balance >= goal * (p / 100)
       );
       const isGoal = balance >= goal;
-      rows.push({ n: bets, mise: prev, gain: gain - prev, newBal: balance, pct, isMilestone, isGoal });
+      rows.push({ n: bets, mise, gain: profit, newBal: balance, pct, isMilestone, isGoal });
       if (isGoal) break;
     }
 
-    const mult = Math.round(goal / start);
-    return { rows, bets, mult };
-  }, [start, odd, goal]);
+    const finalBal = rows.length ? rows[rows.length - 1].newBal : start;
+    const mult = Math.round((finalBal / start) * 10) / 10;
+    const reached = rows.length > 0 && rows[rows.length - 1].isGoal;
+    return { rows, bets, mult, reached };
+  }, [start, odd, goal, riskPct]);
 
   const finalBal = rows.length ? rows[rows.length - 1].newBal : start;
+  const displayRows = useMemo(() => sampleRows(rows), [rows]);
+  const firstStake = rows[0]?.mise ?? start * (riskPct / 100);
 
   return (
     <>
@@ -142,14 +183,25 @@ export function CompoundBetBanner() {
         .cb-metric-sub { font-size: 10px; color: #7A8399; margin-top: 3px; }
         .cb-bar-track { width: 100%; height: 10px; background: #111418; border-radius: 5px; overflow: hidden; border: 1px solid #2A3140; }
         .cb-bar-fill { height: 100%; border-radius: 5px; background: #1565C0; transition: width 0.5s ease; }
-        .cb-table-wrap { overflow-x: auto; }
+        .cb-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
         .cb-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 300px; }
-        .cb-table th { text-align: left; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: #7A8399; padding: 6px 8px; border-bottom: 1px solid #2A3140; font-weight: 600; }
+        .cb-table th { text-align: left; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: #7A8399; padding: 6px 8px; border-bottom: 1px solid #2A3140; font-weight: 600; position: sticky; top: 0; background: #1A1F26; }
         .cb-table td { padding: 8px 8px; border-bottom: 1px solid #111418; color: #E8EAF0; }
         .cb-table tr.milestone td { background: rgba(255,215,0,0.06); }
         .cb-table tr.goal td { background: rgba(29,158,117,0.12); color: #6FCFB0; font-weight: 600; }
+        .cb-table tr.gap td { color: #4A5568; font-size: 10px; text-align: center; letter-spacing: 2px; }
         .cb-warn { background: rgba(186,117,23,0.1); border-left: 3px solid #BA7517; border-radius: 0 8px 8px 0; padding: 10px 14px; font-size: 12px; color: #EF9F27; line-height: 1.5; margin-bottom: 12px; }
         .cb-green { background: rgba(29,158,117,0.1); border-left: 3px solid #1D9E75; border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 13px; color: #6FCFB0; line-height: 1.6; margin-top: 4px; }
+        .cb-shield { background: rgba(21,101,192,0.1); border-left: 3px solid #1565C0; border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 12px; color: #8DB8E8; line-height: 1.6; margin-bottom: 12px; }
+        .cb-risk-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .cb-risk-chip {
+          background: #111418; border: 1px solid #2A3140; border-radius: 8px;
+          padding: 8px 14px; font-size: 12px; font-weight: 700; color: #7A8399;
+          cursor: pointer; transition: all 0.15s; font-family: inherit;
+        }
+        .cb-risk-chip.active { background: rgba(21,101,192,0.15); border-color: #1565C0; color: #42A5F5; }
+        .cb-risk-chip.active.danger { background: rgba(239,68,68,0.12); border-color: #EF4444; color: #EF4444; }
+        .cb-risk-chip .rec { display: block; font-size: 8px; letter-spacing: 1px; text-transform: uppercase; color: #22C55E; margin-top: 2px; }
         @media (max-width: 480px) {
           .cb-metric-val { font-size: 18px; }
           .cb-table { font-size: 11px; }
@@ -163,9 +215,9 @@ export function CompoundBetBanner() {
         {/* ── Toggle Button ─────────────────────────────────────────────────── */}
         <button className="cb-toggle" onClick={() => setOpen((v) => !v)}>
           <div className="cb-toggle-left">
-            <div className="cb-toggle-icon">🚀</div>
+            <div className="cb-toggle-icon">🛡️</div>
             <div>
-              <div className="cb-toggle-label">Stratégie · Capitalisation</div>
+              <div className="cb-toggle-label">Stratégie · Gestion du risque</div>
               <div className="cb-toggle-title">
                 De <span>{fmt(start)}</span> à <span>{fmt(goal)}</span> FCFA
               </div>
@@ -173,7 +225,7 @@ export function CompoundBetBanner() {
           </div>
           <div className="cb-toggle-right">
             <div className="cb-toggle-badge">
-              {bets} paris · x{mult}
+              {riskPct}% / pari · {reached ? `${bets} paris` : `500+ paris`}
             </div>
             <div className={`cb-toggle-chevron${open ? " open" : ""}`}>▾</div>
           </div>
@@ -185,12 +237,36 @@ export function CompoundBetBanner() {
 
             {/* Hero */}
             <div className="cb-hero">
-              <div className="cb-hero-sub">🚀 Le pouvoir de la capitalisation</div>
+              <div className="cb-hero-sub">🛡️ Fais grandir ton capital sans jamais tout risquer</div>
               <div className="cb-hero-title">
                 De <span>{fmt(start)}</span> à <span>{fmt(goal)}</span> FCFA
               </div>
               <div className="cb-hero-desc">
-                Tu mises tout à chaque fois. Chaque victoire devient ta prochaine mise.
+                Tu ne risques que {riskPct}% de ton capital à chaque pari. Le reste ({100 - riskPct}%) reste toujours protégé.
+              </div>
+            </div>
+
+            {/* Risk management */}
+            <div className="cb-card">
+              <div className="cb-card-title">🛡️ Combien risquer par pari ?</div>
+              <div className="cb-risk-row">
+                {RISK_PRESETS.map((p) => (
+                  <button
+                    key={p.value}
+                    className={`cb-risk-chip${riskPct === p.value ? " active" : ""}${p.danger ? " danger" : ""}`}
+                    onClick={() => setRiskPct(p.value)}
+                  >
+                    {p.label}
+                    {p.recommended && <span className="rec">Recommandé</span>}
+                  </button>
+                ))}
+              </div>
+              <div className="cb-shield">
+                🛡️ À {riskPct}% par pari, ta mise de départ est de <strong>{fmt(firstStake)} FCFA</strong>.
+                Si tu perds ce pari, il te reste <strong>{100 - riskPct}%</strong> de ton capital pour continuer —
+                {riskPct >= 100
+                  ? " contrairement à une mise à 100%, où une seule défaite efface tout ton capital."
+                  : " une stratégie \"tout miser\" (100%), elle, peut tout perdre en un seul pari raté."}
               </div>
             </div>
 
@@ -200,7 +276,7 @@ export function CompoundBetBanner() {
               <div className="cb-ctrl-row">
                 <div className="cb-ctrl">
                   <label>Mise de départ</label>
-                  <input type="range" min={500} max={10000} step={500}
+                  <input type="range" min={1000} max={1000000} step={1000}
                     value={start} onChange={(e) => setStart(Number(e.target.value))} />
                   <span>{fmt(start)} FCFA</span>
                 </div>
@@ -212,7 +288,7 @@ export function CompoundBetBanner() {
                 </div>
                 <div className="cb-ctrl">
                   <label>Objectif retrait</label>
-                  <input type="range" min={10000} max={500000} step={10000}
+                  <input type="range" min={10000} max={2000000} step={10000}
                     value={goal} onChange={(e) => setGoal(Number(e.target.value))} />
                   <span>{fmt(goal)} FCFA</span>
                 </div>
@@ -221,7 +297,8 @@ export function CompoundBetBanner() {
               <div className="cb-grid">
                 {[
                   { label: "Départ", val: fmt(start), sub: "FCFA", color: "#1565C0" },
-                  { label: "Paris gagnants", val: String(bets), sub: "pour atteindre l'objectif", color: "#E8EAF0" },
+                  { label: "Mise / pari", val: `${riskPct}%`, sub: `≈ ${fmt(firstStake)} FCFA au départ`, color: "#42A5F5" },
+                  { label: "Paris gagnants", val: reached ? String(bets) : `500+`, sub: reached ? "pour atteindre l'objectif" : "objectif non atteint", color: "#E8EAF0" },
                   { label: "Objectif", val: fmt(goal), sub: "FCFA à retirer", color: "#FFD700" },
                   { label: "Multiplicateur", val: `x${mult}`, sub: "ton argent initial", color: "#1D9E75" },
                 ].map((m) => (
@@ -236,7 +313,7 @@ export function CompoundBetBanner() {
               {/* Progress bar */}
               <div style={{ marginBottom: 4 }}>
                 <div style={{ fontSize: 10, color: "#7A8399", marginBottom: 5, textTransform: "uppercase", letterSpacing: "1px" }}>
-                  Progression vers l'objectif
+                  Progression vers l&apos;objectif
                 </div>
                 <div className="cb-bar-track">
                   <div className="cb-bar-fill" style={{ width: "3%" }} />
@@ -250,46 +327,57 @@ export function CompoundBetBanner() {
             </div>
 
             {/* Warning */}
-            {bets >= 15 && (
+            {!reached ? (
               <div className="cb-warn">
-                ⚠️ Il faut beaucoup de paris consécutifs gagnants. Plus la cote est élevée, moins tu en as besoin — mais le risque augmente aussi.
+                ⚠️ Avec une mise de {riskPct}% et une cote de {odd.toFixed(2)}, la croissance est trop lente pour
+                atteindre l&apos;objectif en un nombre raisonnable de paris. Augmente la mise, la cote, ou réduis l&apos;objectif.
+              </div>
+            ) : bets >= 40 && (
+              <div className="cb-warn">
+                ⚠️ Il faut {bets} paris consécutifs gagnants. C&apos;est le prix de la sécurité : plus la mise par pari est
+                petite, plus la progression est lente — mais ton capital ne peut jamais partir en un seul pari perdu.
               </div>
             )}
 
             {/* Table */}
             <div className="cb-card">
-              <div className="cb-card-title">📈 Chaque pari, ton argent grandit</div>
+              <div className="cb-card-title">📈 Chaque pari, ton argent grandit — en sécurité</div>
               <div className="cb-table-wrap">
                 <table className="cb-table">
                   <thead>
                     <tr>
                       <th>Pari</th>
-                      <th>Mise</th>
+                      <th>Mise ({riskPct}%)</th>
                       <th>Gain</th>
                       <th>Nouveau solde</th>
                       <th>Progression</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((r) => (
-                      <tr key={r.n} className={r.isGoal ? "goal" : r.isMilestone ? "milestone" : ""}>
-                        <td style={{ fontWeight: 600 }}>#{r.n}</td>
-                        <td>{fmt(r.mise)} F</td>
-                        <td style={{ color: "#FFD700" }}>+{fmt(r.gain)} F</td>
-                        <td style={{ color: r.isGoal ? "#6FCFB0" : "#22C55E", fontWeight: r.isGoal ? 700 : 400 }}>
-                          {fmt(r.newBal)} F
-                        </td>
-                        <td>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <div style={{ width: 60, height: 6, background: "#2A3140", borderRadius: 3, overflow: "hidden" }}>
-                              <div style={{ width: `${r.pct}%`, height: "100%", background: r.isGoal ? "#1D9E75" : "#1565C0", borderRadius: 3 }} />
+                    {displayRows.map((r) => (
+                      <Fragment key={r.n}>
+                        {r.gapBefore && (
+                          <tr className="gap"><td colSpan={5}>⋯</td></tr>
+                        )}
+                        <tr className={r.isGoal ? "goal" : r.isMilestone ? "milestone" : ""}>
+                          <td style={{ fontWeight: 600 }}>#{r.n}</td>
+                          <td>{fmt(r.mise)} F</td>
+                          <td style={{ color: "#FFD700" }}>+{fmt(r.gain)} F</td>
+                          <td style={{ color: r.isGoal ? "#6FCFB0" : "#22C55E", fontWeight: r.isGoal ? 700 : 400 }}>
+                            {fmt(r.newBal)} F
+                          </td>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ width: 60, height: 6, background: "#2A3140", borderRadius: 3, overflow: "hidden" }}>
+                                <div style={{ width: `${r.pct}%`, height: "100%", background: r.isGoal ? "#1D9E75" : "#1565C0", borderRadius: 3 }} />
+                              </div>
+                              <span style={{ fontSize: 10, color: r.isGoal ? "#6FCFB0" : "#7A8399" }}>
+                                {r.pct}%{r.isGoal ? " 🎉" : ""}
+                              </span>
                             </div>
-                            <span style={{ fontSize: 10, color: r.isGoal ? "#6FCFB0" : "#7A8399" }}>
-                              {r.pct}%{r.isGoal ? " 🎉" : ""}
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
+                          </td>
+                        </tr>
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
@@ -297,13 +385,21 @@ export function CompoundBetBanner() {
             </div>
 
             {/* Conclusion */}
-            <div className="cb-green">
-              En partant de <strong>{fmt(start)} FCFA</strong> et en misant tout à chaque fois à cote{" "}
-              <strong>{odd.toFixed(2)}</strong>, il te faut seulement{" "}
-              <strong>{bets} paris gagnants consécutifs</strong> pour atteindre{" "}
-              <strong>{fmt(Math.round(finalBal))} FCFA</strong> — soit{" "}
-              <strong>x{mult} ton investissement initial</strong>. 🚀
-            </div>
+            {reached ? (
+              <div className="cb-green">
+                En partant de <strong>{fmt(start)} FCFA</strong> et en risquant seulement{" "}
+                <strong>{riskPct}% de ton capital</strong> à chaque pari à cote <strong>{odd.toFixed(2)}</strong>, il te faut{" "}
+                <strong>{bets} paris gagnants consécutifs</strong> pour atteindre{" "}
+                <strong>{fmt(Math.round(finalBal))} FCFA</strong> — soit{" "}
+                <strong>x{mult} ton investissement initial</strong>, sans jamais exposer tout ton capital en un seul pari. 🛡️
+              </div>
+            ) : (
+              <div className="cb-green">
+                Après {MAX_BETS} paris à {riskPct}% et cote {odd.toFixed(2)}, ton capital serait de{" "}
+                <strong>{fmt(Math.round(finalBal))} FCFA</strong> (x{mult}) — augmente la mise ou la cote pour
+                atteindre {fmt(goal)} FCFA plus vite. 🛡️
+              </div>
+            )}
 
           </div>
         </div>

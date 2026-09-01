@@ -42,7 +42,7 @@ const formatCameroonPhone = (raw: string): string => {
 
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
-  const { user, login, signup, logout, loading: authLoading, hasActiveSubscription } = useAuth();
+  const { user, login, signup, logout, changePassword, loading: authLoading, hasActiveSubscription } = useAuth();
   const isSubscribed = !!user && hasActiveSubscription();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -57,6 +57,60 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
 
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
+
+  // ─── CHANGE PASSWORD ─────────────────────────────────────────
+  // Second half of the "forgot password" flow: an admin resets a
+  // locked-out user to a temporary password from the dashboard, the user
+  // logs in with it, then sets a new one here that only they know.
+  const [changePwOpen, setChangePwOpen] = useState(false);
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmNewPw, setConfirmNewPw] = useState("");
+  const [showCurrentPw, setShowCurrentPw] = useState(false);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [showConfirmNewPw, setShowConfirmNewPw] = useState(false);
+  const [changePwLoading, setChangePwLoading] = useState(false);
+  const [changePwFeedback, setChangePwFeedback] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const resetChangePwForm = () => {
+    setCurrentPw("");
+    setNewPw("");
+    setConfirmNewPw("");
+    setChangePwFeedback(null);
+    setShowCurrentPw(false);
+    setShowNewPw(false);
+    setShowConfirmNewPw(false);
+  };
+
+  const handleChangePassword = async () => {
+    if (!currentPw) {
+      setChangePwFeedback({ text: "Entrez votre mot de passe actuel", ok: false });
+      return;
+    }
+    if (newPw.length < 6) {
+      setChangePwFeedback({ text: "Le nouveau mot de passe doit contenir au moins 6 caractères", ok: false });
+      return;
+    }
+    if (newPw !== confirmNewPw) {
+      setChangePwFeedback({ text: "Les nouveaux mots de passe ne correspondent pas", ok: false });
+      return;
+    }
+
+    try {
+      setChangePwLoading(true);
+      setChangePwFeedback(null);
+      await changePassword(currentPw, newPw);
+      setChangePwFeedback({ text: "Mot de passe changé avec succès !", ok: true });
+      setCurrentPw("");
+      setNewPw("");
+      setConfirmNewPw("");
+      setTimeout(() => { setChangePwOpen(false); resetChangePwForm(); }, 1200);
+    } catch (error: any) {
+      setChangePwFeedback({ text: error.message, ok: false });
+    } finally {
+      setChangePwLoading(false);
+    }
+  };
 
   // ─── PHONE INPUT ─────────────────────────────────────────────
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -224,6 +278,18 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
                   </button>
 
                   <button
+                    style={menuItemStyle}
+                    onClick={() => {
+                      resetChangePwForm();
+                      setChangePwOpen(true);
+                      setMenuOpen(false);
+                    }}
+                  >
+                    <span style={menuIconStyle}>🔑</span>
+                    Changer le mot de passe
+                  </button>
+
+                  <button
                     style={{ ...menuItemStyle, color: "#EF4444" }}
                     onClick={handleLogout}
                   >
@@ -359,6 +425,85 @@ export function UserMenu({ onOpenHistory }: { onOpenHistory: () => void }) {
                 {mode === "login" ? "S'inscrire" : "Se connecter"}
               </span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── CHANGE PASSWORD MODAL ───────────────────────────── */}
+      {changePwOpen && (
+        <div style={overlayStyle} onClick={() => setChangePwOpen(false)}>
+          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setChangePwOpen(false)} style={closeBtnStyle}>✕</button>
+
+            <div style={headingStyle}>Changer le mot de passe 🔑</div>
+            <div style={subheadingStyle}>
+              Utilisez le mot de passe temporaire fourni par le support, puis choisissez-en un nouveau.
+            </div>
+
+            <label style={labelStyle}>Mot de passe actuel</label>
+            <div style={inputWrapStyle}>
+              <input
+                type={showCurrentPw ? "text" : "password"}
+                placeholder="Mot de passe fourni par le support"
+                value={currentPw}
+                onChange={(e) => { setCurrentPw(e.target.value); setChangePwFeedback(null); }}
+                style={{ ...fieldStyle, paddingRight: 40 }}
+              />
+              <button onClick={() => setShowCurrentPw(!showCurrentPw)} style={eyeBtnStyle}>
+                {showCurrentPw ? "🙈" : "👁"}
+              </button>
+            </div>
+
+            <label style={{ ...labelStyle, marginTop: 12 }}>Nouveau mot de passe</label>
+            <div style={inputWrapStyle}>
+              <input
+                type={showNewPw ? "text" : "password"}
+                placeholder="Min. 6 caractères"
+                value={newPw}
+                onChange={(e) => { setNewPw(e.target.value); setChangePwFeedback(null); }}
+                style={{ ...fieldStyle, paddingRight: 40 }}
+              />
+              <button onClick={() => setShowNewPw(!showNewPw)} style={eyeBtnStyle}>
+                {showNewPw ? "🙈" : "👁"}
+              </button>
+            </div>
+
+            <label style={{ ...labelStyle, marginTop: 12 }}>Confirmer le nouveau mot de passe</label>
+            <div style={inputWrapStyle}>
+              <input
+                type={showConfirmNewPw ? "text" : "password"}
+                placeholder="Répétez le nouveau mot de passe"
+                value={confirmNewPw}
+                onChange={(e) => { setConfirmNewPw(e.target.value); setChangePwFeedback(null); }}
+                style={{ ...fieldStyle, paddingRight: 40 }}
+              />
+              <button onClick={() => setShowConfirmNewPw(!showConfirmNewPw)} style={eyeBtnStyle}>
+                {showConfirmNewPw ? "🙈" : "👁"}
+              </button>
+            </div>
+
+            {changePwFeedback && (
+              <div style={{
+                ...feedbackStyle,
+                background: changePwFeedback.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
+                borderColor: changePwFeedback.ok ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)",
+                color: changePwFeedback.ok ? "#4ade80" : "#f87171",
+              }}>
+                {changePwFeedback.ok ? "✅" : "⚠️"} {changePwFeedback.text}
+              </div>
+            )}
+
+            <button
+              disabled={changePwLoading}
+              onClick={handleChangePassword}
+              style={{
+                ...submitBtnStyle,
+                opacity: changePwLoading ? 0.65 : 1,
+                cursor: changePwLoading ? "not-allowed" : "pointer",
+              }}
+            >
+              {changePwLoading ? "Chargement..." : "Changer le mot de passe"}
+            </button>
           </div>
         </div>
       )}

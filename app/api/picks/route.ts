@@ -3,6 +3,7 @@ import Pick from "@/models/Picks";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { sendPushToAll } from "@/lib/webpush";
 // ─── GET: Fetch Picks ────────────────────────────────────
 export async function GET(req: NextRequest) {
     try {
@@ -100,6 +101,16 @@ export async function POST(req: NextRequest) {
             is_published: is_published ?? false,
             is_estimated_odds: is_estimated_odds ?? false,
         });
+
+        // Fire-and-forget — a push failure (or no subscribers yet) must
+        // never fail pick creation itself.
+        if (newPick.is_published) {
+            sendPushToAll({
+                title: "🔥 Nouveau pronostic disponible",
+                body: `${newPick.title} — ${newPick.league}`,
+                url: "/",
+            }).catch((e) => console.error("Push on pick create failed:", e));
+        }
 
         return NextResponse.json(
             { success: true, data: newPick },

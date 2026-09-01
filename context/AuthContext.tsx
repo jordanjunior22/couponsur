@@ -21,6 +21,7 @@ interface AuthContextType {
   login: (phone: string, password: string) => Promise<void>;
   signup: (phone: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   unlockPick: (pickId: string) => Promise<void>;
   refreshUser: () => Promise<void>;
   hasActiveSubscription: () => boolean;
@@ -94,6 +95,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setUser(data.user);
   };
 
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    const res = await fetch("/api/auth/change-password", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+      throw new Error(data.message);
+    }
+  };
+
   const unlockPick = async (pickId: string) => {
     if (!user) return;
 
@@ -123,7 +139,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signup, login, logout, unlockPick, refreshUser, hasActiveSubscription }}>
+    <AuthContext.Provider value={{ user, loading, signup, login, logout, changePassword, unlockPick, refreshUser, hasActiveSubscription }}>
       {children}
     </AuthContext.Provider>
   );

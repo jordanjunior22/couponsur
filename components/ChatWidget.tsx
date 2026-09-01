@@ -3,19 +3,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import TypingIndicator from "@/components/TypingIndicator";
 
 interface ChatMessage {
   _id?: string;
   sender: "USER" | "ADMIN";
   text: string;
   createdAt: string;
+  editedAt?: string | null;
 }
 
 interface Conversation {
   _id: string;
   status: "OPEN" | "RESOLVED";
   messages: ChatMessage[];
+  adminTypingAt?: string | null;
 }
+
+// How long a typing ping stays "fresh" before the indicator hides itself
+// again. Must comfortably outlast the poll interval below or the
+// indicator would flicker off between polls while still typing.
+const TYPING_TTL_MS = 6000;
+// Minimum gap between typing pings sent to the server — keystrokes fire
+// far faster than this, so every change would otherwise spam a request.
+const TYPING_PING_THROTTLE_MS = 2000;
 
 const C = {
   dark: "#0A0C0F", dark2: "#111418", dark3: "#1A1F26", dark4: "#222830",
@@ -38,6 +49,15 @@ export default function ChatWidget() {
   const [sending, setSending] = useState(false);
   const [lastSeen, setLastSeen] = useState<string>("1970-01-01T00:00:00.000Z");
   const [hydrated, setHydrated] = useState(false);
+
+  // ─── Edit / delete own messages ─────────────────────────────────────
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [busyMessageId, setBusyMessageId] = useState<string | null>(null);
+
+  // ─── "Agent is typing" indicator ────────────────────────────────────
+  const [nowTick, setNowTick] = useState(Date.now());
+  const lastTypingPingRef = useRef(0);
 
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -108,6 +128,20 @@ export default function ChatWidget() {
     ).length;
   }, [conversation, lastSeen]);
 
+  // Re-evaluate every second while the panel is open so the typing
+  // indicator fades out on its own between polls, instead of only
+  // updating (up to 4s late) when the next poll happens to land.
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [open]);
+
+  const isAdminTyping = useMemo(() => {
+    if (!conversation?.adminTypingAt) return false;
+    return nowTick - new Date(conversation.adminTypingAt).getTime() < TYPING_TTL_MS;
+  }, [conversation?.adminTypingAt, nowTick]);
+
   const handlePhoneSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = phoneInput.trim();
@@ -137,6 +171,63 @@ export default function ChatWidget() {
     } finally {
       setSending(false);
     }
+  };
+
+  const handleDraftChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setDraft(value);
+    if (!value.trim()) return;
+    const now = Date.now();
+    if (now - lastTypingPingRef.current < TYPING_PING_THROTTLE_MS) return;
+    lastTypingPingRef.current = now;
+    fetch("/api/chat/typing", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: effectivePhone }),
+    }).catch(() => { /* best-effort — a missed ping just means a slightly late indicator */ });
+  };
+
+  const startEdit = (m: ChatMessage) => {
+    if (!m._id) return;
+    setEditingId(m._id);
+    setEditText(m.text);
+  };
+  const cancelEdit = () => { setEditingId(null); setEditText(""); };
+
+  const saveEdit = async (id: string) => {
+    const text = editText.trim();
+    if (!text) return;
+    setBusyMessageId(id);
+    try {
+      const res = await fetch(`/api/chat/messages/${id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: effectivePhone, text }),
+      });
+      const data = await res.json();
+      if (data?.success) setConversation(data.data);
+    } catch { /* leave editing open so the admin can retry */ return; }
+    finally { setBusyMessageId(null); }
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const deleteMessage = async (id: string) => {
+    if (!confirm("Supprimer ce message ?")) return;
+    setBusyMessageId(id);
+    try {
+      const res = await fetch(`/api/chat/messages/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: effectivePhone }),
+      });
+      const data = await res.json();
+      if (data?.success) setConversation(data.data);
+    } catch { /* optimistic-free — message just stays if the request failed */ }
+    finally { setBusyMessageId(null); }
   };
 
   if (hidden || !hydrated || authLoading) return null;
@@ -200,28 +291,75 @@ export default function ChatWidget() {
                     Dites-nous en quoi nous pouvons vous aider 👋
                   </div>
                 ) : (
-                  conversation.messages.map((m, i) => (
-                    <div key={m._id || i} style={{
-                      alignSelf: m.sender === "USER" ? "flex-end" : "flex-start",
-                      maxWidth: "80%",
-                      background: m.sender === "USER" ? C.gold : C.dark4,
-                      color: m.sender === "USER" ? C.dark : C.text,
-                      border: m.sender === "USER" ? "none" : `1px solid ${C.border}`,
-                      borderRadius: 12,
-                      borderBottomRightRadius: m.sender === "USER" ? 3 : 12,
-                      borderBottomLeftRadius: m.sender === "ADMIN" ? 3 : 12,
-                      padding: "8px 11px",
-                      fontSize: 13,
-                      lineHeight: 1.5,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                    }}>
-                      {m.text}
-                      <div style={{ fontSize: 9, marginTop: 3, opacity: 0.6 }}>
-                        {new Date(m.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+                  conversation.messages.map((m, i) => {
+                    const isOwn = m.sender === "USER";
+                    const isEditing = isOwn && editingId === m._id;
+                    const isBusy = busyMessageId === m._id;
+                    return (
+                      <div key={m._id || i} style={{
+                        alignSelf: isOwn ? "flex-end" : "flex-start",
+                        maxWidth: "80%",
+                        background: isOwn ? C.gold : C.dark4,
+                        color: isOwn ? C.dark : C.text,
+                        border: isOwn ? "none" : `1px solid ${C.border}`,
+                        borderRadius: 12,
+                        borderBottomRightRadius: isOwn ? 3 : 12,
+                        borderBottomLeftRadius: m.sender === "ADMIN" ? 3 : 12,
+                        padding: "8px 11px",
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                        opacity: isBusy ? 0.6 : 1,
+                      }}>
+                        {isEditing ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            <textarea
+                              autoFocus
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              maxLength={2000}
+                              rows={2}
+                              style={{
+                                background: "rgba(0,0,0,0.08)", border: "none", borderRadius: 6,
+                                color: C.dark, fontSize: 13, fontFamily: "inherit", padding: "6px 8px",
+                                resize: "none", outline: "none", minWidth: 160,
+                              }}
+                            />
+                            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                              <button type="button" onClick={cancelEdit} style={{ background: "transparent", border: "none", color: C.dark, opacity: 0.7, fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: "2px 6px" }}>
+                                Annuler
+                              </button>
+                              <button type="button" onClick={() => saveEdit(m._id!)} disabled={!editText.trim() || isBusy} style={{ background: C.dark, color: C.gold, border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: "4px 10px", opacity: !editText.trim() || isBusy ? 0.5 : 1 }}>
+                                OK
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
+                              <span style={{ fontSize: 9, opacity: 0.6 }}>
+                                {new Date(m.createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+                                {m.editedAt ? " · modifié" : ""}
+                              </span>
+                              {isOwn && m._id && (
+                                <span style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+                                  <button type="button" onClick={() => startEdit(m)} disabled={isBusy} aria-label="Modifier" title="Modifier" style={{ background: "none", border: "none", padding: 0, cursor: isBusy ? "not-allowed" : "pointer", opacity: 0.65, color: C.dark, display: "flex" }}>
+                                    <EditIcon />
+                                  </button>
+                                  <button type="button" onClick={() => deleteMessage(m._id!)} disabled={isBusy} aria-label="Supprimer" title="Supprimer" style={{ background: "none", border: "none", padding: 0, cursor: isBusy ? "not-allowed" : "pointer", opacity: 0.65, color: C.dark, display: "flex" }}>
+                                    <TrashIcon />
+                                  </button>
+                                </span>
+                              )}
+                            </div>
+                          </>
+                        )}
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
+                )}
+                {isAdminTyping && (
+                  <TypingIndicator align="left" bubbleColor={C.dark4} borderColor={C.border} dotColor={C.muted} />
                 )}
               </div>
 
@@ -229,7 +367,7 @@ export default function ChatWidget() {
               <form onSubmit={handleSend} style={{ display: "flex", gap: 8, padding: 12, borderTop: `1px solid ${C.border}`, background: C.dark3, flexShrink: 0 }}>
                 <input
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={handleDraftChange}
                   placeholder="Écrivez votre message…"
                   maxLength={2000}
                   style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 20, color: C.text, fontSize: 13, padding: "9px 14px", outline: "none", fontFamily: "inherit", minWidth: 0 }}
@@ -296,6 +434,22 @@ function SendIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
       <path d="M14.5 1.5L7.5 14l-2-5.5-5.5-2z" fill="#0A0C0F" />
       <path d="M14.5 1.5L5.5 8.5" stroke="#0A0C0F" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 13 13" fill="none">
+      <path d="M9 2l2 2L4 11H2V9L9 2z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 13 13" fill="none">
+      <path d="M2 4h9M5 4V2.5h3V4M4 4l.5 7h4l.5-7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
