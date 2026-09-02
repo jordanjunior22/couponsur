@@ -3,6 +3,7 @@ import AnnouncementModel, { AnnouncementType } from "@/models/Announcement";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { sendPushToAll } from "@/lib/webpush";
 
 // ─── HELPER: REQUIRE ADMIN ───────────────────────────────
 async function requireAdmin() {
@@ -74,6 +75,18 @@ export async function POST(req: NextRequest) {
       expiresAt,
       isActive: true,
     });
+
+    // Fire-and-forget, same as the pick-publish hook (app/api/picks/route.ts)
+    // — a push failure (or no subscribers/VAPID keys configured yet) must
+    // never fail announcement creation itself. Always fires here since a
+    // new announcement is always created active.
+    if (created.isActive) {
+      sendPushToAll({
+        title: "📢 Nouvelle annonce",
+        body: created.title,
+        url: "/",
+      }).catch((e) => console.error("Push on announcement create failed:", e));
+    }
 
     return NextResponse.json({ success: true, data: created }, { status: 201 });
   } catch (error) {

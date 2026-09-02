@@ -3,6 +3,7 @@ import AnnouncementModel, { AnnouncementType } from "@/models/Announcement";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { sendPushToAll } from "@/lib/webpush";
 
 // ─── HELPER: REQUIRE ADMIN ───────────────────────────────
 async function requireAdmin() {
@@ -39,6 +40,11 @@ export async function PATCH(
     const body = await req.json();
     const updates: Record<string, unknown> = {};
 
+    // Needed to detect the false→true isActive transition below — a second
+    // read to get the "before" state, same double-fetch pattern used in
+    // app/api/picks/[id]/route.ts for wasPublished.
+    const wasActive = (await AnnouncementModel.findById(id).select("isActive"))?.isActive ?? false;
+
     if (body.title !== undefined) {
       const title = String(body.title).trim();
       if (!title) {
@@ -70,6 +76,17 @@ export async function PATCH(
 
     if (!updated) {
       return NextResponse.json({ success: false, message: "Announcement not found" }, { status: 404 });
+    }
+
+    // Only notify on the actual activation transition — not on every edit
+    // to an already-active announcement (would spam subscribers on every
+    // typo fix), same restraint as the pick-publish hook.
+    if (!wasActive && updated.isActive) {
+      sendPushToAll({
+        title: "📢 Nouvelle annonce",
+        body: updated.title,
+        url: "/",
+      }).catch((e) => console.error("Push on announcement activate failed:", e));
     }
 
     return NextResponse.json({ success: true, data: updated });
