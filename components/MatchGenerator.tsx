@@ -24,15 +24,29 @@ interface GenerateResponse {
   disclaimer?: string;
   requiresLogin?: boolean;
   requiresPremium?: boolean;
+  // Markets the caller asked for but weren't included because they're
+  // admin-restricted to premium and the caller isn't premium (see
+  // app/api/generate-matches/route.ts's inner gate).
+  restrictedMarkets?: string[];
 }
 
 type GenState = "idle" | "loading" | "result" | "error";
 
+// ─── Market selection ───────────────────────────────────────────────────────
+// Kept in sync with lib/predictionengine.ts's Market type and
+// app/api/generate-matches/route.ts's ALL_MARKETS/DEFAULT_MARKETS.
+const MARKET_LABELS: Record<string, string> = {
+  "1X2": "Résultat (1X2)",
+  DC: "Double Chance",
+  BTTS: "BTTS",
+  OU15: "+1.5 buts",
+  OU25: "+2.5 buts",
+  OU35: "+3.5 buts",
+};
+const ALL_MARKET_CODES = Object.keys(MARKET_LABELS);
+const DEFAULT_MARKET_CODES = ["1X2", "DC"];
+
 // ─── AI warning — always visible, never conditional on having a result ──────
-// Also does double duty as the tool's "what can it actually do" label: the
-// engine currently only qualifies match-winner / double-chance picks (see
-// the market filter in app/api/generate-matches/route.ts), so say that
-// plainly instead of implying it covers every market.
 function AiWarning() {
   return (
     <div
@@ -50,8 +64,7 @@ function AiWarning() {
         </span>
       </div>
       <div style={{ fontSize: 11, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.25)" }}>
-        🚧 Outil en construction. Pour l&apos;instant, l&apos;IA propose uniquement le{" "}
-        <strong>résultat du match (1, X, 2)</strong> et la <strong>double chance (1X, X2, 12)</strong> — d&apos;autres marchés (BTTS, Over/Under…) arriveront plus tard.
+        Les cotes des marchés de buts (BTTS, Over/Under) sont estimées par notre propre modèle statistique à partir des scores récents, pas des cotes réelles d&apos;un bookmaker.
       </div>
     </div>
   );
@@ -63,8 +76,18 @@ function AiWarning() {
 // enabled, so this component only needs to know WHO currently has access
 // (to word the pre-attempt hint accurately) and does the actual generating.
 // Ephemeral by design: nothing generated here is ever saved.
-export function MatchGeneratorTool({ access }: { access: "EVERYONE" | "PREMIUM" }) {
+export function MatchGeneratorTool({
+  access,
+  marketAccess,
+}: {
+  access: "EVERYONE" | "PREMIUM";
+  // Per-market override on top of `access` — a market missing here falls
+  // back to "PREMIUM", mirroring the server's own default (see
+  // app/api/generate-matches/route.ts's marketAccessFor).
+  marketAccess: Record<string, "EVERYONE" | "PREMIUM">;
+}) {
   const { user, hasActiveSubscription } = useAuth();
+  const isPremium = hasActiveSubscription();
   const [state, setState] = useState<GenState>("idle");
   const [matches, setMatches] = useState<GeneratedMatch[]>([]);
   const [totalOdds, setTotalOdds] = useState<number | null>(null);
@@ -73,27 +96,46 @@ export function MatchGeneratorTool({ access }: { access: "EVERYONE" | "PREMIUM" 
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [requiresPremium, setRequiresPremium] = useState(false);
+  const [restrictedMarkets, setRestrictedMarkets] = useState<string[]>([]);
+
+  const isMarketLocked = (code: string) => (marketAccess[code] ?? "PREMIUM") === "PREMIUM" && !isPremium;
 
   // Optional — left blank, the generator just picks from the strongest
   // qualified matches on its own.
   const [oddsInput, setOddsInput] = useState("");
+  const [selectedMarkets, setSelectedMarkets] = useState<string[]>(DEFAULT_MARKET_CODES);
+
+  const toggleMarket = (code: string) => {
+    if (isMarketLocked(code)) return; // premium-only, can't be selected without an active subscription
+    setSelectedMarkets((prev) => {
+      if (prev.includes(code)) {
+        // Always keep at least one market selected — an empty selection
+        // has nothing to generate from.
+        return prev.length === 1 ? prev : prev.filter((m) => m !== code);
+      }
+      return [...prev, code];
+    });
+  };
 
   const generate = async () => {
     setState("loading");
     setErrorMsg(null);
     setResultMessage(null);
     setRequiresPremium(false);
+    setRestrictedMarkets([]);
     try {
       const trimmed = oddsInput.trim();
-      const url = trimmed
-        ? `/api/generate-matches?targetOdds=${encodeURIComponent(trimmed)}`
-        : "/api/generate-matches";
+      const params = new URLSearchParams();
+      params.set("markets", selectedMarkets.join(","));
+      if (trimmed) params.set("targetOdds", trimmed);
+      const url = `/api/generate-matches?${params.toString()}`;
       const res = await fetch(url, { credentials: "include" });
       const data: GenerateResponse = await res.json();
 
       if (!data.success) {
         setErrorMsg(data.message || "Impossible de générer des matchs pour le moment.");
         setRequiresPremium(!!data.requiresPremium);
+        setRestrictedMarkets(data.restrictedMarkets || []);
         setState("error");
         return;
       }
@@ -102,6 +144,7 @@ export function MatchGeneratorTool({ access }: { access: "EVERYONE" | "PREMIUM" 
       setTotalOdds(data.totalOdds ?? null);
       setRequestedOdds(data.requestedOdds ?? null);
       setTargetMissed(!!data.targetMissed);
+      setRestrictedMarkets(data.restrictedMarkets || []);
       setResultMessage(data.matches?.length === 0 ? data.message || null : null);
       setState("result");
     } catch {
@@ -120,6 +163,42 @@ export function MatchGeneratorTool({ access }: { access: "EVERYONE" | "PREMIUM" 
 
       {state !== "result" && (
         <>
+          <label style={{ fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, display: "block", marginBottom: 6 }}>
+            Marchés
+          </label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+            {ALL_MARKET_CODES.map((code) => {
+              const active = selectedMarkets.includes(code);
+              const locked = isMarketLocked(code);
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => toggleMarket(code)}
+                  disabled={state === "loading" || locked}
+                  title={locked ? "Réservé aux abonnés premium" : undefined}
+                  style={{
+                    background: active ? "#3B82F6" : "#181C24",
+                    color: locked ? "#4A5568" : active ? "#fff" : "#7A8399",
+                    border: `1px solid ${active ? "#3B82F6" : "#2A3140"}`,
+                    borderRadius: 999, padding: "6px 12px", fontSize: 11, fontWeight: 600,
+                    cursor: state === "loading" || locked ? "not-allowed" : "pointer", fontFamily: "inherit",
+                    display: "flex", alignItems: "center", gap: 4,
+                  }}
+                >
+                  {locked && "🔒"} {MARKET_LABELS[code]}
+                </button>
+              );
+            })}
+          </div>
+
+          {ALL_MARKET_CODES.some(isMarketLocked) && (
+            <div style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.5, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <span>🔒</span>
+              <span>Les marchés verrouillés sont réservés aux abonnés premium — abonne-toi pour les débloquer.</span>
+            </div>
+          )}
+
           <label style={{ fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, display: "block", marginBottom: 6 }}>
             Cote totale souhaitée (optionnel)
           </label>
@@ -161,6 +240,9 @@ export function MatchGeneratorTool({ access }: { access: "EVERYONE" | "PREMIUM" 
           {requiresPremium && (
             <span style={{ display: "block", marginTop: 4, color: "#7A8399" }}>
               Réservé aux abonnés premium.
+              {restrictedMarkets.length > 0 && (
+                <> ({restrictedMarkets.map((m) => MARKET_LABELS[m] || m).join(", ")})</>
+              )}
             </span>
           )}
         </div>
@@ -168,6 +250,11 @@ export function MatchGeneratorTool({ access }: { access: "EVERYONE" | "PREMIUM" 
 
       {state === "result" && (
         <div>
+          {restrictedMarkets.length > 0 && (
+            <div style={{ fontSize: 11, color: "#E8C97A", marginBottom: 10, lineHeight: 1.5 }}>
+              🔒 Réservé aux abonnés premium, non inclus : {restrictedMarkets.map((m) => MARKET_LABELS[m] || m).join(", ")}.
+            </div>
+          )}
           {resultMessage && (
             <div style={{ fontSize: 12, color: "#7A8399", marginBottom: 14 }}>
               {resultMessage}
@@ -193,6 +280,9 @@ export function MatchGeneratorTool({ access }: { access: "EVERYONE" | "PREMIUM" 
                     </div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div style={{ fontSize: 9, letterSpacing: "0.5px", textTransform: "uppercase", color: "#7A8399", marginBottom: 1 }}>
+                      {MARKET_LABELS[m.market] || m.market}
+                    </div>
                     <div style={{ fontSize: 13, color: "#3B82F6", fontWeight: 700 }}>{m.tip}</div>
                     <div style={{ fontSize: 11, color: "#7A8399" }}>
                       @{m.odd}{m.isEstimatedOdd ? "*" : ""} · {m.confidence}%

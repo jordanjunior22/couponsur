@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
-import SettingsModel, { getSettings } from "@/models/Settings";
+import SettingsModel, { getSettings, MATCH_GENERATOR_MARKETS, type MatchGeneratorMarket } from "@/models/Settings";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 
@@ -40,6 +40,7 @@ export async function PUT(req: NextRequest) {
       tipOptions,
       matchGeneratorEnabled,
       matchGeneratorAccess,
+      matchGeneratorMarketAccess,
       matchGeneratorMatchCount,
     } = body;
 
@@ -97,6 +98,34 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.matchGeneratorAccess = matchGeneratorAccess;
+    }
+
+    if (matchGeneratorMarketAccess !== undefined) {
+      if (typeof matchGeneratorMarketAccess !== "object" || matchGeneratorMarketAccess === null || Array.isArray(matchGeneratorMarketAccess)) {
+        return NextResponse.json(
+          { success: false, message: "matchGeneratorMarketAccess must be an object" },
+          { status: 400 }
+        );
+      }
+      // Dot-path $set per key (not a single $set on the whole object) so a
+      // partial update — e.g. the admin UI toggling just one market —
+      // merges into whatever's already stored instead of clobbering the
+      // other markets' access levels.
+      for (const [market, access] of Object.entries(matchGeneratorMarketAccess)) {
+        if (!(MATCH_GENERATOR_MARKETS as readonly string[]).includes(market)) {
+          return NextResponse.json(
+            { success: false, message: `Unknown market: ${market}` },
+            { status: 400 }
+          );
+        }
+        if (access !== "EVERYONE" && access !== "PREMIUM") {
+          return NextResponse.json(
+            { success: false, message: `matchGeneratorMarketAccess.${market} must be EVERYONE or PREMIUM` },
+            { status: 400 }
+          );
+        }
+        update[`matchGeneratorMarketAccess.${market as MatchGeneratorMarket}`] = access;
+      }
     }
 
     if (matchGeneratorMatchCount !== undefined) {

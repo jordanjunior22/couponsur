@@ -9,6 +9,19 @@ export const DEFAULT_TIP_OPTIONS = [
 
 export type MatchGeneratorAccess = "EVERYONE" | "PREMIUM";
 
+// Kept as a local, hardcoded list (like DEFAULT_TIP_OPTIONS above) rather
+// than importing Market from lib/predictionengine.ts — models/ shouldn't
+// need to depend on lib/ for a small fixed set of string keys.
+export const MATCH_GENERATOR_MARKETS = ["1X2", "DC", "BTTS", "OU15", "OU25", "OU35"] as const;
+export type MatchGeneratorMarket = typeof MATCH_GENERATOR_MARKETS[number];
+
+// Same default as matchGeneratorAccess ("PREMIUM") so adding this field
+// doesn't silently open any market up for existing installs — an admin has
+// to deliberately loosen a market to EVERYONE.
+const DEFAULT_MARKET_ACCESS: Record<MatchGeneratorMarket, MatchGeneratorAccess> = {
+  "1X2": "PREMIUM", DC: "PREMIUM", BTTS: "PREMIUM", OU15: "PREMIUM", OU25: "PREMIUM", OU35: "PREMIUM",
+};
+
 export interface ISettings extends Document {
   key: string; // singleton, always "global"
   subscriptionMonthlyPrice: number;
@@ -21,9 +34,18 @@ export interface ISettings extends Document {
    *  not saved to the DB — see app/api/generate-matches/route.ts). Off by
    *  default so it has to be deliberately turned on. */
   matchGeneratorEnabled: boolean;
-  /** Who can use the generator once enabled: every logged-in user, or only
-   *  those with an active subscription. */
+  /** Who can OPEN the generator once enabled: every logged-in user, or only
+   *  those with an active subscription. This is the outer gate — a market
+   *  set to EVERYONE below still requires passing this first. */
   matchGeneratorAccess: MatchGeneratorAccess;
+  /** Finer-grained gate WITHIN the generator: which markets require an
+   *  active subscription vs are open to anyone who already passed
+   *  matchGeneratorAccess. Existing settings docs created before this field
+   *  existed come back with it missing entirely (Mongoose defaults only
+   *  apply on document creation, not to already-stored docs) — every
+   *  reader of this field falls back to "PREMIUM" per market, same as the
+   *  schema default, so an un-migrated install behaves exactly as before. */
+  matchGeneratorMarketAccess: Record<MatchGeneratorMarket, MatchGeneratorAccess>;
   /** How many matches a single generation produces. */
   matchGeneratorMatchCount: number;
   updatedAt: Date;
@@ -37,6 +59,7 @@ const SettingsSchema = new Schema<ISettings>(
     tipOptions: { type: [String], default: DEFAULT_TIP_OPTIONS },
     matchGeneratorEnabled: { type: Boolean, default: false },
     matchGeneratorAccess: { type: String, enum: ["EVERYONE", "PREMIUM"], default: "PREMIUM" },
+    matchGeneratorMarketAccess: { type: Schema.Types.Mixed, default: () => ({ ...DEFAULT_MARKET_ACCESS }) },
     matchGeneratorMatchCount: { type: Number, default: 3, min: 1, max: 10 },
   },
   { timestamps: true }

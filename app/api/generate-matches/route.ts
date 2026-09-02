@@ -17,7 +17,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import UserModel from "@/models/Users";
 import { getSettings } from "@/models/Settings";
-import { getPredictions, buildComboForTargetOdds, type PredictionPick } from "@/lib/predictionengine";
+import { getPredictions, buildComboForTargetOdds, type PredictionPick, type Market } from "@/lib/predictionengine";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +36,32 @@ function shuffle<T>(arr: T[]): T[] {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+// ─── Market selection ──────────────────────────────────────────────────────
+const ALL_MARKETS: Market[] = ["1X2", "DC", "BTTS", "OU15", "OU25", "OU35"];
+// Preserves the exact pre-existing behavior for any caller that doesn't
+// pass ?markets= at all.
+const DEFAULT_MARKETS: Market[] = ["1X2", "DC"];
+
+function isMarket(v: string): v is Market {
+  return (ALL_MARKETS as string[]).includes(v);
+}
+
+// One match can now qualify under several selected markets at once (e.g. a
+// "1" tip AND a "BTTS" tip for the same fixture) — a combo must never carry
+// two legs riding on the same game's variance, so collapse to the single
+// highest-confidence leg per unique match before any combo is built.
+function dedupeByMatch(picks: PredictionPick[]): PredictionPick[] {
+  const bestByMatch = new Map<string, PredictionPick>();
+  for (const p of picks) {
+    const key = `${p.league}|${p.home}|${p.away}`;
+    const existing = bestByMatch.get(key);
+    if (!existing || p.confidence > existing.confidence) {
+      bestByMatch.set(key, p);
+    }
+  }
+  return [...bestByMatch.values()];
 }
 
 // Sane bounds for a user-supplied target odds — below 1.1 it's not really a
@@ -69,26 +95,85 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    if (settings.matchGeneratorAccess === "PREMIUM") {
+    const { searchParams } = new URL(req.url);
+
+    // Which markets the visitor wants included (1X2, DC, BTTS, OU15/25/35).
+    // Omitted entirely → the original 1X2+DC-only behavior, for backward
+    // compatibility with any existing caller.
+    const rawMarkets = searchParams.get("markets");
+    let selectedMarkets: Market[] = DEFAULT_MARKETS;
+    if (rawMarkets !== null) {
+      const parsed = rawMarkets.split(",").map((m) => m.trim()).filter(Boolean);
+      const invalid = parsed.filter((m) => !isMarket(m));
+      if (invalid.length > 0) {
+        return NextResponse.json(
+          { success: false, message: `Marché(s) invalide(s): ${invalid.join(", ")}` },
+          { status: 400 }
+        );
+      }
+      if (parsed.length === 0) {
+        return NextResponse.json(
+          { success: false, message: "Sélectionnez au moins un marché." },
+          { status: 400 }
+        );
+      }
+      selectedMarkets = parsed as Market[];
+    }
+
+    // Access level per selected market, falling back to "PREMIUM" for any
+    // market missing from the stored settings (un-migrated doc, or a
+    // market added after the settings doc was last saved) — same
+    // most-restrictive-by-default posture as the schema's own default.
+    const marketAccessFor = (m: Market) => settings.matchGeneratorMarketAccess?.[m] ?? "PREMIUM";
+
+    // Fetch subscription status once (not per-market, not per-check) if
+    // EITHER the outer gate or any selected market could require it.
+    const needsPremiumCheck =
+      settings.matchGeneratorAccess === "PREMIUM" || selectedMarkets.some((m) => marketAccessFor(m) === "PREMIUM");
+
+    let isPremium = false;
+    if (needsPremiumCheck) {
       const dbUser = await UserModel.findById(decoded.userId).select("subscription").lean();
-      const isPremium = !!(
+      isPremium = !!(
         dbUser?.subscription?.status === "ACTIVE" &&
         dbUser.subscription.expiresAt &&
         new Date(dbUser.subscription.expiresAt) > new Date()
       );
-      if (!isPremium) {
-        return NextResponse.json(
-          { success: false, message: "Le générateur est réservé aux abonnés premium.", requiresPremium: true },
-          { status: 403 }
-        );
-      }
+    }
+
+    // Outer gate: can this user open the tool at all.
+    if (settings.matchGeneratorAccess === "PREMIUM" && !isPremium) {
+      return NextResponse.json(
+        { success: false, message: "Le générateur est réservé aux abonnés premium.", requiresPremium: true },
+        { status: 403 }
+      );
+    }
+
+    // Inner gate: which of the SELECTED markets this user is actually
+    // allowed to use. A market the admin marked PREMIUM-only is silently
+    // dropped (not a hard failure) as long as at least one selected market
+    // remains usable — the response flags what got dropped via
+    // `restrictedMarkets` so the UI can tell the visitor why their combo
+    // is smaller/different than requested.
+    const allowedMarkets = selectedMarkets.filter((m) => marketAccessFor(m) === "EVERYONE" || isPremium);
+    const restrictedMarkets = selectedMarkets.filter((m) => !allowedMarkets.includes(m));
+
+    if (allowedMarkets.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Marché(s) réservé(s) aux abonnés premium: ${restrictedMarkets.join(", ")}.`,
+          requiresPremium: true,
+          restrictedMarkets,
+        },
+        { status: 403 }
+      );
     }
 
     const count = settings.matchGeneratorMatchCount || 3;
 
     // Optional: the visitor can ask for a specific total odds instead of
     // just letting the pool pick itself.
-    const { searchParams } = new URL(req.url);
     const rawTarget = searchParams.get("targetOdds");
     let targetOdds: number | null = null;
     if (rawTarget !== null) {
@@ -103,9 +188,9 @@ export async function GET(req: NextRequest) {
     }
 
     const allPicks = await getPredictions();
-    const qualified = allPicks
-      .filter((p) => (p.market === "1X2" || p.market === "DC") && p.confidence >= MIN_CONFIDENCE)
-      .sort((a, b) => b.confidence - a.confidence);
+    const qualified = dedupeByMatch(
+      allPicks.filter((p) => allowedMarkets.includes(p.market) && p.confidence >= MIN_CONFIDENCE)
+    ).sort((a, b) => b.confidence - a.confidence);
 
     if (qualified.length === 0) {
       return NextResponse.json({
@@ -114,6 +199,7 @@ export async function GET(req: NextRequest) {
         totalOdds: null,
         message: "Aucun match ne remplit les critères de confiance aujourd'hui. Réessayez plus tard.",
         disclaimer: DISCLAIMER,
+        restrictedMarkets,
       });
     }
 
@@ -130,6 +216,7 @@ export async function GET(req: NextRequest) {
           totalOdds: null,
           message: "Impossible d'approcher cette cote aujourd'hui avec des matchs suffisamment fiables. Réessayez avec une autre cote.",
           disclaimer: DISCLAIMER,
+          restrictedMarkets,
         });
       }
       selected = combo.selected;
@@ -162,6 +249,7 @@ export async function GET(req: NextRequest) {
       totalOdds,
       requestedOdds: targetOdds,
       targetMissed,
+      restrictedMarkets,
       disclaimer: DISCLAIMER,
     });
   } catch (error) {

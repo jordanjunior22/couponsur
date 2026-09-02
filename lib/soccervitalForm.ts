@@ -29,6 +29,11 @@ export interface TeamForm {
   draws: number;
   losses: number;
   form: string; // e.g. "WLDWW", most recent first
+  /** Goals scored/conceded across the same `played` window (last 5),
+   *  computed from the same already-scraped results — no extra fetch. Used
+   *  by lib/goalsModel.ts to estimate BTTS/Over-Under markets. */
+  goalsFor: number;
+  goalsAgainst: number;
 }
 
 export interface RawResult {
@@ -42,8 +47,17 @@ export interface RawResult {
 interface LeagueCacheEntry {
   results: RawResult[];
   form: Map<string, TeamForm>;
+  /** Average total goals per match across every result on the scraped
+   *  page (not just the last-5-per-team window) — the normalization base
+   *  for the goals model's attack/defense strength ratios. */
+  avgGoalsPerMatch: number;
   ts: number;
 }
+
+// Fallback when a league has no scraped results yet (empty page, blocked
+// scrape) — a common league-wide average so the goals model degrades to
+// "roughly average" instead of dividing by zero or producing garbage.
+const DEFAULT_AVG_GOALS_PER_MATCH = 2.6;
 
 const _cache: Map<string, LeagueCacheEntry> = new Map();
 const CACHE_TTL = 3 * 60 * 60 * 1000; // 3 hours
@@ -128,7 +142,12 @@ function daysBetween(a: Date, b: Date): number {
 async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry> {
   const slug = slugifyLeague(leagueName);
   const url = `https://www.soccervital.com/table-${slug}-soccer-results-and-prediction.html`;
-  const empty: LeagueCacheEntry = { results: [], form: new Map(), ts: Date.now() };
+  const empty: LeagueCacheEntry = {
+    results: [],
+    form: new Map(),
+    avgGoalsPerMatch: DEFAULT_AVG_GOALS_PER_MATCH,
+    ts: Date.now(),
+  };
 
   try {
     const res = await fetch(url, {
@@ -206,6 +225,8 @@ async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry
       let draws = 0;
       let losses = 0;
       let formStr = "";
+      let goalsFor = 0;
+      let goalsAgainst = 0;
       for (const m of ms) {
         const isHome = normName(m.home) === key;
         const won = isHome ? m.homeGoals > m.awayGoals : m.awayGoals > m.homeGoals;
@@ -213,11 +234,21 @@ async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry
         if (won) { wins++; formStr += "W"; }
         else if (drew) { draws++; formStr += "D"; }
         else { losses++; formStr += "L"; }
+        goalsFor += isHome ? m.homeGoals : m.awayGoals;
+        goalsAgainst += isHome ? m.awayGoals : m.homeGoals;
       }
-      form.set(key, { played: ms.length, wins, draws, losses, form: formStr });
+      form.set(key, { played: ms.length, wins, draws, losses, form: formStr, goalsFor, goalsAgainst });
     }
 
-    return { results, form, ts: Date.now() };
+    // League-wide average total goals per match, from every result on the
+    // page (not capped to the last-5-per-team window) — the more data
+    // points here, the more stable the normalization base for attack/
+    // defense strength in the goals model.
+    const avgGoalsPerMatch = results.length > 0
+      ? results.reduce((sum, r) => sum + r.homeGoals + r.awayGoals, 0) / results.length
+      : DEFAULT_AVG_GOALS_PER_MATCH;
+
+    return { results, form, avgGoalsPerMatch, ts: Date.now() };
   } catch (e) {
     console.warn(`SoccerVital league scrape failed for "${leagueName}":`, e);
     return empty;
@@ -240,6 +271,10 @@ export async function getLeagueForm(leagueName: string): Promise<Map<string, Tea
 
 export async function getLeagueResults(leagueName: string): Promise<RawResult[]> {
   return (await getLeagueData(leagueName)).results;
+}
+
+export async function getLeagueAvgGoals(leagueName: string): Promise<number> {
+  return (await getLeagueData(leagueName)).avgGoalsPerMatch;
 }
 
 export function lookupTeamForm(

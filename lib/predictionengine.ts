@@ -33,11 +33,12 @@ import {
   getSoccerVitalPredictions,
   type SoccerVitalPrediction,
 } from "./soccervital";
-import { getLeagueForm, lookupTeamForm, type TeamForm } from "./soccervitalForm";
+import { getLeagueForm, getLeagueAvgGoals, lookupTeamForm, type TeamForm } from "./soccervitalForm";
+import { estimateGoalMarkets } from "./goalsModel";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type Market = "1X2" | "OU25" | "DC";
+export type Market = "1X2" | "DC" | "BTTS" | "OU15" | "OU25" | "OU35";
 
 export interface PredictionPick {
   home: string;
@@ -185,7 +186,8 @@ function realOddForTip(
 
 function scoreMatch(
   p: SoccerVitalPrediction,
-  leagueForm: Map<string, TeamForm>
+  leagueForm: Map<string, TeamForm>,
+  leagueAvgGoals: number
 ): PredictionPick[] {
   const picks: PredictionPick[] = [];
   if (!p.tip) return picks;
@@ -223,27 +225,35 @@ function scoreMatch(
     });
   }
 
-  if (p.goals === "O" || p.goals === "U") {
-    const ouTip = p.goals === "O" ? "O2.5" : "U2.5";
-    const ouConfidence = Math.min(30 + cons + Math.round(form * 0.5), 90);
-    const estimatedOdd = +(1 + ((100 - ouConfidence) / 55) * 3).toFixed(2);
+  // ─── Goal markets (BTTS, Over/Under 1.5/2.5/3.5) ───────────────────────
+  // Internal model off our own scraped correct-score history (see
+  // lib/goalsModel.ts), not just a relay of SoccerVital's O/U 2.5 tip —
+  // that tip is still used, but only as a small cross-check on the 2.5
+  // line inside estimateGoalMarkets(). Returns [] when either side lacks
+  // enough scraped history to trust (see MIN_SAMPLE_PLAYED there).
+  const goalMarkets = estimateGoalMarkets(homeForm, awayForm, leagueAvgGoals, p.goals as "O" | "U" | "");
+  for (const gm of goalMarkets) {
     picks.push({
       home: p.home,
       away: p.away,
       league: p.league,
-      market: "OU25",
-      tip: ouTip,
-      confidence: ouConfidence,
-      odd: Math.min(Math.max(estimatedOdd, 1.05), 4.5),
+      market: gm.market,
+      tip: gm.tip,
+      confidence: gm.confidence,
+      odd: gm.odd,
       isEstimatedOdd: true,
       sources: ["Vital"],
       formGap,
+      // Not a points breakdown for goal markets (confidence here is a
+      // genuine Poisson-derived probability, not tip-specificity +
+      // consistency + form points) — kept populated only so every
+      // PredictionPick shares the same shape for downstream consumers.
       breakdown: {
-        specificityScore: 30,
-        consistencyScore: cons,
+        specificityScore: 0,
+        consistencyScore: 0,
         leagueScore: 0,
-        formScore: form,
-        total: ouConfidence,
+        formScore: 0,
+        total: gm.confidence,
       },
     });
   }
@@ -350,18 +360,28 @@ export async function getPredictions(targetDate?: Date): Promise<PredictionPick[
 
   const leagues = [...new Set(vitalData.map((p) => p.league))];
   const formByLeague = new Map<string, Map<string, TeamForm>>();
+  const avgGoalsByLeague = new Map<string, number>();
 
   const BATCH = 5;
   for (let i = 0; i < leagues.length; i += BATCH) {
     const batch = leagues.slice(i, i + BATCH);
-    const results = await Promise.allSettled(batch.map((l) => getLeagueForm(l)));
+    // form fetched first, avgGoals second and sequentially per league so
+    // the second call always hits the now-warm per-league cache in
+    // soccervitalForm.ts instead of racing a duplicate scrape of the same
+    // page (both accessors are backed by the same cached fetch).
+    const results = await Promise.allSettled(
+      batch.map(async (l) => ({ form: await getLeagueForm(l), avgGoals: await getLeagueAvgGoals(l) }))
+    );
     results.forEach((r, idx) => {
-      if (r.status === "fulfilled") formByLeague.set(batch[idx], r.value);
+      if (r.status === "fulfilled") {
+        formByLeague.set(batch[idx], r.value.form);
+        avgGoalsByLeague.set(batch[idx], r.value.avgGoals);
+      }
     });
   }
 
   const picks = vitalData.flatMap((p) =>
-    scoreMatch(p, formByLeague.get(p.league) ?? new Map())
+    scoreMatch(p, formByLeague.get(p.league) ?? new Map(), avgGoalsByLeague.get(p.league) ?? 2.6)
   );
 
   return picks.sort((a, b) => b.confidence - a.confidence);

@@ -99,6 +99,17 @@ const LEAGUES = [
 // picker never comes up empty.
 const DEFAULT_TIPS = ["1", "X", "2", "1X", "X2", "12", "BTTS", "O 2.5", "U 2.5", "O 1.5", "U 1.5", "DNB"];
 
+// Kept in sync with MATCH_GENERATOR_MARKETS in models/Settings.ts and
+// MARKET_LABELS in components/MatchGenerator.tsx.
+const GENERATOR_MARKETS = [
+  { code: "1X2", label: "Résultat (1X2)" },
+  { code: "DC", label: "Double Chance" },
+  { code: "BTTS", label: "BTTS" },
+  { code: "OU15", label: "+1.5 buts" },
+  { code: "OU25", label: "+2.5 buts" },
+  { code: "OU35", label: "+3.5 buts" },
+];
+
 // ─── Icons ─────────────────────────────────────────────────────────────────────
 const Icons = {
   dashboard: () => (
@@ -2094,6 +2105,10 @@ function SettingsTab() {
   const [genCount, setGenCount] = useState(3);
   const [genSaving, setGenSaving] = useState(false);
   const [genSaveMsg, setGenSaveMsg] = useState<string | null>(null);
+  // Per-market override on top of genAccess — a market missing here falls
+  // back to "PREMIUM" everywhere it's read (see models/Settings.ts).
+  const [genMarketAccess, setGenMarketAccess] = useState<Record<string, "EVERYONE" | "PREMIUM">>({});
+  const [genMarketSaving, setGenMarketSaving] = useState<string | null>(null); // which market code is mid-save, if any
 
   useEffect(() => {
     (async () => {
@@ -2114,6 +2129,9 @@ function SettingsTab() {
           }
           if (typeof data.data.matchGeneratorMatchCount === "number") {
             setGenCount(data.data.matchGeneratorMatchCount);
+          }
+          if (data.data.matchGeneratorMarketAccess && typeof data.data.matchGeneratorMarketAccess === "object") {
+            setGenMarketAccess(data.data.matchGeneratorMarketAccess);
           }
         }
       } catch (e) {
@@ -2215,6 +2233,31 @@ function SettingsTab() {
       setGenSaveMsg("Erreur réseau lors de l'enregistrement.");
     } finally {
       setGenSaving(false);
+      setTimeout(() => setGenSaveMsg(null), 3000);
+    }
+  };
+
+  const saveMarketAccess = async (market: string, value: "EVERYONE" | "PREMIUM") => {
+    setGenMarketSaving(market);
+    setGenSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matchGeneratorMarketAccess: { [market]: value } }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setGenMarketAccess(data.data.matchGeneratorMarketAccess || {});
+        setGenSaveMsg("Enregistré avec succès.");
+      } else {
+        setGenSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setGenSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setGenMarketSaving(null);
       setTimeout(() => setGenSaveMsg(null), 3000);
     }
   };
@@ -2388,7 +2431,7 @@ function SettingsTab() {
           Qui y a accès
         </label>
         <select
-          style={{ ...iStyle, cursor: genSaving ? "not-allowed" : "pointer", marginBottom: 16 }}
+          style={{ ...iStyle, cursor: genSaving ? "not-allowed" : "pointer" }}
           value={genAccess}
           disabled={genSaving}
           onChange={(e) => { const v = e.target.value as "EVERYONE" | "PREMIUM"; setGenAccess(v); saveGeneratorSettings({ access: v }); }}
@@ -2396,6 +2439,33 @@ function SettingsTab() {
           <option value="PREMIUM">Abonnés premium uniquement</option>
           <option value="EVERYONE">Tous les utilisateurs connectés</option>
         </select>
+        <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5, margin: "6px 0 16px" }}>
+          Ce réglage définit qui peut ouvrir l&apos;outil. Utilise la liste ci-dessous pour réserver des marchés spécifiques (BTTS, Over/Under…) aux abonnés premium même quand l&apos;outil est ouvert à tous.
+        </div>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+          Accès par marché
+        </label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+          {GENERATOR_MARKETS.map(({ code, label }) => {
+            const value = genMarketAccess[code] ?? "PREMIUM";
+            const saving = genMarketSaving === code;
+            return (
+              <div key={code} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{label}</span>
+                <select
+                  style={{ ...iStyle, width: "auto", padding: "4px 8px", fontSize: 11, cursor: saving ? "not-allowed" : "pointer" }}
+                  value={value}
+                  disabled={saving}
+                  onChange={(e) => saveMarketAccess(code, e.target.value as "EVERYONE" | "PREMIUM")}
+                >
+                  <option value="PREMIUM">Premium uniquement</option>
+                  <option value="EVERYONE">Tous les utilisateurs</option>
+                </select>
+              </div>
+            );
+          })}
+        </div>
 
         <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
           Nombre de matchs générés

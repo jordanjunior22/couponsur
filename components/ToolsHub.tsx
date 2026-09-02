@@ -16,6 +16,10 @@ import { MatchGeneratorTool } from "./MatchGenerator";
 interface SettingsShape {
   matchGeneratorEnabled: boolean;
   matchGeneratorAccess: "EVERYONE" | "PREMIUM";
+  // Per-market override on top of matchGeneratorAccess (see
+  // models/Settings.ts) — a market missing from this map falls back to
+  // "PREMIUM", same most-restrictive-by-default posture as the server.
+  matchGeneratorMarketAccess: Record<string, "EVERYONE" | "PREMIUM">;
 }
 
 interface ToolDef {
@@ -45,9 +49,13 @@ export function ToolsHub() {
         setSettings({
           matchGeneratorEnabled: !!data?.data?.matchGeneratorEnabled,
           matchGeneratorAccess: data?.data?.matchGeneratorAccess === "EVERYONE" ? "EVERYONE" : "PREMIUM",
+          matchGeneratorMarketAccess:
+            data?.data?.matchGeneratorMarketAccess && typeof data.data.matchGeneratorMarketAccess === "object"
+              ? data.data.matchGeneratorMarketAccess
+              : {},
         });
       } catch {
-        setSettings({ matchGeneratorEnabled: false, matchGeneratorAccess: "PREMIUM" });
+        setSettings({ matchGeneratorEnabled: false, matchGeneratorAccess: "PREMIUM", matchGeneratorMarketAccess: {} });
       }
     })();
     (async () => {
@@ -196,7 +204,7 @@ export function ToolsHub() {
               )}
 
               {active?.id === "match-generator" && (
-                <MatchGeneratorTool access={settings.matchGeneratorAccess} />
+                <MatchGeneratorTool access={settings.matchGeneratorAccess} marketAccess={settings.matchGeneratorMarketAccess} />
               )}
             </div>
           </div>

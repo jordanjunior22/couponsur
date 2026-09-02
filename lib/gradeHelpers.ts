@@ -1,7 +1,7 @@
 // ─── lib/gradeHelpers.ts ──────────────────────────────────────────────────────
 // Determines WIN/LOSS/REFUNDED for a tip given a final score. Supports every
 // tip format produced by predictionEngine.ts: 1, X, 2, 1X, X2, 12, BTTS,
-// O2.5, U2.5, O1.5, U1.5, DNB.
+// O1.5, U1.5, O2.5, U2.5, O3.5, U3.5, DNB.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type GradeOutcome = "WIN" | "LOSS" | "REFUNDED";
@@ -24,6 +24,8 @@ export function gradeTip(tip: string, homeGoals: number, awayGoals: number): Gra
   if (t === "U2.5" || t === "U 2.5") return totalGoals < 3 ? "WIN" : "LOSS";
   if (t === "O1.5" || t === "O 1.5") return totalGoals > 1 ? "WIN" : "LOSS";
   if (t === "U1.5" || t === "U 1.5") return totalGoals < 2 ? "WIN" : "LOSS";
+  if (t === "O3.5" || t === "O 3.5") return totalGoals > 3 ? "WIN" : "LOSS";
+  if (t === "U3.5" || t === "U 3.5") return totalGoals < 4 ? "WIN" : "LOSS";
   // Draw No Bet — the stake is refunded on a draw (that's the whole point
   // of the market: no bet if it's a draw), otherwise it's a normal 1/2 bet.
   if (t === "DNB") return draw ? "REFUNDED" : homeWin ? "WIN" : "LOSS";
