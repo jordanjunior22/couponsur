@@ -3,6 +3,7 @@ import { connectDB } from "@/utils/ConnectDb";
 import User from "@/models/Users";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { normalizeUserPhone } from "@/utils/normalizeUserPhone";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 
@@ -22,7 +23,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── Find user ────────────────────────────────────────
-    const user = await User.findOne({ phone });
+    // Normalized so spaces or a typed-in "+237"/"237" country code can't
+    // cause a false "Invalid credentials" against an account that's really
+    // the same phone number (see utils/normalizeUserPhone).
+    const user = await User.findOne({ phone: normalizeUserPhone(phone) });
 
     if (!user) {
       return NextResponse.json(
@@ -53,11 +57,17 @@ export async function POST(req: NextRequest) {
     );
 
     // ─── Safe user ────────────────────────────────────────
+    // Must mirror what /api/auth/me returns (full user minus password) —
+    // this is what populates client user state right after login, and a
+    // field missing here (subscription was, until this fix) reads as
+    // "falsy" client-side even when the DB has it set correctly, until the
+    // next /api/auth/me refetch papers over it.
     const safeUser = {
       _id: user._id,
       phone: user.phone,
       role: user.role,
       unlockedPickIds: user.unlockedPickIds,
+      subscription: user.subscription,
       lastLoginAt: user.lastLoginAt,
     };
 

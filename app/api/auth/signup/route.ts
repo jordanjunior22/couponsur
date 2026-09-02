@@ -3,6 +3,7 @@ import { connectDB } from "@/utils/ConnectDb";
 import User from "@/models/Users";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { normalizeUserPhone } from "@/utils/normalizeUserPhone";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 
@@ -11,12 +12,23 @@ export async function POST(req: NextRequest) {
   try {
     await connectDB();
 
-    const { phone, password } = await req.json();
+    const { phone: rawPhone, password } = await req.json();
 
     // ─── Validate input ───────────────────────────────────
-    if (!phone || !password) {
+    if (!rawPhone || !password) {
       return NextResponse.json(
         { success: false, message: "Phone and password are required" },
+        { status: 400 }
+      );
+    }
+
+    // Normalized so spaces or a typed-in "+237"/"237" country code don't
+    // create a duplicate account for a phone number that already exists
+    // in the other format (see utils/normalizeUserPhone).
+    const phone = normalizeUserPhone(rawPhone);
+    if (!phone) {
+      return NextResponse.json(
+        { success: false, message: "Numéro de téléphone invalide" },
         { status: 400 }
       );
     }
@@ -60,11 +72,16 @@ export async function POST(req: NextRequest) {
     );
 
     // ─── Safe user ────────────────────────────────────────
+    // Kept in sync with login's safeUser and /api/auth/me — see the
+    // comment in app/api/auth/login/route.ts for why a missing field here
+    // matters even though a brand-new signup's subscription is just the
+    // schema default.
     const safeUser = {
       _id: user._id,
       phone: user.phone,
       role: user.role,
       unlockedPickIds: user.unlockedPickIds,
+      subscription: user.subscription,
     };
 
     // ─── Response with cookie ─────────────────────────────
