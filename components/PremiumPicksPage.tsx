@@ -15,7 +15,7 @@ export interface Match {
   confidence?: number;
   sources?: string[];
   kickoff?: string | null;
-  outcome: "PENDING" | "WIN" | "LOSS";
+  outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED";
 }
 
 export type PickTier = "safe" | "value" | "bold" | null;
@@ -27,7 +27,7 @@ export interface Pick {
   total_odds: number;
   match_date: string;
   league: string;
-  outcome: "PENDING" | "WIN" | "LOSS";
+  outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED";
   is_published: boolean;
   is_automated?: boolean;
   tier?: PickTier;
@@ -134,6 +134,12 @@ const IconX = ({ color = "#EF4444", size = 12 }: { color?: string; size?: number
     <path d="M3 3l6 6M9 3l-6 6" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
   </svg>
 );
+const IconRefund = ({ color = "#3B82F6", size = 12 }: { color?: string; size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 12 12" fill="none">
+    <path d="M2.5 6a3.5 3.5 0 016-2.5M9.5 6a3.5 3.5 0 01-6 2.5" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M8.5 2.5v1.5H7M3.5 9.5V8H5" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
 const IconLock = () => (
   <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
     <rect x="5" y="11" width="14" height="10" rx="2" stroke="#C9A84C" strokeWidth="1.5" />
@@ -166,13 +172,14 @@ const IconFail = () => (
 );
 
 // ─── Outcome Badge ────────────────────────────────────────────────────────────
-const OutcomeBadge = ({ outcome }: { outcome: "PENDING" | "WIN" | "LOSS" }) => {
+const OutcomeBadge = ({ outcome }: { outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED" }) => {
   const styles: Record<string, React.CSSProperties> = {
-    WIN:     { background: "rgba(34,197,94,0.12)",  color: "#22C55E", border: "1px solid rgba(34,197,94,0.25)"  },
-    LOSS:    { background: "rgba(239,68,68,0.12)",  color: "#EF4444", border: "1px solid rgba(239,68,68,0.25)"  },
-    PENDING: { background: "rgba(201,168,76,0.1)",  color: "#C9A84C", border: "1px solid rgba(201,168,76,0.25)" },
+    WIN:      { background: "rgba(34,197,94,0.12)",  color: "#22C55E", border: "1px solid rgba(34,197,94,0.25)"  },
+    LOSS:     { background: "rgba(239,68,68,0.12)",  color: "#EF4444", border: "1px solid rgba(239,68,68,0.25)"  },
+    PENDING:  { background: "rgba(201,168,76,0.1)",  color: "#C9A84C", border: "1px solid rgba(201,168,76,0.25)" },
+    REFUNDED: { background: "rgba(59,130,246,0.1)",  color: "#3B82F6", border: "1px solid rgba(59,130,246,0.25)" },
   };
-  const labels = { WIN: "WIN", LOSS: "LOSS", PENDING: "LIVE" };
+  const labels = { WIN: "WIN", LOSS: "LOSS", PENDING: "LIVE", REFUNDED: "REMBOURSÉ" };
   return (
     <span style={{ ...styles[outcome], fontSize: 9, letterSpacing: "1.5px", textTransform: "uppercase", fontWeight: 700, padding: "4px 10px", borderRadius: 4, flexShrink: 0 }}>
       {labels[outcome]}
@@ -180,10 +187,30 @@ const OutcomeBadge = ({ outcome }: { outcome: "PENDING" | "WIN" | "LOSS" }) => {
   );
 };
 
+// A combo can win or lose overall while still having one leg voided (e.g.
+// a Draw No Bet leg pushing on a draw) — pick.outcome alone doesn't
+// surface that. This flags it separately so a buyer doesn't have to open
+// the pick and scroll through every match to notice a leg was refunded.
+const refundedLegCount = (pick: Pick) => pick.matches.filter((m) => m.outcome === "REFUNDED").length;
+
+function PartialRefundChip({ count }: { count: number }) {
+  return (
+    <span style={{
+      fontSize: 9, letterSpacing: "1px", textTransform: "uppercase", fontWeight: 700,
+      color: "#3B82F6", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.25)",
+      padding: "4px 10px", borderRadius: 4, flexShrink: 0, whiteSpace: "nowrap",
+      display: "inline-flex", alignItems: "center", gap: 4,
+    }}>
+      <IconRefund size={10} /> {count > 1 ? `${count} matchs remboursés` : "1 match remboursé"}
+    </span>
+  );
+}
+
 // ─── Hero ─────────────────────────────────────────────────────────────────────
 function Hero({ picks }: { picks: Pick[] }) {
   const publishedPicks = picks.filter((p) => p.is_published !== false);
-  const gradedPicks = publishedPicks.filter((p) => p.outcome !== "PENDING");
+  // Win rate excludes REFUNDED picks — a void isn't a loss.
+  const gradedPicks = publishedPicks.filter((p) => p.outcome === "WIN" || p.outcome === "LOSS");
   const wins = gradedPicks.filter((p) => p.outcome === "WIN").length;
   const winRate = gradedPicks.length > 0 ? Math.round((wins / gradedPicks.length) * 100) : null;
   const todayCount = publishedPicks.filter((p) => {
@@ -706,7 +733,7 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
 }
 
 // ─── Pick Card ────────────────────────────────────────────────────────────────
-const borderColors = { WIN: "#22C55E", LOSS: "#EF4444", PENDING: "#C9A84C" };
+const borderColors = { WIN: "#22C55E", LOSS: "#EF4444", PENDING: "#C9A84C", REFUNDED: "#3B82F6" };
 
 function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void }) {
   const { user, hasActiveSubscription } = useAuth();
@@ -715,6 +742,9 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
   const isUnlocked = isSubscribed || user?.unlockedPickIds?.includes(pick._id);
   const tierMeta = pick.tier ? TIER_META[pick.tier] : null;
   const countdown = useCountdown(isPending ? pick.match_date : null);
+  // Only meaningful when the combo itself isn't already REFUNDED (every
+  // leg voided) — that case is already fully conveyed by OutcomeBadge.
+  const refundedLegs = pick.outcome !== "REFUNDED" ? refundedLegCount(pick) : 0;
 
   return (
     <div
@@ -739,6 +769,7 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
               Coup d&apos;envoi dans {countdown}
             </span>
           )}
+          {refundedLegs > 0 && <PartialRefundChip count={refundedLegs} />}
           <OutcomeBadge outcome={pick.outcome} />
         </div>
         <div style={{ fontSize: "clamp(13px, 3.5vw, 15px)", fontWeight: 600, color: "#E8EAF0", lineHeight: 1.4, marginBottom: 10, wordBreak: "break-word" }}>
@@ -836,10 +867,11 @@ function PredictionRow({ match }: { match: Match }) {
             <><span style={{ color: "#7A8399" }}> | </span><span style={{ color: "#7A8399" }}>{match.odd}</span></>
           )}
         </div>
-        <div style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: match.outcome === "WIN" ? "rgba(34,197,94,0.12)" : match.outcome === "LOSS" ? "rgba(239,68,68,0.12)" : "rgba(201,168,76,0.1)" }}>
-          {match.outcome === "WIN"     && <IconCheck />}
-          {match.outcome === "LOSS"    && <IconX />}
-          {match.outcome === "PENDING" && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#C9A84C" }} />}
+        <div style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: match.outcome === "WIN" ? "rgba(34,197,94,0.12)" : match.outcome === "LOSS" ? "rgba(239,68,68,0.12)" : match.outcome === "REFUNDED" ? "rgba(59,130,246,0.12)" : "rgba(201,168,76,0.1)" }}>
+          {match.outcome === "WIN"      && <IconCheck />}
+          {match.outcome === "LOSS"     && <IconX />}
+          {match.outcome === "REFUNDED" && <IconRefund />}
+          {match.outcome === "PENDING"  && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#C9A84C" }} />}
         </div>
       </div>
     </div>
@@ -901,7 +933,12 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
                 <div style={{ fontSize: 10, color: "#7A8399", letterSpacing: "1.5px", textTransform: "uppercase" }}>Cotes totales</div>
                 <div style={{ fontSize: 11, color: "#7A8399", marginTop: 2 }}>{pick.matches.length} sélection{pick.matches.length > 1 ? "s" : ""}</div>
               </div>
-              <div style={{ marginLeft: "auto" }}><OutcomeBadge outcome={pick.outcome} /></div>
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                {pick.outcome !== "REFUNDED" && refundedLegCount(pick) > 0 && (
+                  <PartialRefundChip count={refundedLegCount(pick)} />
+                )}
+                <OutcomeBadge outcome={pick.outcome} />
+              </div>
             </div>
             {canViewPredictions
               ? <div>{pick.matches.map((m, i) => <PredictionRow key={i} match={m} />)}</div>

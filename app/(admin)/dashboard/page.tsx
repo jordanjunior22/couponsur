@@ -17,7 +17,7 @@ interface Match {
   league?: string;
   date?: string;
   kickoff?: string;
-  outcome: "PENDING" | "WIN" | "LOSS";
+  outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED";
 }
 
 interface Pick {
@@ -27,7 +27,7 @@ interface Pick {
   total_odds: number;
   match_date: string;
   league: string;
-  outcome: "PENDING" | "WIN" | "LOSS";
+  outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED";
   is_published: boolean;
   matches: Match[];
 }
@@ -276,6 +276,16 @@ function SubscriptionBadge({ subscription }: { subscription?: ApiUser["subscript
   );
 }
 function formatCFA(n: number) { return n.toLocaleString("fr-FR") + " FCFA"; }
+// Left-accent color for a pick/match outcome — shared by every card/table
+// row that marks its outcome with a colored border, so REFUNDED gets its
+// own blue accent instead of silently falling back to gold (which would
+// make it look identical to a still-PENDING row).
+function outcomeAccent(outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED"): string {
+  if (outcome === "WIN") return C.green;
+  if (outcome === "LOSS") return C.red;
+  if (outcome === "REFUNDED") return C.blue;
+  return C.gold;
+}
 function formatDate(d: string) {
   if (!d) return "—";
   const dateOnly = d.split("T")[0];
@@ -287,11 +297,12 @@ function formatDate(d: string) {
 }
 
 // ─── Reusable Components ───────────────────────────────────────────────────────
-function Badge({ outcome }: { outcome: "PENDING" | "WIN" | "LOSS" | "draft" | "live" }) {
+function Badge({ outcome }: { outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED" | "draft" | "live" }) {
   const map: Record<string, { bg: string; color: string; label: string }> = {
     WIN: { bg: "rgba(34,197,94,0.12)", color: C.green, label: "WIN" },
     LOSS: { bg: "rgba(239,68,68,0.12)", color: C.red, label: "LOSS" },
     PENDING: { bg: "rgba(201,168,76,0.1)", color: C.gold, label: "EN COURS" },
+    REFUNDED: { bg: "rgba(59,130,246,0.1)", color: C.blue, label: "REMBOURSÉ" },
     draft: { bg: "rgba(122,131,153,0.12)", color: C.muted, label: "BROUILLON" },
     live: { bg: "rgba(59,130,246,0.12)", color: C.blue, label: "PUBLIÉ" },
   };
@@ -420,12 +431,13 @@ function LineChart({ data, height = 180, formatValue = formatCFA }: { data: { la
 }
 
 // ─── Simple horizontal bar distribution chart ──────────────────────────────────
-function OutcomeBarChart({ wins, losses, pending }: { wins: number; losses: number; pending: number }) {
-  const total = wins + losses + pending || 1;
+function OutcomeBarChart({ wins, losses, pending, refunded = 0 }: { wins: number; losses: number; pending: number; refunded?: number }) {
+  const total = wins + losses + pending + refunded || 1;
   const rows = [
     { label: "Win", value: wins, color: C.green },
     { label: "Loss", value: losses, color: C.red },
     { label: "En cours", value: pending, color: C.gold },
+    { label: "Remboursé", value: refunded, color: C.blue },
   ];
   return (
     <div style={{ padding: "16px" }}>
@@ -605,6 +617,7 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
                 <option value="PENDING">En cours</option>
                 <option value="WIN">Win</option>
                 <option value="LOSS">Loss</option>
+                <option value="REFUNDED">Remboursé</option>
               </select>
             </div>
             <div>
@@ -640,7 +653,8 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
 
             {form.matches.map((m, idx) => {
               const toggleOutcome = () => {
-                const next: Match["outcome"] = m.outcome === "PENDING" ? "WIN" : m.outcome === "WIN" ? "LOSS" : "PENDING";
+                const cycle: Match["outcome"][] = ["PENDING", "WIN", "LOSS", "REFUNDED"];
+                const next = cycle[(cycle.indexOf(m.outcome) + 1) % cycle.length];
                 setForm((f) => ({
                   ...f,
                   matches: f.matches.map((mx, mxIdx) => mxIdx === idx ? { ...mx, outcome: next } : mx),
@@ -650,8 +664,8 @@ function PickFormModal({ pick, onSave, onClose, tipOptions }: { pick: Pick | nul
                 ...f,
                 matches: f.matches.map((mx, mxIdx) => mxIdx === idx ? { ...mx, ...patch } : mx),
               }));
-              const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : C.faint;
-              const tickLabel = m.outcome === "WIN" ? "✓" : m.outcome === "LOSS" ? "✗" : "·";
+              const tickColor = m.outcome === "WIN" ? C.green : m.outcome === "LOSS" ? C.red : m.outcome === "REFUNDED" ? C.blue : C.faint;
+              const tickLabel = m.outcome === "WIN" ? "✓" : m.outcome === "LOSS" ? "✗" : m.outcome === "REFUNDED" ? "↺" : "·";
               return (
                 <div key={m._id ?? idx} className="pf-match-row">
                   <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: C.text }}>
@@ -1113,6 +1127,7 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
           <option value="WIN">Win</option>
           <option value="LOSS">Loss</option>
           <option value="PENDING">En cours</option>
+          <option value="REFUNDED">Remboursé</option>
         </select>
         <select style={{ ...iStyle, cursor: "pointer" }} value={filterLeague} onChange={(e) => setFilterLeague(e.target.value)}>
           <option value="ALL">Toutes ligues</option>
@@ -1173,7 +1188,7 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
             const isSelected = selected.has(p._id);
             return (
               <div key={p._id}
-                style={{ display: "grid", gridTemplateColumns: "28px 2fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", gap: 8, borderBottom: i < paged.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, background: isSelected ? "rgba(201,168,76,0.05)" : "transparent", transition: "background 0.15s" }}
+                style={{ display: "grid", gridTemplateColumns: "28px 2fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", gap: 8, borderBottom: i < paged.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${outcomeAccent(p.outcome)}`, background: isSelected ? "rgba(201,168,76,0.05)" : "transparent", transition: "background 0.15s" }}
                 onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = C.dark4; }}
                 onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
                 <input
@@ -1227,7 +1242,7 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
               borderTop: `1px solid ${isSelected ? C.goldDark : C.border}`,
               borderRight: `1px solid ${isSelected ? C.goldDark : C.border}`,
               borderBottom: `1px solid ${isSelected ? C.goldDark : C.border}`,
-              borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`,
+              borderLeft: `3px solid ${outcomeAccent(p.outcome)}`,
               borderRadius: 10, padding: 14, marginBottom: 10,
             }}>              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, gap: 8 }}>
                 <div style={{ display: "flex", gap: 10, minWidth: 0 }}>
@@ -1557,8 +1572,10 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   useEffect(() => { setPickPage(1); }, [pickSearch, pickSort, dateFrom, dateTo]);
 
   const maxRev = byLeague[0]?.[1] || 1;
-  const finished = filteredPicks.filter((p) => p.outcome !== "PENDING");
-  const winRate = finished.length > 0 ? Math.round((filteredPicks.filter((p) => p.outcome === "WIN").length / finished.length) * 100) : 0;
+  // Win rate excludes REFUNDED picks — a void isn't a loss, so it shouldn't
+  // count against the rate (matches the same fix in OverviewTab).
+  const decided = filteredPicks.filter((p) => p.outcome === "WIN" || p.outcome === "LOSS");
+  const winRate = decided.length > 0 ? Math.round((decided.filter((p) => p.outcome === "WIN").length / decided.length) * 100) : 0;
 
   const dailyRevenue = useMemo(() => {
     const map = new Map<string, number>();
@@ -1934,11 +1951,14 @@ function TransactionsTab() {
 
 // ─── Overview Tab ───────────────────────────────────────────────────────────────
 function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
-  const finished = picks.filter((p) => p.outcome !== "PENDING");
-  const wins = finished.filter((p) => p.outcome === "WIN").length;
-  const losses = finished.filter((p) => p.outcome === "LOSS").length;
+  // Win rate is computed over decided (WIN/LOSS) picks only — a REFUNDED
+  // pick was voided, not lost, so it shouldn't drag the rate down.
+  const decided = picks.filter((p) => p.outcome === "WIN" || p.outcome === "LOSS");
+  const wins = decided.filter((p) => p.outcome === "WIN").length;
+  const losses = decided.filter((p) => p.outcome === "LOSS").length;
   const pendingCount = picks.filter((p) => p.outcome === "PENDING").length;
-  const winRate = finished.length > 0 ? Math.round((wins / finished.length) * 100) : 0;
+  const refundedCount = picks.filter((p) => p.outcome === "REFUNDED").length;
+  const winRate = decided.length > 0 ? Math.round((wins / decided.length) * 100) : 0;
 
   const pickRevenue = users.reduce((sum, u) =>
     sum + u.unlockedPickIds.reduce((s, pid) => { const p = picks.find((pk) => pk._id === pid); return s + (p ? p.price : 0); }, 0), 0
@@ -1991,7 +2011,7 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
         <StatCard label="Revenu Total" value={`${Math.round(totalRevenue / 1000)}K`} sub={`${formatCFA(pickRevenue)} picks + ${formatCFA(subscriptionRevenue)} abonnements`} accent />
         <StatCard label="Utilisateurs" value={users.length} sub={`${activeUsers} actifs`} />
         <StatCard label="Picks Totaux" value={picks.length} sub={`${picks.filter((p) => p.is_published).length} publiés`} />
-        <StatCard label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${finished.length - wins}L`} />
+        <StatCard label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${losses}L`} />
         <StatCard label="Abonnés Actifs" value={activeSubscribers.length} sub={`sur ${users.length} utilisateurs`} />
       </div>
 
@@ -2002,7 +2022,7 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
         </div>
         <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>Répartition des résultats</div>
-          <OutcomeBarChart wins={wins} losses={losses} pending={pendingCount} />
+          <OutcomeBarChart wins={wins} losses={losses} pending={pendingCount} refunded={refundedCount} />
         </div>
       </div>
 
@@ -2014,7 +2034,7 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
             const unlocks = users.filter((u) => u.unlockedPickIds.includes(p._id)).length;
             const pickRevenue = unlocks * p.price;
             return (
-              <div key={p._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 16px", borderBottom: i < recentPicks.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${p.outcome === "WIN" ? C.green : p.outcome === "LOSS" ? C.red : C.gold}`, gap: 10 }}>
+              <div key={p._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 16px", borderBottom: i < recentPicks.length - 1 ? `1px solid ${C.border}` : "none", borderLeft: `3px solid ${outcomeAccent(p.outcome)}`, gap: 10 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: C.text, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</div>
                   <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{p.league} · {formatDate(p.match_date)} · {unlocks} débloquage{unlocks !== 1 ? "s" : ""}</div>

@@ -133,18 +133,22 @@ export async function PUT(
 //   {
 //     "updates": [
 //       { "matchIndex": 0, "outcome": "WIN", "score": "2:1" },
-//       { "matchIndex": 1, "outcome": "LOSS", "score": "0:3" }
+//       { "matchIndex": 1, "outcome": "LOSS", "score": "0:3" },
+//       { "matchIndex": 2, "outcome": "REFUNDED" }
 //     ]
 //   }
 //
 // matchIndex is the 0-based position of the match in the pick's `matches`
-// array (GET this pick first to see current indices/outcomes).
+// array (GET this pick first to see current indices/outcomes). REFUNDED
+// is for a match that was cancelled/postponed or pushed (e.g. a Draw No
+// Bet leg landing on a draw) — it doesn't count as a win or a loss.
 //
 // After applying updates, the pick's overall outcome is recomputed from
-// ALL its matches: WIN only if every leg is a WIN, LOSS if any leg is a
-// LOSS, otherwise stays PENDING. Marks is_manually_graded: true, which
-// excludes this pick from future auto-grading cron runs — manual grading
-// is treated as final.
+// ALL its matches (see comboOutcome): WIN only if every non-refunded leg
+// is a WIN, LOSS if any non-refunded leg is a LOSS, REFUNDED if every
+// single leg was refunded, otherwise stays PENDING. Marks
+// is_manually_graded: true, which excludes this pick from future
+// auto-grading cron runs — manual grading is treated as final.
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -190,9 +194,9 @@ export async function PATCH(
           { status: 400 }
         );
       }
-      if (u.outcome !== "WIN" && u.outcome !== "LOSS") {
+      if (u.outcome !== "WIN" && u.outcome !== "LOSS" && u.outcome !== "REFUNDED") {
         return NextResponse.json(
-          { success: false, message: `Invalid outcome: ${u.outcome} (must be WIN or LOSS)` },
+          { success: false, message: `Invalid outcome: ${u.outcome} (must be WIN, LOSS or REFUNDED)` },
           { status: 400 }
         );
       }
@@ -201,7 +205,7 @@ export async function PATCH(
       if (u.score) pick.matches[u.matchIndex].score = u.score;
     }
 
-    const legOutcomes = pick.matches.map((m) => m.outcome as "PENDING" | "WIN" | "LOSS");
+    const legOutcomes = pick.matches.map((m) => m.outcome as "PENDING" | "WIN" | "LOSS" | "REFUNDED");
     const overall = comboOutcome(legOutcomes);
 
     pick.outcome = overall as Outcome;

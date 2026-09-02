@@ -5,6 +5,9 @@ export enum Outcome {
   PENDING = "PENDING",
   WIN = "WIN",
   LOSS = "LOSS",
+  // Match/pick was voided — cancelled, postponed indefinitely, or a push
+  // (e.g. "Draw No Bet" on a draw). Doesn't count as a win or a loss.
+  REFUNDED = "REFUNDED",
 }
 
 export type PickTier = "safe" | "value" | "bold";

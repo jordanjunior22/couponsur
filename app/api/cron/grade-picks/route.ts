@@ -140,7 +140,7 @@ export async function GET(req: NextRequest) {
         info(`Pick ${pick._id}: graded "${match.home} vs ${match.away}" → ${outcome} (${result.homeGoals}:${result.awayGoals}) matched against result dated ${result.date}`);
       }
 
-      const legOutcomes = pick.matches.map((m) => m.outcome as "PENDING" | "WIN" | "LOSS");
+      const legOutcomes = pick.matches.map((m) => m.outcome as "PENDING" | "WIN" | "LOSS" | "REFUNDED");
       const overall = comboOutcome(legOutcomes);
 
       if (overall !== "PENDING") {

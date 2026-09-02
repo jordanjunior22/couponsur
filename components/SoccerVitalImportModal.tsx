@@ -23,7 +23,7 @@ interface CreatedMatch {
     odd: number;
     kickoff?: string | null;
     league?: string;
-    outcome: "PENDING" | "WIN" | "LOSS";
+    outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED";
 }
 
 interface CreatedPick {
@@ -33,7 +33,7 @@ interface CreatedPick {
     total_odds: number;
     match_date: string;
     league: string;
-    outcome: "PENDING" | "WIN" | "LOSS";
+    outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED";
     is_published: boolean;
     matches: CreatedMatch[];
 }

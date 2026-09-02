@@ -24,16 +24,20 @@ export function HistoryItem({ item }: { item: any }) {
             item.matches.map((m: any, i: number) => {
               if (!m) return null;
 
+              const outcomeColor =
+                m.outcome === "WIN" ? "#00FFA3" :
+                m.outcome === "LOSS" ? "#EF4444" :
+                m.outcome === "REFUNDED" ? "#3B82F6" : "#C9A84C";
+              const outcomeLabel =
+                m.outcome === "WIN" ? "GAGNÉ" :
+                m.outcome === "LOSS" ? "PERDU" :
+                m.outcome === "REFUNDED" ? "REMBOURSÉ" : "EN COURS";
+
               return (
                 <div key={i} style={row}>
                   <span>{m.prediction}</span>
-                  <span
-                    style={{
-                      color: m.outcome === "WIN" ? "#00FFA3" : "#EF4444",
-                      fontWeight: 700,
-                    }}
-                  >
-                    {m.outcome}
+                  <span style={{ color: outcomeColor, fontWeight: 700 }}>
+                    {outcomeLabel}
                   </span>
                 </div>
               );

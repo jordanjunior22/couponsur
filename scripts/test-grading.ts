@@ -38,7 +38,7 @@ const CRON_SECRET = process.env.CRON_SECRET; // optional, matches your route's g
 function runUnitChecks() {
   console.log("\n=== Unit checks: gradeTip() ===");
 
-  const cases: Array<{ tip: string; home: number; away: number; expect: "WIN" | "LOSS" }> = [
+  const cases: Array<{ tip: string; home: number; away: number; expect: "WIN" | "LOSS" | "REFUNDED" }> = [
     { tip: "1",    home: 2, away: 0, expect: "WIN" },
     { tip: "1",    home: 0, away: 2, expect: "LOSS" },
     { tip: "2",    home: 0, away: 2, expect: "WIN" },
@@ -50,10 +50,20 @@ function runUnitChecks() {
     { tip: "X2",   home: 2, away: 0, expect: "LOSS" },
     { tip: "12",   home: 2, away: 1, expect: "WIN" },
     { tip: "12",   home: 1, away: 1, expect: "LOSS" },
+    { tip: "BTTS", home: 1, away: 1, expect: "WIN" },
+    { tip: "BTTS", home: 1, away: 0, expect: "LOSS" },
     { tip: "O2.5", home: 2, away: 1, expect: "WIN" },
     { tip: "O2.5", home: 1, away: 1, expect: "LOSS" },
     { tip: "U2.5", home: 1, away: 1, expect: "WIN" },
     { tip: "U2.5", home: 2, away: 1, expect: "LOSS" },
+    { tip: "O1.5", home: 1, away: 1, expect: "WIN" },
+    { tip: "O1.5", home: 1, away: 0, expect: "LOSS" },
+    { tip: "U1.5", home: 1, away: 0, expect: "WIN" },
+    { tip: "U1.5", home: 1, away: 1, expect: "LOSS" },
+    // Draw No Bet — refunded on a draw, otherwise a normal 1/2 bet.
+    { tip: "DNB",  home: 1, away: 1, expect: "REFUNDED" },
+    { tip: "DNB",  home: 2, away: 0, expect: "WIN" },
+    { tip: "DNB",  home: 0, away: 2, expect: "LOSS" },
   ];
 
   let pass = 0;
@@ -68,11 +78,15 @@ function runUnitChecks() {
   console.log(`  ${pass}/${cases.length} passed`);
 
   console.log("\n=== Unit checks: comboOutcome() ===");
-  const comboCases: Array<{ legs: Array<"PENDING" | "WIN" | "LOSS">; expect: "PENDING" | "WIN" | "LOSS" }> = [
+  const comboCases: Array<{ legs: Array<"PENDING" | "WIN" | "LOSS" | "REFUNDED">; expect: "PENDING" | "WIN" | "LOSS" | "REFUNDED" }> = [
     { legs: ["WIN", "WIN", "WIN"], expect: "WIN" },
     { legs: ["WIN", "LOSS", "WIN"], expect: "LOSS" },
     { legs: ["WIN", "PENDING", "WIN"], expect: "PENDING" },
     { legs: ["LOSS", "PENDING"], expect: "LOSS" }, // any loss fails the combo immediately
+    { legs: ["WIN", "REFUNDED", "WIN"], expect: "WIN" }, // void leg removed, rest still wins
+    { legs: ["LOSS", "REFUNDED"], expect: "LOSS" }, // void leg doesn't rescue a loss
+    { legs: ["REFUNDED", "PENDING"], expect: "PENDING" }, // void leg removed, one leg still to play
+    { legs: ["REFUNDED", "REFUNDED"], expect: "REFUNDED" }, // every leg voided → whole combo refunded
   ];
   let comboPass = 0;
   for (const c of comboCases) {
