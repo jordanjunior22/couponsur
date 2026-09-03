@@ -7,6 +7,7 @@ import Script from "next/script";
 import PWAInstallButton from "@/components/PWAInstallButton";
 import ChatWidget from "@/components/ChatWidget";
 import AnnouncementBanner from "@/components/AnnouncementBanner";
+import AnnouncementPopup from "@/components/AnnouncementPopup";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 
 const geistSans = Geist({
@@ -74,6 +75,7 @@ export default function RootLayout({
           <LoadWrapper>
             <PushNotificationPrompt />
             <AnnouncementBanner />
+            <AnnouncementPopup />
             {children}
             <PWAInstallButton />
             <ChatWidget />

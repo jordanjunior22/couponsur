@@ -1,11 +1,20 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
 export type AnnouncementType = "INFO" | "WARNING" | "SUCCESS";
+// BANNER: the existing slim strip along the top of the site (dismiss once,
+// stays gone, but easy to miss). POPUP: a blocking centered modal shown
+// once per visitor on page load — for something the admin needs everyone
+// to actually see, not just have available (e.g. "no betting today").
+// Same dismiss-once-then-gone-forever behavior either way (see
+// components/AnnouncementBanner.tsx / AnnouncementPopup.tsx), just
+// different visibility.
+export type AnnouncementDisplayStyle = "BANNER" | "POPUP";
 
 export interface IAnnouncement extends Document {
   title: string;
   body: string;
   type: AnnouncementType;
+  displayStyle: AnnouncementDisplayStyle;
   isActive: boolean;
   expiresAt: Date | null;
   createdAt: Date;
@@ -30,6 +39,11 @@ const AnnouncementSchema = new Schema<IAnnouncement>(
       type: String,
       enum: ["INFO", "WARNING", "SUCCESS"],
       default: "INFO",
+    },
+    displayStyle: {
+      type: String,
+      enum: ["BANNER", "POPUP"],
+      default: "BANNER",
     },
     isActive: {
       type: Boolean,

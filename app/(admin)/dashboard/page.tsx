@@ -84,6 +84,7 @@ interface Announcement {
   title: string;
   body: string;
   type: "INFO" | "WARNING" | "SUCCESS";
+  displayStyle: "BANNER" | "POPUP";
   isActive: boolean;
   expiresAt: string | null;
   createdAt: string;
@@ -2874,6 +2875,7 @@ function AnnouncementFormModal({ announcement, onSave, onClose }: { announcement
   const [title, setTitle] = useState(announcement?.title ?? "");
   const [body, setBody] = useState(announcement?.body ?? "");
   const [type, setType] = useState<Announcement["type"]>(announcement?.type ?? "INFO");
+  const [displayStyle, setDisplayStyle] = useState<Announcement["displayStyle"]>(announcement?.displayStyle ?? "BANNER");
   const [expiresAt, setExpiresAt] = useState(announcement?.expiresAt ? announcement.expiresAt.split("T")[0] : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2887,6 +2889,7 @@ function AnnouncementFormModal({ announcement, onSave, onClose }: { announcement
         title: title.trim(),
         body: body.trim(),
         type,
+        displayStyle,
         expiresAt: expiresAt || null,
       };
       const res = await fetch(
@@ -2941,6 +2944,19 @@ function AnnouncementFormModal({ announcement, onSave, onClose }: { announcement
             <label style={lStyle}>Message</label>
             <textarea style={{ ...iStyle, resize: "vertical", minHeight: 90, fontFamily: "inherit" }} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Détails de l'annonce…" maxLength={2000} />
           </div>
+          <div>
+            <label style={lStyle}>Affichage</label>
+            <select style={{ ...iStyle, cursor: "pointer" }} value={displayStyle} onChange={(e) => setDisplayStyle(e.target.value as Announcement["displayStyle"])}>
+              <option value="BANNER">Bannière (bandeau discret en haut du site)</option>
+              <option value="POPUP">Popup (s&apos;affiche au chargement, impossible à manquer)</option>
+            </select>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>
+              {displayStyle === "POPUP"
+                ? "À utiliser pour les infos importantes que tout le monde doit voir (ex: pas de paris aujourd'hui). Se ferme définitivement une fois fermée par le visiteur."
+                : "Bandeau discret, fermable, en haut du site — pour les infos moins urgentes."}
+            </div>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
               <label style={lStyle}>Type</label>
@@ -3060,6 +3076,11 @@ function AnnouncementsTab({ announcements, setAnnouncements, loading }: { announ
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    {a.displayStyle === "POPUP" && (
+                      <span style={{ fontSize: 9, color: C.text, background: C.dark4, border: `1px solid ${C.border}`, padding: "2px 7px", borderRadius: 4, fontWeight: 700, letterSpacing: "0.5px" }}>
+                        🪟 POPUP
+                      </span>
+                    )}
                     <span style={{ fontSize: 9, color: tLabel.color, background: `${tLabel.color}1A`, border: `1px solid ${tLabel.color}40`, padding: "2px 7px", borderRadius: 4, fontWeight: 700, letterSpacing: "0.5px" }}>
                       {tLabel.label}
                     </span>

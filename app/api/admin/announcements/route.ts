@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import AnnouncementModel, { AnnouncementType } from "@/models/Announcement";
+import AnnouncementModel, { AnnouncementType, AnnouncementDisplayStyle } from "@/models/Announcement";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
@@ -20,6 +20,7 @@ async function requireAdmin() {
 }
 
 const VALID_TYPES: AnnouncementType[] = ["INFO", "WARNING", "SUCCESS"];
+const VALID_DISPLAY_STYLES: AnnouncementDisplayStyle[] = ["BANNER", "POPUP"];
 
 // ─── LIST ALL ANNOUNCEMENTS (ADMIN ONLY) ─────────────────
 // Unlike the public /api/announcements route, this returns inactive and
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest) {
     const title = typeof body.title === "string" ? body.title.trim() : "";
     const text = typeof body.body === "string" ? body.body.trim() : "";
     const type = VALID_TYPES.includes(body.type) ? body.type : "INFO";
+    const displayStyle = VALID_DISPLAY_STYLES.includes(body.displayStyle) ? body.displayStyle : "BANNER";
     const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
 
     if (!title) {
@@ -72,6 +74,7 @@ export async function POST(req: NextRequest) {
       title,
       body: text,
       type,
+      displayStyle,
       expiresAt,
       isActive: true,
     });

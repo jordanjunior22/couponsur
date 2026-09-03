@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import AnnouncementModel, { AnnouncementType } from "@/models/Announcement";
+import AnnouncementModel, { AnnouncementType, AnnouncementDisplayStyle } from "@/models/Announcement";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
@@ -20,6 +20,7 @@ async function requireAdmin() {
 }
 
 const VALID_TYPES: AnnouncementType[] = ["INFO", "WARNING", "SUCCESS"];
+const VALID_DISPLAY_STYLES: AnnouncementDisplayStyle[] = ["BANNER", "POPUP"];
 
 // ─── UPDATE ANNOUNCEMENT (ADMIN ONLY) ────────────────────
 // PATCH /api/admin/announcements/:id
@@ -64,6 +65,12 @@ export async function PATCH(
         return NextResponse.json({ success: false, message: "Invalid type" }, { status: 400 });
       }
       updates.type = body.type;
+    }
+    if (body.displayStyle !== undefined) {
+      if (!VALID_DISPLAY_STYLES.includes(body.displayStyle)) {
+        return NextResponse.json({ success: false, message: "Invalid displayStyle" }, { status: 400 });
+      }
+      updates.displayStyle = body.displayStyle;
     }
     if (body.isActive !== undefined) {
       updates.isActive = !!body.isActive;
