@@ -8,6 +8,11 @@ interface Announcement {
   title: string;
   body: string;
   type: "INFO" | "WARNING" | "SUCCESS";
+  // Optional because the public API's .lean() query returns pre-existing
+  // announcements without this field at all (schema default only applies
+  // on hydration, not to a plain lean() object) — missing means "BANNER",
+  // same as the schema default.
+  displayStyle?: "BANNER" | "POPUP";
 }
 
 const DISMISSED_KEY = "dismissed_announcements";
@@ -58,7 +63,9 @@ export default function AnnouncementBanner() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
-  const active = announcements.find((a) => !dismissed.includes(a._id));
+  // POPUP-style announcements are handled entirely by AnnouncementPopup —
+  // showing them here too would mean the same announcement appears twice.
+  const active = announcements.find((a) => (a.displayStyle ?? "BANNER") === "BANNER" && !dismissed.includes(a._id));
 
   const dismiss = (id: string) => {
     const next = [...dismissed, id];
