@@ -13,3 +13,17 @@ export function normalizeUserPhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   return digits.length > 9 && digits.startsWith("237") ? digits.slice(3) : digits;
 }
+
+// A valid Cameroon mobile number in the canonical form above: exactly 9
+// digits, starting with 6 (the MTN/Orange mobile prefix — the only two
+// operators this app's payment flow supports, see /api/subscribe and
+// /api/pay's own "+237" + this-number construction). Used to REJECT bad
+// input at the one place phone is ever written (signup) — deliberately not
+// applied to login or to any existing stored record, since a handful of
+// legacy accounts predate this check (e.g. an 8-digit number, one with a
+// foreign leading-0 format) and must stay reachable for whoever owns them.
+const CAMEROON_MOBILE_RE = /^6\d{8}$/;
+
+export function isValidCameroonMobile(normalizedPhone: string): boolean {
+  return CAMEROON_MOBILE_RE.test(normalizedPhone);
+}

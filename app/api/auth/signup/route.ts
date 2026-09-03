@@ -3,7 +3,7 @@ import { connectDB } from "@/utils/ConnectDb";
 import User from "@/models/Users";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { normalizeUserPhone } from "@/utils/normalizeUserPhone";
+import { normalizeUserPhone, isValidCameroonMobile } from "@/utils/normalizeUserPhone";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 
@@ -26,9 +26,18 @@ export async function POST(req: NextRequest) {
     // create a duplicate account for a phone number that already exists
     // in the other format (see utils/normalizeUserPhone).
     const phone = normalizeUserPhone(rawPhone);
-    if (!phone) {
+
+    // Reject anything that isn't a real Cameroon mobile number outright —
+    // this app's payment flow only ever pays out to a "+237" MTN/Orange
+    // number (see /api/subscribe, /api/pay), so an account with any other
+    // shape can never actually complete a purchase, and historically this
+    // gap is exactly how junk data got in (an email typed into the phone
+    // field, a foreign number, etc. — found and cleaned up in this same
+    // pass). Login stays permissive and does NOT use this check, so any
+    // pre-existing account that predates this validation stays reachable.
+    if (!isValidCameroonMobile(phone)) {
       return NextResponse.json(
-        { success: false, message: "Numéro de téléphone invalide" },
+        { success: false, message: "Numéro de téléphone invalide — format attendu : 6XX XXX XXX" },
         { status: 400 }
       );
     }
