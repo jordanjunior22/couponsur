@@ -759,6 +759,37 @@ function UserDetailModal({ user, picks, subPrice, onClose, onActivated }: { user
   const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // ─── Phone number change (support action — new SIM, or a typo at signup) ──
+  const [phoneOpen, setPhoneOpen] = useState(false);
+  const [newPhone, setNewPhone] = useState("");
+  const [phoneSaving, setPhoneSaving] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+
+  const handleChangePhone = async () => {
+    setPhoneSaving(true);
+    setPhoneError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${user._id}/change-phone`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newPhone }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        onActivated(data.data); // generic "user was updated" callback — see its wiring below
+        setNewPhone("");
+        setPhoneOpen(false);
+      } else {
+        setPhoneError(data.message || "Échec du changement de numéro.");
+      }
+    } catch {
+      setPhoneError("Erreur réseau lors du changement de numéro.");
+    } finally {
+      setPhoneSaving(false);
+    }
+  };
+
   const handleResetPassword = async () => {
     setResetting(true);
     setResetError(null);
@@ -932,6 +963,42 @@ function UserDetailModal({ user, picks, subPrice, onClose, onActivated }: { user
             </button>
           )}
         </div>
+
+        {/* Phone number change — support action, same _id so subscription/picks/payments are untouched */}
+        {user.role !== "ADMIN" && (
+          <div style={{ marginBottom: 20 }}>
+            {phoneOpen ? (
+              <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
+                  Nouveau numéro de téléphone camerounais (format : 6XX XXX XXX).
+                </div>
+                <input
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  placeholder="6XX XXX XXX"
+                  style={{ width: "100%", background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 12, padding: "8px 10px", fontFamily: "inherit", outline: "none", marginBottom: 8, boxSizing: "border-box" }}
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => { setPhoneOpen(false); setNewPhone(""); setPhoneError(null); }} style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                    Annuler
+                  </button>
+                  <button onClick={handleChangePhone} disabled={phoneSaving || !newPhone.trim()} style={{ flex: 1, background: C.gold, border: "none", color: C.dark, borderRadius: 6, padding: "8px", fontSize: 11, fontWeight: 700, cursor: (phoneSaving || !newPhone.trim()) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (phoneSaving || !newPhone.trim()) ? 0.6 : 1 }}>
+                    {phoneSaving ? "…" : "Confirmer"}
+                  </button>
+                </div>
+                {phoneError && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{phoneError}</div>}
+              </div>
+            ) : (
+              <button
+                onClick={() => setPhoneOpen(true)}
+                style={{ width: "100%", background: "none", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: "10px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                title="Vérifie l'identité du client via le chat avant de changer son numéro"
+              >
+                Changer le numéro de téléphone
+              </button>
+            )}
+          </div>
+        )}
 
         <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
           Picks débloqués
