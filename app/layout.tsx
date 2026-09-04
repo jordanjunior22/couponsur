@@ -8,6 +8,7 @@ import PWAInstallButton from "@/components/PWAInstallButton";
 import ChatWidget from "@/components/ChatWidget";
 import AnnouncementBanner from "@/components/AnnouncementBanner";
 import AnnouncementPopup from "@/components/AnnouncementPopup";
+import ActivityPing from "@/components/ActivityPing";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 
 const geistSans = Geist({
@@ -76,6 +77,7 @@ export default function RootLayout({
             <PushNotificationPrompt />
             <AnnouncementBanner />
             <AnnouncementPopup />
+            <ActivityPing />
             {children}
             <PWAInstallButton />
             <ChatWidget />

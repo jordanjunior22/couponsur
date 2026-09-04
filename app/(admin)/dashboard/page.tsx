@@ -1378,11 +1378,328 @@ function PicksTab({ picks, setPicks }: { picks: Pick[]; setPicks: React.Dispatch
   );
 }
 
+// ─── Users → Activité ───────────────────────────────────────────────────────────
+// "When are my users actually online" — backed by a real activity log (see
+// models/UserPresence.ts, models/ActivityHourBucket.ts, app/api/admin/analytics/
+// activity/route.ts), not a one-shot snapshot. Single-hue (gold) sequential
+// ramp for the heatmap since it encodes magnitude, not identity — no legend
+// box needed for the single-series trend line either, per the same rule.
+interface ActivityUserEntry {
+  userId: string;
+  phone: string;
+  lastPingAt: string;
+}
+
+interface ActivityData {
+  onlineNow: number;
+  onlineUsers: ActivityUserEntry[];
+  recentLogins: ActivityUserEntry[];
+  heatmap: number[][]; // [weekday: 0=Sun..6=Sat][hour: 0..23]
+  dailyTrend: { date: string; activeUsers: number }[];
+  retentionDays: number;
+}
+
+// French relative time — "à l'instant" / "il y a 5 min" / "il y a 2h" / "il y a 3j".
+function timeAgo(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "à l'instant";
+  if (min < 60) return `il y a ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `il y a ${h}h`;
+  const d = Math.floor(h / 24);
+  return `il y a ${d}j`;
+}
+
+const WEEKDAY_LABELS_MON_FIRST = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+// Sunday-first index (matches the API's heatmap[0]=Sunday) for each Mon-first row.
+const MON_FIRST_TO_SUN_FIRST = [1, 2, 3, 4, 5, 6, 0];
+const HEATMAP_INTENSITY_STEPS = [0.05, 0.22, 0.4, 0.6, 0.85]; // 5 discrete buckets, low->high
+
+function ActivityHeatmap({ heatmap }: { heatmap: number[][] }) {
+  const max = Math.max(1, ...heatmap.flat());
+  const bucketFor = (v: number) => {
+    if (v <= 0) return 0;
+    const frac = v / max;
+    if (frac <= 0.25) return 1;
+    if (frac <= 0.5) return 2;
+    if (frac <= 0.75) return 3;
+    return 4;
+  };
+  const cellSize = 17;
+  return (
+    <div>
+      <div style={{ overflowX: "auto" }}>
+        <div style={{ display: "inline-block", minWidth: "100%" }}>
+          {/* Hour header — every 3h to avoid label clutter (never a number on every point) */}
+          <div style={{ display: "flex", marginLeft: 34, marginBottom: 4 }}>
+            {Array.from({ length: 24 }, (_, h) => (
+              <div key={h} style={{ width: cellSize, flexShrink: 0, fontSize: 8, color: C.muted, textAlign: "center" }}>
+                {h % 3 === 0 ? `${h}h` : ""}
+              </div>
+            ))}
+          </div>
+          {WEEKDAY_LABELS_MON_FIRST.map((label, rowIdx) => {
+            const sunFirstIdx = MON_FIRST_TO_SUN_FIRST[rowIdx];
+            const row = heatmap[sunFirstIdx] || Array(24).fill(0);
+            return (
+              <div key={label} style={{ display: "flex", alignItems: "center", marginBottom: 3 }}>
+                <div style={{ width: 30, flexShrink: 0, fontSize: 9, color: C.muted, letterSpacing: "0.5px" }}>{label}</div>
+                {row.map((v, h) => {
+                  const alpha = HEATMAP_INTENSITY_STEPS[bucketFor(v)];
+                  return (
+                    <div
+                      key={h}
+                      title={`${label} ${h}h — ${v} activité${v !== 1 ? "s" : ""}`}
+                      style={{
+                        width: cellSize - 2, height: cellSize - 2, margin: "0 1px",
+                        borderRadius: 3, background: `rgba(201,168,76,${alpha})`,
+                        flexShrink: 0, cursor: "default",
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, fontSize: 9, color: C.muted }}>
+        <span>Moins</span>
+        {HEATMAP_INTENSITY_STEPS.map((a, i) => (
+          <div key={i} style={{ width: 12, height: 12, borderRadius: 3, background: `rgba(201,168,76,${a})` }} />
+        ))}
+        <span>Plus</span>
+      </div>
+    </div>
+  );
+}
+
+function ActivityTrendLine({ dailyTrend }: { dailyTrend: { date: string; activeUsers: number }[] }) {
+  // Zero-fill the last 14 calendar days — the API only returns days that
+  // actually had activity, but a line chart needs a continuous x-axis.
+  const days: { date: string; activeUsers: number }[] = [];
+  const byDate = new Map(dailyTrend.map((d) => [d.date, d.activeUsers]));
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split("T")[0];
+    days.push({ date: key, activeUsers: byDate.get(key) || 0 });
+  }
+
+  const width = 600;
+  const height = 160;
+  const padL = 30;
+  const padB = 20;
+  const padT = 14;
+  const plotW = width - padL - 10;
+  const plotH = height - padB - padT;
+  const max = Math.max(1, ...days.map((d) => d.activeUsers)) * 1.15;
+
+  const x = (i: number) => padL + (i / (days.length - 1)) * plotW;
+  const y = (v: number) => padT + plotH - (v / max) * plotH;
+
+  const linePath = days.map((d, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(d.activeUsers).toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L ${x(days.length - 1).toFixed(1)} ${(padT + plotH).toFixed(1)} L ${x(0).toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
+
+  // Deduped — with low activity (e.g. all zeros), max/2 and max can round
+  // to the same integer, which produced two gridlines both keyed "1" and
+  // React's "two children with the same key" warning.
+  const gridValues = [...new Set([0, Math.round(max / 2), Math.round(max)])];
+  const last = days[days.length - 1];
+
+  const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", overflow: "visible" }}>
+      {/* Recessive gridlines + axis ticks */}
+      {gridValues.map((v) => (
+        <g key={v}>
+          <line x1={padL} x2={width - 10} y1={y(v)} y2={y(v)} stroke={C.border} strokeWidth={1} />
+          <text x={0} y={y(v) + 3} fontSize={9} fill={C.muted}>{v}</text>
+        </g>
+      ))}
+
+      {/* Area wash (~10% opacity) + 2px line */}
+      <path d={areaPath} fill="rgba(201,168,76,0.1)" />
+      <path d={linePath} fill="none" stroke={C.gold} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+      {/* Per-point hover targets (tooltip) — 14 sparse points, simpler than a full crosshair */}
+      {days.map((d, i) => (
+        <circle key={d.date} cx={x(i)} cy={y(d.activeUsers)} r={7} fill="transparent">
+          <title>{`${fmtDate(d.date)} — ${d.activeUsers} utilisateur${d.activeUsers !== 1 ? "s" : ""} actif${d.activeUsers !== 1 ? "s" : ""}`}</title>
+        </circle>
+      ))}
+
+      {/* End-dot marker with surface ring + direct label at the end (never every point) */}
+      <circle cx={x(days.length - 1)} cy={y(last.activeUsers)} r={4} fill={C.gold} stroke={C.dark3} strokeWidth={2} />
+      <text x={x(days.length - 1) - 4} y={y(last.activeUsers) - 10} fontSize={11} fill={C.text} textAnchor="end" fontWeight={700}>
+        {last.activeUsers}
+      </text>
+
+      {/* Sparse x-axis labels: first, middle, last only */}
+      {[0, Math.floor((days.length - 1) / 2), days.length - 1].map((i) => (
+        <text key={i} x={x(i)} y={height - 4} fontSize={9} fill={C.muted} textAnchor="middle">
+          {fmtDate(days[i].date)}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+// A count alone doesn't say WHO — this renders the actual phone numbers,
+// clickable through to that user's existing detail panel when a match is
+// found in the already-loaded `users` list (falls back to a plain,
+// unclickable row otherwise — e.g. a user deleted since their last ping).
+const ACTIVITY_LIST_PAGE_SIZE = 10;
+
+function ActivityUserList({
+  title, entries, emptyLabel, usersById, onSelectUser,
+}: {
+  title: string;
+  entries: ActivityUserEntry[];
+  emptyLabel: string;
+  usersById: Map<string, ApiUser>;
+  onSelectUser: (u: ApiUser) => void;
+}) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(entries.length / ACTIVITY_LIST_PAGE_SIZE));
+  const effectivePage = Math.min(page, totalPages);
+  const paged = entries.slice((effectivePage - 1) * ACTIVITY_LIST_PAGE_SIZE, effectivePage * ACTIVITY_LIST_PAGE_SIZE);
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.text, letterSpacing: 1, marginBottom: 12 }}>
+        {title}
+      </div>
+      {entries.length === 0 ? (
+        <div style={{ padding: "16px 0", textAlign: "center", color: C.muted, fontSize: 12 }}>{emptyLabel}</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {paged.map((e) => {
+              const user = usersById.get(e.userId);
+              const clickable = !!user;
+              return (
+                <div
+                  key={e.userId}
+                  onClick={() => user && onSelectUser(user)}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                    padding: "8px 10px", borderRadius: 8, background: C.dark4,
+                    cursor: clickable ? "pointer" : "default",
+                  }}
+                >
+                  <span style={{ fontSize: 12, color: C.text, fontWeight: 500 }}>{e.phone}</span>
+                  <span style={{ fontSize: 11, color: C.muted }}>{timeAgo(e.lastPingAt)}</span>
+                </div>
+              );
+            })}
+          </div>
+          <Pagination page={effectivePage} totalPages={totalPages} total={entries.length} onChange={setPage} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function UsersActivityView({ users, onSelectUser }: { users: ApiUser[]; onSelectUser: (u: ApiUser) => void }) {
+  const [data, setData] = useState<ActivityData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const usersById = useMemo(() => new Map(users.map((u) => [u._id, u])), [users]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchData = async () => {
+      try {
+        const res = await fetch("/api/admin/analytics/activity", { credentials: "include" });
+        const json = await res.json();
+        if (cancelled) return;
+        if (json?.success) { setData(json.data); setError(null); }
+        else setError(json.message || "Échec du chargement.");
+      } catch {
+        if (!cancelled) setError("Erreur réseau.");
+      }
+    };
+    fetchData();
+    // Same polling convention as AnnouncementBanner/chat elsewhere in this app.
+    const interval = setInterval(fetchData, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  if (error) {
+    return <div style={{ padding: "32px 0", textAlign: "center", color: C.red, fontSize: 13 }}>{error}</div>;
+  }
+  if (!data) {
+    return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
+  }
+
+  const totalHeatmapPings = data.heatmap.flat().reduce((a, b) => a + b, 0);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Stat tile — hero-ish figure, no chart needed for a single number */}
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ width: 10, height: 10, borderRadius: "50%", background: C.green, boxShadow: `0 0 8px ${C.green}`, flexShrink: 0 }} />
+        <div>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 30, color: C.text, lineHeight: 1 }}>{data.onlineNow}</div>
+          <div style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginTop: 2 }}>
+            En ligne maintenant
+          </div>
+        </div>
+      </div>
+
+      <ActivityUserList
+        title={`En ligne (${data.onlineUsers.length})`}
+        entries={data.onlineUsers}
+        emptyLabel="Personne en ligne pour le moment."
+        usersById={usersById}
+        onSelectUser={onSelectUser}
+      />
+
+      <ActivityUserList
+        title="Connexions récentes"
+        entries={data.recentLogins}
+        emptyLabel="Aucune activité enregistrée pour le moment."
+        usersById={usersById}
+        onSelectUser={onSelectUser}
+      />
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+          Quand tes utilisateurs sont actifs
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+          Basé sur les {data.retentionDays} derniers jours — les cases les plus foncées sont tes meilleurs créneaux pour publier.
+        </div>
+        {totalHeatmapPings === 0 ? (
+          <div style={{ padding: "24px 0", textAlign: "center", color: C.muted, fontSize: 12 }}>
+            Pas encore assez de données. Revenez un peu plus tard.
+          </div>
+        ) : (
+          <ActivityHeatmap heatmap={data.heatmap} />
+        )}
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+          Utilisateurs actifs par jour
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>14 derniers jours</div>
+        <ActivityTrendLine dailyTrend={data.dailyTrend} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Users Tab ──────────────────────────────────────────────────────────────────
 function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; setUsers: React.Dispatch<React.SetStateAction<ApiUser[]>>; usersLoading: boolean; picks: Pick[] }) {
   const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);
   const [search, setSearch] = useState("");
   const [subPrice, setSubPrice] = useState<number | null>(null);
+  const [view, setView] = useState<"list" | "activity">("list");
+  const [page, setPage] = useState(1);
+  const USERS_PAGE_SIZE = 25;
 
   useEffect(() => {
     (async () => {
@@ -1398,6 +1715,12 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
     users.filter((u) => u.phone.includes(search) || u.role.toLowerCase().includes(search.toLowerCase())),
     [users, search]
   );
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / USERS_PAGE_SIZE));
+  const paged = useMemo(() => {
+    const start = (page - 1) * USERS_PAGE_SIZE;
+    return filtered.slice(start, start + USERS_PAGE_SIZE);
+  }, [filtered, page]);
 
   if (usersLoading) {
     return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
@@ -1428,9 +1751,34 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
 
   return (
     <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {([["list", "Liste"], ["activity", "Activité"]] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setView(id)}
+            style={{
+              background: view === id ? C.gold : C.dark4, color: view === id ? C.dark : C.muted,
+              border: `1px solid ${view === id ? C.gold : C.border}`, borderRadius: 8,
+              padding: "7px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "activity" ? (
+        <UsersActivityView users={users} onSelectUser={setSelectedUser} />
+      ) : (
+      <>
       <div style={{ marginBottom: 16 }}>
         <input style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 12, padding: "8px 12px", fontFamily: "inherit", outline: "none", width: "100%", maxWidth: 300 }}
-          placeholder="Rechercher par numéro ou rôle…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          placeholder="Rechercher par numéro ou rôle…" value={search}
+          // Reset to page 1 right where the search changes, rather than a
+          // separate effect reacting to it — avoids an extra render pass
+          // and the "setState in effect" smell for what's really a single
+          // user action with two state updates.
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
       </div>
 
       <div className="admin-table-desktop">
@@ -1438,12 +1786,12 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
           <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "10px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 9, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
             <span>Téléphone</span><span>Rôle</span><span>Abonnement</span><span>Picks</span><span>Wins</span><span>Dépensé</span><span>Dernière conn.</span><span>Détails</span>
           </div>
-          {filtered.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun utilisateur.</div>}
-          {filtered.map((u, i) => {
+          {paged.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun utilisateur.</div>}
+          {paged.map((u, i) => {
             const { unlocked, wins, rev, avatar, roleBadge } = UserRow({ u });
             return (
               <div key={u._id}
-                style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer", transition: "background 0.15s" }}
+                style={{ display: "grid", gridTemplateColumns: "1.5fr 0.8fr 0.8fr 1fr 1fr 1fr 1fr auto", padding: "12px 16px", alignItems: "center", borderBottom: i < paged.length - 1 ? `1px solid ${C.border}` : "none", cursor: "pointer", transition: "background 0.15s" }}
                 onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.dark4)}
                 onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
                 onClick={() => setSelectedUser(u)}>
@@ -1469,8 +1817,8 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
       </div>
 
       <div className="admin-cards-mobile">
-        {filtered.length === 0 && <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "32px 0" }}>Aucun utilisateur.</div>}
-        {filtered.map((u) => {
+        {paged.length === 0 && <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "32px 0" }}>Aucun utilisateur.</div>}
+        {paged.map((u) => {
           const { unlocked, wins, rev, avatar, roleBadge } = UserRow({ u });
           return (
             <div key={u._id} onClick={() => setSelectedUser(u)} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer" }}>
@@ -1501,6 +1849,10 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
           );
         })}
       </div>
+
+      <Pagination page={page} totalPages={totalPages} total={filtered.length} onChange={setPage} />
+      </>
+      )}
 
       {selectedUser && (
         <UserDetailModal
