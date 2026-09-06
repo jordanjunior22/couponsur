@@ -2530,6 +2530,28 @@ function SettingsTab() {
   const [genMarketAccess, setGenMarketAccess] = useState<Record<string, "EVERYONE" | "PREMIUM">>({});
   const [genMarketSaving, setGenMarketSaving] = useState<string | null>(null); // which market code is mid-save, if any
 
+  // ── Premium group chat ───────────────────────────────────────────────────
+  const [groupChatEnabled, setGroupChatEnabled] = useState(true);
+  const [groupChatSaving, setGroupChatSaving] = useState(false);
+  const [groupChatSaveMsg, setGroupChatSaveMsg] = useState<string | null>(null);
+  const [groupChatStats, setGroupChatStats] = useState<{ messageCount: number; imageCount: number; totalBytes: number } | null>(null);
+  const [groupChatStatsLoading, setGroupChatStatsLoading] = useState(true);
+  const [groupChatClearing, setGroupChatClearing] = useState(false);
+
+  const fetchGroupChatStats = async () => {
+    try {
+      const res = await fetch("/api/admin/group-chat/stats", { credentials: "include" });
+      const data = await res.json();
+      if (data?.success) setGroupChatStats(data.data);
+    } catch (e) {
+      console.error("Group chat stats fetch:", e);
+    } finally {
+      setGroupChatStatsLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchGroupChatStats(); }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -2553,6 +2575,10 @@ function SettingsTab() {
           if (data.data.matchGeneratorMarketAccess && typeof data.data.matchGeneratorMarketAccess === "object") {
             setGenMarketAccess(data.data.matchGeneratorMarketAccess);
           }
+          // `!== false` — a Settings doc created before this field existed
+          // comes back with it missing entirely, and that should read as
+          // "on" (same fallback the server's access check uses).
+          setGroupChatEnabled(data.data.groupChatEnabled !== false);
         }
       } catch (e) {
         console.error("Settings fetch:", e);
@@ -2680,6 +2706,59 @@ function SettingsTab() {
       setGenMarketSaving(null);
       setTimeout(() => setGenSaveMsg(null), 3000);
     }
+  };
+
+  const saveGroupChatEnabled = async (enabled: boolean) => {
+    setGroupChatSaving(true);
+    setGroupChatSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupChatEnabled: enabled }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setGroupChatEnabled(data.data.groupChatEnabled !== false);
+        setGroupChatSaveMsg("Enregistré avec succès.");
+      } else {
+        setGroupChatEnabled(!enabled); // revert the optimistic toggle
+        setGroupChatSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setGroupChatEnabled(!enabled);
+      setGroupChatSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setGroupChatSaving(false);
+      setTimeout(() => setGroupChatSaveMsg(null), 3000);
+    }
+  };
+
+  const clearGroupChat = async () => {
+    if (!confirm("Supprimer définitivement tous les messages du groupe premium (y compris les images) ? Cette action est irréversible.")) return;
+    setGroupChatClearing(true);
+    try {
+      const res = await fetch("/api/admin/group-chat/clear", { method: "DELETE", credentials: "include" });
+      const data = await res.json();
+      if (data?.success) {
+        setGroupChatSaveMsg(`${data.data.deletedCount} message(s) supprimé(s).`);
+        await fetchGroupChatStats();
+      } else {
+        setGroupChatSaveMsg(data.message || "Échec de la suppression.");
+      }
+    } catch {
+      setGroupChatSaveMsg("Erreur réseau lors de la suppression.");
+    } finally {
+      setGroupChatClearing(false);
+      setTimeout(() => setGroupChatSaveMsg(null), 4000);
+    }
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} o`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} Mo`;
   };
 
   const iStyle: React.CSSProperties = {
@@ -2909,6 +2988,86 @@ function SettingsTab() {
             color: genSaveMsg.includes("succès") ? C.green : C.red,
           }}>
             {genSaveMsg}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+          Fonctionnalité
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+          Groupe Premium
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+          Discussion de groupe réservée aux admins et aux abonnés actifs, accessible depuis les outils (🧰) du site.
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+          <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+            Activer la fonctionnalité
+          </label>
+          <button
+            onClick={() => { const next = !groupChatEnabled; setGroupChatEnabled(next); saveGroupChatEnabled(next); }}
+            disabled={groupChatSaving}
+            style={{
+              width: 44, height: 24, borderRadius: 12, position: "relative", cursor: groupChatSaving ? "not-allowed" : "pointer",
+              background: groupChatEnabled ? C.gold : C.dark4, border: `1px solid ${groupChatEnabled ? C.gold : C.border}`,
+              transition: "background 0.15s", flexShrink: 0, padding: 0,
+            }}
+          >
+            <span style={{
+              position: "absolute", top: 2, left: groupChatEnabled ? 22 : 2, width: 18, height: 18, borderRadius: "50%",
+              background: groupChatEnabled ? C.dark : C.muted, transition: "left 0.15s",
+            }} />
+          </button>
+        </div>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 8 }}>
+          Stockage utilisé
+        </label>
+        {groupChatStatsLoading ? (
+          <div style={{ fontSize: 12, color: C.muted }}>Chargement…</div>
+        ) : groupChatStats && groupChatStats.messageCount > 0 ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 16 }}>
+            <div style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{groupChatStats.messageCount}</div>
+              <div style={{ fontSize: 10, color: C.muted }}>messages</div>
+            </div>
+            <div style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{groupChatStats.imageCount}</div>
+              <div style={{ fontSize: 10, color: C.muted }}>images</div>
+            </div>
+            <div style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.gold }}>{formatBytes(groupChatStats.totalBytes)}</div>
+              <div style={{ fontSize: 10, color: C.muted }}>stockage</div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>Aucun message pour l&apos;instant.</div>
+        )}
+
+        <button
+          onClick={clearGroupChat}
+          disabled={groupChatClearing || !groupChatStats?.messageCount}
+          style={{
+            width: "100%", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)",
+            color: C.red, borderRadius: 8, padding: "10px 0", fontSize: 12, fontWeight: 700, fontFamily: "inherit",
+            cursor: (groupChatClearing || !groupChatStats?.messageCount) ? "not-allowed" : "pointer",
+            opacity: (groupChatClearing || !groupChatStats?.messageCount) ? 0.5 : 1,
+          }}
+        >
+          {groupChatClearing ? "Suppression…" : "🗑 Vider toutes les discussions"}
+        </button>
+
+        {groupChatSaveMsg && (
+          <div style={{
+            fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
+            background: groupChatSaveMsg.includes("succès") || groupChatSaveMsg.includes("supprimé") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${groupChatSaveMsg.includes("succès") || groupChatSaveMsg.includes("supprimé") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+            color: groupChatSaveMsg.includes("succès") || groupChatSaveMsg.includes("supprimé") ? C.green : C.red,
+          }}>
+            {groupChatSaveMsg}
           </div>
         )}
       </div>

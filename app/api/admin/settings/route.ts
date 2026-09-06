@@ -42,6 +42,7 @@ export async function PUT(req: NextRequest) {
       matchGeneratorAccess,
       matchGeneratorMarketAccess,
       matchGeneratorMatchCount,
+      groupChatEnabled,
     } = body;
 
     const update: Record<string, unknown> = {};
@@ -141,6 +142,16 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.matchGeneratorMatchCount = matchGeneratorMatchCount;
+    }
+
+    if (groupChatEnabled !== undefined) {
+      if (typeof groupChatEnabled !== "boolean") {
+        return NextResponse.json(
+          { success: false, message: "groupChatEnabled must be a boolean" },
+          { status: 400 }
+        );
+      }
+      update.groupChatEnabled = groupChatEnabled;
     }
 
     if (Object.keys(update).length === 0) {

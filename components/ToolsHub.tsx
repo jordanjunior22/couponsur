@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { MatchGeneratorTool } from "./MatchGenerator";
+import { useAuth } from "@/context/AuthContext";
 
 // ─── Tools Hub ────────────────────────────────────────────────────────────────
 // A single sticky entry point for every self-serve "tool" the site offers
@@ -20,6 +22,11 @@ interface SettingsShape {
   // models/Settings.ts) — a market missing from this map falls back to
   // "PREMIUM", same most-restrictive-by-default posture as the server.
   matchGeneratorMarketAccess: Record<string, "EVERYONE" | "PREMIUM">;
+  // Admin's availability toggle for the premium group chat. Existing
+  // Settings docs created before this field existed come back with it
+  // missing entirely — `!== false` (applied where this is read) treats
+  // that as "on", same fallback the server itself uses.
+  groupChatEnabled: boolean;
 }
 
 interface ToolDef {
@@ -27,11 +34,17 @@ interface ToolDef {
   label: string;
   description: string;
   icon: string;
+  // When set, the tool opens as its own full page (router.push) instead of
+  // inline in this sheet — used by the group chat, which needs to be a
+  // real navigable room rather than a popup.
+  href?: string;
 }
 
 const SEEN_KEY = "couponsur_tools_seen_v1";
 
 export function ToolsHub() {
+  const router = useRouter();
+  const { user, hasActiveSubscription } = useAuth();
   const [settings, setSettings] = useState<SettingsShape | null>(null);
   const [open, setOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
@@ -53,9 +66,10 @@ export function ToolsHub() {
             data?.data?.matchGeneratorMarketAccess && typeof data.data.matchGeneratorMarketAccess === "object"
               ? data.data.matchGeneratorMarketAccess
               : {},
+          groupChatEnabled: data?.data?.groupChatEnabled !== false,
         });
       } catch {
-        setSettings({ matchGeneratorEnabled: false, matchGeneratorAccess: "PREMIUM", matchGeneratorMarketAccess: {} });
+        setSettings({ matchGeneratorEnabled: false, matchGeneratorAccess: "PREMIUM", matchGeneratorMarketAccess: {}, groupChatEnabled: false });
       }
     })();
     (async () => {
@@ -75,6 +89,20 @@ export function ToolsHub() {
       label: "Générateur de matchs",
       description: "Génère une combinaison via notre moteur d'analyse, à titre indicatif.",
       icon: "🔮",
+    });
+  }
+  // Premium-only — an admin or a subscriber with an active subscription —
+  // and only while the admin panel's availability toggle is on. Hidden
+  // entirely for anyone else, same posture as the match generator's own
+  // access gate above.
+  const isGroupChatEligible = !!user && (user.role === "ADMIN" || hasActiveSubscription());
+  if (settings?.groupChatEnabled && isGroupChatEligible) {
+    tools.push({
+      id: "group-chat",
+      label: "Groupe Premium",
+      description: "Discussion en temps réel avec les autres abonnés et l'équipe.",
+      icon: "👑",
+      href: "/group-chat",
     });
   }
 
@@ -182,7 +210,10 @@ export function ToolsHub() {
                   {tools.map((t) => (
                     <button
                       key={t.id}
-                      onClick={() => setActiveTool(t.id)}
+                      onClick={() => {
+                        if (t.href) { close(); router.push(t.href); }
+                        else setActiveTool(t.id);
+                      }}
                       style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: "#181C24", border: "1px solid #2A3140", borderRadius: 12, padding: 14, cursor: "pointer", fontFamily: "inherit" }}
                     >
                       <span style={{ fontSize: 26, flexShrink: 0 }}>{t.icon}</span>

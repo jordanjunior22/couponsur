@@ -20,6 +20,10 @@ export interface IUser extends Document {
   role: UserRole;
   unlockedPickIds: mongoose.Types.ObjectId[];
   subscription: ISubscription;
+  // Muted from the premium group chat by an admin — they can still read
+  // it (subscription/admin status is what gates that), just not post.
+  // Scoped to this one feature, not a site-wide ban.
+  groupChatBlocked: boolean;
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -58,6 +62,7 @@ const UserSchema = new Schema<IUser>(
       },
     ],
     subscription: { type: SubscriptionSchema, default: () => ({}) },
+    groupChatBlocked: { type: Boolean, default: false },
     lastLoginAt: { type: Date, default: null },
   },
   {

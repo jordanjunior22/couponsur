@@ -48,6 +48,11 @@ export interface ISettings extends Document {
   matchGeneratorMarketAccess: Record<MatchGeneratorMarket, MatchGeneratorAccess>;
   /** How many matches a single generation produces. */
   matchGeneratorMatchCount: number;
+  /** Master switch for the premium group chat (admins + active
+   *  subscribers). On by default — unlike the match generator, this ships
+   *  already requested and meant to be live; an admin can still flip it
+   *  off (e.g. during moderation or an incident) without touching code. */
+  groupChatEnabled: boolean;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -61,6 +66,7 @@ const SettingsSchema = new Schema<ISettings>(
     matchGeneratorAccess: { type: String, enum: ["EVERYONE", "PREMIUM"], default: "PREMIUM" },
     matchGeneratorMarketAccess: { type: Schema.Types.Mixed, default: () => ({ ...DEFAULT_MARKET_ACCESS }) },
     matchGeneratorMatchCount: { type: Number, default: 3, min: 1, max: 10 },
+    groupChatEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
