@@ -94,57 +94,74 @@ export function CompoundBetBanner() {
       <style>{`
         .cb-wrap { font-family: 'DM Sans', sans-serif; margin-bottom: 16px; }
 
-        /* ── Toggle button ── */
+        /* ── Toggle button — same scale as .xbet-banner (OneXBetBanner) so
+           the two banners read as one consistent family stacked together ── */
         .cb-toggle {
-          margin: 10px 16px;
+          /* Buttons don't stretch to fill a block container the way a div
+             does (form controls size to content by default even under
+             display:flex) — width is spelled out explicitly here so this
+             reaches the same edges as .xbet-banner instead of shrink-wrapping
+             to its content. */
+          width: calc(100% - 32px);
+          box-sizing: border-box;
+          margin: 8px 16px;
           background: linear-gradient(135deg, #0A1628 0%, #3c260d 60%, #0A1628 100%);
           border: 1px solid #1A3A6B;
-          border-left: 5px solid #1565C0;
-          border-radius: 14px;
-          padding: 18px 20px;
+          border-left: 3px solid #1565C0;
+          border-radius: 10px;
+          padding: 10px 14px;
           display: flex;
           align-items: center;
-          gap: 16px;
+          gap: 12px;
           cursor: pointer;
           overflow: hidden;
           position: relative;
-          transition: border-color 0.2s, box-shadow 0.2s;
+          text-align: left;
+          font-family: inherit;
+          transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
         }
         .cb-toggle:hover {
           border-color: #FFD700;
           box-shadow: 0 0 0 1px #FFD70030;
+          transform: translateY(-1px);
         }
-        .cb-toggle-left { display: flex; align-items: center; gap: 12px; }
+        .cb-toggle-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
         .cb-toggle-icon {
-          width: 38px; height: 38px; border-radius: 10px;
+          width: 30px; height: 30px; border-radius: 8px;
           background: rgba(255,215,0,0.1); border: 1px solid rgba(255,215,0,0.2);
           display: flex; align-items: center; justify-content: center;
-          font-size: 18px; flex-shrink: 0;
+          font-size: 15px; flex-shrink: 0;
         }
+        .cb-toggle-text { min-width: 0; }
         .cb-toggle-label {
-          font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
-          color: #42A5F5; margin-bottom: 3px;
+          font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
+          color: #42A5F5; margin-bottom: 2px;
         }
         .cb-toggle-title {
           font-family: 'Bebas Neue', sans-serif;
-          font-size: 18px; color: #fff; letter-spacing: 1px; line-height: 1;
+          font-size: 15px; color: #fff; letter-spacing: 1px; line-height: 1;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .cb-toggle-title span { color: #FFD700; }
-        .cb-toggle-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .cb-toggle-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
         .cb-toggle-badge {
-          font-size: 10px; font-weight: 700; letter-spacing: "1px";
+          font-size: 10px; font-weight: 700; letter-spacing: 1px;
           color: #FFD700; background: rgba(255,215,0,0.1);
           border: 1px solid rgba(255,215,0,0.25);
-          border-radius: 5px; padding: 3px 8px; white-space: nowrap;
+          border-radius: 4px; padding: 2px 8px; white-space: nowrap;
         }
         .cb-toggle-chevron {
-          width: 24px; height: 24px; border-radius: 6px;
+          width: 22px; height: 22px; border-radius: 6px;
           background: rgba(255,255,255,0.06); border: 1px solid #2A3140;
           display: flex; align-items: center; justify-content: center;
-          color: #7A8399; font-size: 12px;
-          transition: transform 0.25s ease;
+          color: #7A8399; font-size: 12px; flex-shrink: 0;
+          transition: transform 0.25s ease, background 0.2s;
         }
+        .cb-toggle:hover .cb-toggle-chevron { background: rgba(255,215,0,0.08); color: #FFD700; }
         .cb-toggle-chevron.open { transform: rotate(180deg); }
+        @media (max-width: 400px) {
+          .cb-toggle-label { display: none; }
+        }
 
         /* ── Collapsible body ── */
         .cb-body {
@@ -216,7 +233,7 @@ export function CompoundBetBanner() {
         <button className="cb-toggle" onClick={() => setOpen((v) => !v)}>
           <div className="cb-toggle-left">
             <div className="cb-toggle-icon">🛡️</div>
-            <div>
+            <div className="cb-toggle-text">
               <div className="cb-toggle-label">Stratégie · Gestion du risque</div>
               <div className="cb-toggle-title">
                 De <span>{fmt(start)}</span> à <span>{fmt(goal)}</span> FCFA

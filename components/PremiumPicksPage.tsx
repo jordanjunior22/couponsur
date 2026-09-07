@@ -1,8 +1,9 @@
 "use client";
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, useId } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { OneXBetBanner } from "./OneXBetBanner";
 import { CompoundBetBanner } from "./CompoundBanner";
+import { SubscribeBanner } from "./SubscribeBanner";
 import { trackEvent, generateEventId, getFbCookies } from "@/lib/pixelClient";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
@@ -36,18 +37,11 @@ export interface Pick {
   matches: Match[];
 }
 
-const PAGE_SIZE = 6;
-
-// Recent = last 30 days (dynamic)
-const RECENT_CUTOFF = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-  .toISOString()
-  .split("T")[0];
-
 // ─── Tier config ──────────────────────────────────────────────────────────────
 const TIER_META: Record<string, { label: string; desc: string }> = {
-  safe:  { label: "Safe",  desc: "Cotes prudentes" },
+  safe: { label: "Safe", desc: "Cotes prudentes" },
   value: { label: "Value", desc: "Équilibre risque / rendement" },
-  bold:  { label: "Bold",  desc: "Cotes élevées" },
+  bold: { label: "Bold", desc: "Cotes élevées" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -66,6 +60,40 @@ function groupByDate(picks: Pick[]): Record<string, Pick[]> {
     groups[key].push(p);
   });
   return groups;
+}
+
+// ─── Week helpers ─────────────────────────────────────────────────────────────
+// A "week" is Monday–Sunday, keyed by that Monday's date string — computed
+// off the same UTC-calendar-date convention the rest of this file already
+// uses for "today" and for grouping (`match_date.split("T")[0]`), so this
+// doesn't introduce a local-time-vs-UTC mismatch alongside it.
+function getWeekKey(dateStr: string): string {
+  const d = new Date(dateStr.split("T")[0] + "T00:00:00Z");
+  const day = d.getUTCDay(); // 0 = Sunday ... 6 = Saturday
+  const diffToMonday = day === 0 ? 6 : day - 1;
+  d.setUTCDate(d.getUTCDate() - diffToMonday);
+  return d.toISOString().split("T")[0];
+}
+
+function formatWeekRange(weekKey: string): string {
+  const start = new Date(weekKey + "T00:00:00Z");
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 6);
+  const sameMonth = start.getUTCMonth() === end.getUTCMonth();
+  const startLabel = start.toLocaleDateString("fr-FR", { day: "numeric", month: sameMonth ? undefined : "short" });
+  const endLabel = end.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+  return `${startLabel} – ${endLabel}`;
+}
+
+interface Tally { wins: number; losses: number; refunds: number; graded: number; winRate: number | null }
+
+// Win rate excludes REFUNDED picks — a void isn't a loss.
+function computeRecord(picks: Pick[]): Tally {
+  const wins = picks.filter((p) => p.outcome === "WIN").length;
+  const losses = picks.filter((p) => p.outcome === "LOSS").length;
+  const refunds = picks.filter((p) => p.outcome === "REFUNDED").length;
+  const graded = wins + losses;
+  return { wins, losses, refunds, graded, winRate: graded > 0 ? Math.round((wins / graded) * 100) : null };
 }
 
 // ─── Countdown hook ───────────────────────────────────────────────────────────
@@ -172,13 +200,50 @@ const IconFail = () => (
   </svg>
 );
 
+// ─── Win-rate progress ring ───────────────────────────────────────────────────
+// Shared by the Hero's stat card and every WeekCalendar row so the "gold ring
+// around a percentage" reads as one consistent motif across the page.
+function WinRateRing({ rate, size = 64, stroke = 5 }: { rate: number | null; size?: number; stroke?: number }) {
+  // Every ring on the page (Hero + one per WeekCalendar row) needs its own
+  // gradient id — duplicate SVG ids are invalid even when the defs are
+  // identical.
+  const gradientId = `winRateGradient-${useId()}`;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const pct = rate ?? 0;
+  return (
+    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#2A3140" strokeWidth={stroke} />
+        {rate !== null && (
+          <circle
+            cx={size / 2} cy={size / 2} r={r} fill="none"
+            stroke={`url(#${gradientId})`} strokeWidth={stroke} strokeLinecap="round"
+            strokeDasharray={c} strokeDashoffset={c - (pct / 100) * c}
+            style={{ transition: "stroke-dashoffset 0.6s cubic-bezier(0.32,0.72,0,1)" }}
+          />
+        )}
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#E8C97A" />
+            <stop offset="100%" stopColor="#C9A84C" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Bebas Neue', sans-serif", fontSize: size * 0.3, color: "#C9A84C" }}>
+        {rate !== null ? `${rate}%` : "—"}
+      </div>
+    </div>
+  );
+}
+
 // ─── Outcome Badge ────────────────────────────────────────────────────────────
 const OutcomeBadge = ({ outcome }: { outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED" }) => {
   const styles: Record<string, React.CSSProperties> = {
-    WIN:      { background: "rgba(34,197,94,0.12)",  color: "#22C55E", border: "1px solid rgba(34,197,94,0.25)"  },
-    LOSS:     { background: "rgba(239,68,68,0.12)",  color: "#EF4444", border: "1px solid rgba(239,68,68,0.25)"  },
-    PENDING:  { background: "rgba(201,168,76,0.1)",  color: "#C9A84C", border: "1px solid rgba(201,168,76,0.25)" },
-    REFUNDED: { background: "rgba(59,130,246,0.1)",  color: "#3B82F6", border: "1px solid rgba(59,130,246,0.25)" },
+    WIN: { background: "rgba(34,197,94,0.12)", color: "#22C55E", border: "1px solid rgba(34,197,94,0.25)" },
+    LOSS: { background: "rgba(239,68,68,0.12)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.25)" },
+    PENDING: { background: "rgba(201,168,76,0.1)", color: "#C9A84C", border: "1px solid rgba(201,168,76,0.25)" },
+    REFUNDED: { background: "rgba(59,130,246,0.1)", color: "#3B82F6", border: "1px solid rgba(59,130,246,0.25)" },
   };
   const labels = { WIN: "WIN", LOSS: "LOSS", PENDING: "LIVE", REFUNDED: "REMBOURSÉ" };
   return (
@@ -209,61 +274,163 @@ function PartialRefundChip({ count }: { count: number }) {
 
 // ─── Hero ─────────────────────────────────────────────────────────────────────
 function Hero({ picks }: { picks: Pick[] }) {
+  const [scope, setScope] = useState<"week" | "all">("week");
+  const [warnOpen, setWarnOpen] = useState(false);
   const publishedPicks = picks.filter((p) => p.is_published !== false);
-  // Win rate excludes REFUNDED picks — a void isn't a loss.
-  const gradedPicks = publishedPicks.filter((p) => p.outcome === "WIN" || p.outcome === "LOSS");
-  const wins = gradedPicks.filter((p) => p.outcome === "WIN").length;
-  const winRate = gradedPicks.length > 0 ? Math.round((wins / gradedPicks.length) * 100) : null;
-  const todayCount = publishedPicks.filter((p) => {
-    const today = new Date().toISOString().split("T")[0];
-    return p.match_date.split("T")[0] === today;
-  }).length;
+  const today = new Date().toISOString().split("T")[0];
+  const currentWeekKey = getWeekKey(today);
+
+  const weekPicks = useMemo(
+    () => publishedPicks.filter((p) => getWeekKey(p.match_date) === currentWeekKey),
+    [publishedPicks, currentWeekKey]
+  );
+  const weekRecord = useMemo(() => computeRecord(weekPicks), [weekPicks]);
+  const allRecord = useMemo(() => computeRecord(publishedPicks), [publishedPicks]);
+  const active = scope === "week" ? weekRecord : allRecord;
+
+  const todayCount = publishedPicks.filter((p) => p.match_date.split("T")[0] === today).length;
 
   return (
-    <div style={{ padding: "32px 16px 24px", maxWidth: 700, margin: "0 auto", textAlign: "center" }}>
-      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "clamp(28px, 7vw, 40px)", color: "#E8EAF0", letterSpacing: 2, marginBottom: 8 }}>
+    <div style={{ padding: "26px 16px 20px", maxWidth: 700, margin: "0 auto", textAlign: "center" }}>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "clamp(28px, 7vw, 40px)", color: "#E8EAF0", letterSpacing: 2, marginBottom: 6 }}>
         Pronostics Football Premium
       </div>
-      <div style={{ fontSize: 13, color: "#7A8399", marginBottom: 12, lineHeight: 1.6 }}>
+      <div style={{ fontSize: 13, color: "#7A8399", marginBottom: 14, lineHeight: 1.6 }}>
         Sélections quotidiennes à partir de 200 FCFA — Safe, Value et Bold pour chaque profil.
       </div>
-      <div style={{
-        display: "inline-flex", alignItems: "flex-start", gap: 8, textAlign: "left",
-        background: "rgba(201,168,76,0.04)", border: "1px solid rgba(201,168,76,0.12)",
-        borderRadius: 8, padding: "10px 14px", marginBottom: 20, maxWidth: 480,
-      }}>
-        <span style={{ fontSize: 13, flexShrink: 0, marginTop: 1 }}>⚠️</span>
-        <p style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.6, margin: 0 }}>
+
+      {/* Responsible-gambling notice — collapsed by default so it doesn't
+          eat vertical space every visit; still one tap away, not removed. */}
+      <button onClick={() => setWarnOpen((v) => !v)} style={warnChipStyle}>
+        ⚠️ Jouez de manière responsable {warnOpen ? "▲" : "▾"}
+      </button>
+      {warnOpen && (
+        <p style={warnTextStyle}>
           Pariez à vos propres risques : nos pronostics sont fournis à titre indicatif
           et ne garantissent aucun résultat. Ne misez que ce que vous pouvez vous
           permettre de perdre — nous déclinons toute responsabilité quant à vos pertes.
         </p>
-      </div>
-      {(winRate !== null || todayCount > 0) && (
-        <div style={{ display: "flex", justifyContent: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-          {winRate !== null && (
-            <div style={{ background: "rgba(201,168,76,0.06)", border: "1px solid rgba(201,168,76,0.2)", borderRadius: 8, padding: "8px 16px" }}>
-              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#C9A84C" }}>{winRate}%</span>
-              <span style={{ fontSize: 10, color: "#7A8399", marginLeft: 6, textTransform: "uppercase", letterSpacing: "1px" }}>Taux de réussite</span>
-            </div>
-          )}
-          {todayCount > 0 && (
-            <div style={{ background: "rgba(201,168,76,0.06)", border: "1px solid rgba(201,168,76,0.2)", borderRadius: 8, padding: "8px 16px" }}>
-              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#C9A84C" }}>{todayCount}</span>
-              <span style={{ fontSize: 10, color: "#7A8399", marginLeft: 6, textTransform: "uppercase", letterSpacing: "1px" }}>Picks aujourd&apos;hui</span>
-            </div>
-          )}
-        </div>
       )}
-      <button
-        onClick={() => document.getElementById("today-picks")?.scrollIntoView({ behavior: "smooth" })}
-        style={{ background: "#C9A84C", color: "#0A0C0F", border: "none", borderRadius: 8, padding: "12px 28px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.5px" }}
-      >
-        Voir les pronostics du jour
-      </button>
+
+      {/* ── Performance card — one compact row, collapses further when there's
+          nothing graded yet instead of showing an empty ring ── */}
+      <div style={perfCardStyle}>
+        <div style={perfHeaderStyle}>
+          <span style={{ fontSize: 10, color: "#7A8399", textTransform: "uppercase", letterSpacing: "1.5px", fontWeight: 600 }}>
+            📊 Performance
+          </span>
+          <div style={{ display: "flex", gap: 0, background: "#0A0C0F", borderRadius: 8, padding: 2 }}>
+            <button onClick={() => setScope("week")} style={scope === "week" ? statTabActiveStyle : statTabInactiveStyle}>Semaine</button>
+            <button onClick={() => setScope("all")} style={scope === "all" ? statTabActiveStyle : statTabInactiveStyle}>Global</button>
+          </div>
+        </div>
+
+        {active.graded > 0 ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 14 }}>
+            <WinRateRing rate={active.winRate} size={54} stroke={5} />
+            <div style={{ textAlign: "left", flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: "#E8EAF0" }}>
+                <span style={{ color: "#22C55E", fontWeight: 700 }}>{active.wins} gagnés</span>
+                {" · "}
+                <span style={{ color: "#EF4444", fontWeight: 700 }}>{active.losses} perdus</span>
+                {active.refunds > 0 && <> · <span style={{ color: "#3B82F6", fontWeight: 700 }}>{active.refunds} remb.</span></>}
+              </div>
+              {todayCount > 0 && (
+                <div style={{ fontSize: 11, color: "#7A8399", marginTop: 3 }}>
+                  <span style={{ color: "#C9A84C", fontWeight: 700 }}>{todayCount}</span> pick{todayCount > 1 ? "s" : ""} aujourd&apos;hui
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "#7A8399", textAlign: "left", marginTop: 10 }}>
+            Aucun pick jugé {scope === "week" ? "cette semaine" : "pour l'instant"}.
+            {todayCount > 0 && <> <span style={{ color: "#C9A84C", fontWeight: 700 }}>{todayCount}</span> aujourd&apos;hui.</>}
+          </div>
+        )}
+      </div>
+
+      <ScrollCue targetId="today-picks" />
     </div>
   );
 }
+
+// ─── Scroll cue ───────────────────────────────────────────────────────────────
+// Replaces the old solid "Voir les pronostics du jour" button — a quiet,
+// animated double-chevron "waterfall" instead of another CTA competing with
+// the Hero for attention. Still a real button (keyboard/aria accessible,
+// same smooth-scroll behavior), just skinned as a hint instead of a command.
+function ScrollCue({ targetId }: { targetId: string }) {
+  return (
+    <button
+      onClick={() => document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth" })}
+      aria-label="Voir les pronostics du jour"
+      style={scrollCueStyle}
+    >
+      <style>{`
+        @keyframes scrollCueFall {
+          0%   { opacity: 0; transform: translateY(-3px); }
+          35%  { opacity: 1; transform: translateY(0); }
+          70%  { opacity: 1; transform: translateY(1px); }
+          100% { opacity: 0; transform: translateY(6px); }
+        }
+        .scroll-cue-chevron { animation: scrollCueFall 1.7s ease-in-out infinite; }
+        .scroll-cue-chevron.d2 { animation-delay: 0.22s; }
+        @media (prefers-reduced-motion: reduce) {
+          .scroll-cue-chevron { animation: none; opacity: 0.6; }
+        }
+      `}</style>
+      <span style={{ fontSize: 9, letterSpacing: "2.5px", textTransform: "uppercase", color: "#7A8399" }}>
+        Voir les picks
+      </span>
+      <span style={{ display: "flex", flexDirection: "column", alignItems: "center", height: 22 }}>
+        <svg className="scroll-cue-chevron" width="18" height="10" viewBox="0 0 18 10" fill="none">
+          <path d="M2 2l7 6 7-6" stroke="#C9A84C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <svg className="scroll-cue-chevron d2" width="18" height="10" viewBox="0 0 18 10" fill="none" style={{ marginTop: -4 }}>
+          <path d="M2 2l7 6 7-6" stroke="#C9A84C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity={0.6} />
+        </svg>
+      </span>
+    </button>
+  );
+}
+
+const scrollCueStyle: React.CSSProperties = {
+  background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit",
+  display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+  margin: "16px auto 0", padding: 6,
+};
+
+const warnChipStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  background: "rgba(201,168,76,0.04)", border: "1px solid rgba(201,168,76,0.12)",
+  borderRadius: 999, padding: "6px 14px", marginBottom: 14,
+  fontSize: 11, color: "#7A8399", cursor: "pointer", fontFamily: "inherit",
+};
+
+const warnTextStyle: React.CSSProperties = {
+  fontSize: 11, color: "#7A8399", lineHeight: 1.6, textAlign: "left",
+  maxWidth: 480, margin: "-6px auto 14px", padding: "0 4px",
+};
+
+const perfCardStyle: React.CSSProperties = {
+  background: "#111418", border: "1px solid #2A3140", borderRadius: 14,
+  padding: "14px 18px", maxWidth: 420, margin: "0 auto",
+};
+
+const perfHeaderStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap",
+};
+
+const statTabActiveStyle: React.CSSProperties = {
+  padding: "7px 16px", borderRadius: 7, border: "none", fontSize: 12, fontWeight: 700,
+  cursor: "pointer", background: "#C9A84C", color: "#0A0C0F", fontFamily: "inherit", whiteSpace: "nowrap",
+};
+
+const statTabInactiveStyle: React.CSSProperties = {
+  padding: "7px 16px", borderRadius: 7, border: "none", fontSize: 12, fontWeight: 500,
+  cursor: "pointer", background: "transparent", color: "#7A8399", fontFamily: "inherit", whiteSpace: "nowrap",
+};
 
 // ─── Auth Gate ────────────────────────────────────────────────────────────────
 function AuthGate({ onSuccess }: { onSuccess: () => void }) {
@@ -420,7 +587,7 @@ export function SubscribePayment({ onSuccess, onBack }: { onSuccess: () => void;
         const data = await res.json();
         if (!data?.status) return;
         if (data.status === "SUCCESSFUL") { clearPolling(); setStep("success"); }
-        else if (data.status === "FAILED")  { clearPolling(); setErrorMsg("Paiement refusé par l'opérateur."); setStep("failed"); }
+        else if (data.status === "FAILED") { clearPolling(); setErrorMsg("Paiement refusé par l'opérateur."); setStep("failed"); }
         else if (data.status === "EXPIRED") { clearPolling(); setErrorMsg("La session de paiement a expiré."); setStep("expired"); }
       } catch { /* keep polling */ }
     }, 3000);
@@ -586,7 +753,7 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
         const data = await res.json();
         if (!data?.status) return;
         if (data.status === "SUCCESSFUL") { clearPolling(); setStep("success"); }
-        else if (data.status === "FAILED")  { clearPolling(); setErrorMsg("Paiement refusé par l'opérateur."); setStep("failed"); }
+        else if (data.status === "FAILED") { clearPolling(); setErrorMsg("Paiement refusé par l'opérateur."); setStep("failed"); }
         else if (data.status === "EXPIRED") { clearPolling(); setErrorMsg("La session de paiement a expiré."); setStep("expired"); }
       } catch { /* keep polling */ }
     }, 3000);
@@ -823,6 +990,130 @@ function DateSection({ date, picks, onSelect }: { date: string; picks: Pick[]; o
   );
 }
 
+const WEEKS_PAGE_SIZE = 4;
+
+// ─── Week Calendar ────────────────────────────────────────────────────────────
+// Everything before the current week, one row per week, newest first —
+// replaces the old 30-day pagination + history-accordion split with a
+// single browsable list. Collapsed by default; only one week open at a
+// time, same accordion mechanics the old history toggle used. Paginated
+// 4 weeks at a time so a long-running site doesn't dump its whole history
+// on the page at once.
+function WeekCalendar({ picks, onSelect }: { picks: Pick[]; onSelect: (p: Pick) => void }) {
+  const [openWeekKey, setOpenWeekKey] = useState<string | null>(null);
+  const [visibleWeeks, setVisibleWeeks] = useState(WEEKS_PAGE_SIZE);
+
+  const weeks = useMemo(() => {
+    const groups: Record<string, Pick[]> = {};
+    picks.forEach((p) => {
+      const key = getWeekKey(p.match_date);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(p);
+    });
+    return Object.keys(groups)
+      .sort()
+      .reverse()
+      .map((weekKey) => ({ weekKey, picks: groups[weekKey], record: computeRecord(groups[weekKey]) }));
+  }, [picks]);
+
+  // Reset back to the first page whenever the underlying pick list changes
+  // identity — i.e. the buyer picked a different filter upstream.
+  useEffect(() => { setVisibleWeeks(WEEKS_PAGE_SIZE); }, [picks]);
+
+  if (weeks.length === 0) return null;
+
+  const visible = weeks.slice(0, visibleWeeks);
+  const hasMore = visibleWeeks < weeks.length;
+  const remaining = Math.min(WEEKS_PAGE_SIZE, weeks.length - visibleWeeks);
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <span style={{ fontSize: 9, letterSpacing: "3px", color: "#7A8399", textTransform: "uppercase", fontWeight: 600, whiteSpace: "nowrap" }}>
+          📅 Semaines précédentes
+        </span>
+        <div style={{ flex: 1, height: 1, background: "#2A3140" }} />
+        <span style={{ fontSize: 10, color: "#7A8399", whiteSpace: "nowrap" }}>
+          {visible.length} / {weeks.length}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {visible.map(({ weekKey, picks: weekPicks, record }) => {
+          const open = openWeekKey === weekKey;
+          const grouped = groupByDate(weekPicks);
+          return (
+            <div key={weekKey} style={{ border: "1px solid #2A3140", borderRadius: 12, background: "#1A1F26", overflow: "hidden" }}>
+              <button
+                onClick={() => setOpenWeekKey(open ? null : weekKey)}
+                style={{
+                  width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "14px 16px",
+                  background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                }}
+              >
+                <WinRateRing rate={record.winRate} size={44} stroke={4} />
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#E8EAF0", marginBottom: 4 }}>
+                    Semaine du {formatWeekRange(weekKey)}
+                  </div>
+                  {/* Form strip — one dot per graded/refunded pick, oldest to newest */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {[...weekPicks]
+                      .sort((a, b) => a.match_date.localeCompare(b.match_date))
+                      .map((p) => (
+                        <span
+                          key={p._id}
+                          title={p.outcome}
+                          style={{
+                            width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                            background: p.outcome === "WIN" ? "#22C55E" : p.outcome === "LOSS" ? "#EF4444" : p.outcome === "REFUNDED" ? "#3B82F6" : "#3A4455",
+                          }}
+                        />
+                      ))}
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 11, color: "#7A8399", flexShrink: 0, whiteSpace: "nowrap" }}>
+                  {record.graded > 0 ? `${record.wins}G · ${record.losses}P` : `${weekPicks.length} pick${weekPicks.length > 1 ? "s" : ""}`}
+                </div>
+
+                <IconChevron open={open} />
+              </button>
+
+              {open && (
+                <div style={{ padding: "0 16px 16px", animation: "fadeIn 0.2s ease" }}>
+                  {Object.keys(grouped).sort().reverse().map((date) => (
+                    <DateSection key={date} date={date} picks={grouped[date]} onSelect={onSelect} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {hasMore && (
+        <div style={{ textAlign: "center", marginTop: 14 }}>
+          <button
+            onClick={() => setVisibleWeeks((c) => c + WEEKS_PAGE_SIZE)}
+            style={{
+              background: "transparent", border: "1px solid #2A3140", borderRadius: 10,
+              color: "#C9A84C", fontSize: 12, fontWeight: 700, letterSpacing: "1.5px",
+              textTransform: "uppercase", padding: "13px 32px", cursor: "pointer",
+              fontFamily: "inherit", width: "100%", maxWidth: 320, transition: "all 0.2s",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(201,168,76,0.06)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#C9A84C"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#2A3140"; }}
+          >
+            Voir plus — {remaining} semaine{remaining > 1 ? "s" : ""}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Locked Predictions ───────────────────────────────────────────────────────
 function LockedPredictions({ pick, onUnlock }: { pick: Pick; onUnlock: () => void }) {
   return (
@@ -869,10 +1160,10 @@ function PredictionRow({ match }: { match: Match }) {
           )}
         </div>
         <div style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: match.outcome === "WIN" ? "rgba(34,197,94,0.12)" : match.outcome === "LOSS" ? "rgba(239,68,68,0.12)" : match.outcome === "REFUNDED" ? "rgba(59,130,246,0.12)" : "rgba(201,168,76,0.1)" }}>
-          {match.outcome === "WIN"      && <IconCheck />}
-          {match.outcome === "LOSS"     && <IconX />}
+          {match.outcome === "WIN" && <IconCheck />}
+          {match.outcome === "LOSS" && <IconX />}
           {match.outcome === "REFUNDED" && <IconRefund />}
-          {match.outcome === "PENDING"  && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#C9A84C" }} />}
+          {match.outcome === "PENDING" && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#C9A84C" }} />}
         </div>
       </div>
     </div>
@@ -947,7 +1238,7 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
             }
           </>
         )}
-        {view === "auth"    && <AuthGate onSuccess={() => setView("payment")} />}
+        {view === "auth" && <AuthGate onSuccess={() => setView("payment")} />}
         {view === "payment" && <MomoPayment pick={pick} onSuccess={handlePaymentSuccess} onBack={onClose} />}
       </div>
     </div>
@@ -959,7 +1250,7 @@ type FilterType = "ALL" | "safe" | "value" | "bold" | string;
 
 function FilterBar({ active, onChange, picks }: { active: FilterType; onChange: (l: FilterType) => void; picks: Pick[] }) {
   const hasTiers = picks.some((p) => p.tier);
-  const leagues  = useMemo(() => Array.from(new Set(picks.map((p) => p.league))), [picks]);
+  const leagues = useMemo(() => Array.from(new Set(picks.map((p) => p.league))), [picks]);
   const filters: { id: FilterType; label: string }[] = [
     { id: "ALL", label: "Tous" },
     ...(hasTiers ? [{ id: "safe", label: "Safe" }, { id: "value", label: "Value" }, { id: "bold", label: "Bold" }] : []),
@@ -984,14 +1275,12 @@ function FilterBar({ active, onChange, picks }: { active: FilterType; onChange: 
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function PremiumPicksPage() {
-  const [activeFilter, setActiveFilter]   = useState<FilterType>("ALL");
-  const [historyOpen, setHistoryOpen]     = useState(false);
-  const [selectedPick, setSelectedPick]   = useState<Pick | null>(null);
-  const [picks, setPicks]                 = useState<Pick[]>([]);
-  const [loading, setLoading]             = useState(true);
-  const [error, setError]                 = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
+  const [selectedPick, setSelectedPick] = useState<Pick | null>(null);
+  const [picks, setPicks] = useState<Pick[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showSubscribe, setShowSubscribe] = useState(false);
-  const [visibleCount, setVisibleCount]   = useState(PAGE_SIZE);   // ← pagination
   const [newPicksBanner, setNewPicksBanner] = useState<number | null>(null);
   const { user, hasActiveSubscription, refreshUser } = useAuth();
 
@@ -1010,9 +1299,9 @@ export default function PremiumPicksPage() {
       const data = await res.json();
       if (!isMountedRef.current) return;
       let resolved: Pick[] = [];
-      if (Array.isArray(data))             resolved = data;
+      if (Array.isArray(data)) resolved = data;
       else if (Array.isArray(data?.picks)) resolved = data.picks;
-      else if (Array.isArray(data?.data))  resolved = data.data;
+      else if (Array.isArray(data?.data)) resolved = data.data;
       const published = resolved.filter((p) => p.is_published !== false);
 
       // Background refreshes (polling / tab refocus) are otherwise silent —
@@ -1068,48 +1357,39 @@ export default function PremiumPicksPage() {
     };
   }, [fetchPicks]);
 
-  // Reset pagination whenever filter changes
-  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [activeFilter]);
-
   const filtered = useMemo(() => {
     if (activeFilter === "ALL") return picks;
     if (["safe", "value", "bold"].includes(activeFilter)) return picks.filter((p) => p.tier === activeFilter);
     return picks.filter((p) => p.league === activeFilter);
   }, [picks, activeFilter]);
 
-  // ── Pagination logic ────────────────────────────────────────────────────────
+  // ── Today / this-week / past-weeks split ────────────────────────────────────
   const today = new Date().toISOString().split("T")[0];
+  const currentWeekKey = getWeekKey(today);
 
   const todayPicks = useMemo(
     () => filtered.filter((p) => p.match_date.split("T")[0] === today),
-    [filtered]
+    [filtered, today]
   );
 
-  const olderPicks = useMemo(
+  // Rest of the current week (not today, same ISO week) — shown in full
+  // under "Picks Récents", no pagination.
+  const currentWeekRest = useMemo(
     () =>
       filtered
-        .filter((p) => p.match_date.split("T")[0] !== today)
+        .filter((p) => p.match_date.split("T")[0] !== today && getWeekKey(p.match_date) === currentWeekKey)
         .sort((a, b) => b.match_date.localeCompare(a.match_date)),
-    [filtered]
+    [filtered, today, currentWeekKey]
   );
 
-  const historyPicks = useMemo(
-    () => olderPicks.filter((p) => p.match_date.split("T")[0] < RECENT_CUTOFF),
-    [olderPicks]
+  // Everything before this week — browsable week-by-week in WeekCalendar.
+  const pastWeeksPicks = useMemo(
+    () => filtered.filter((p) => getWeekKey(p.match_date) !== currentWeekKey),
+    [filtered, currentWeekKey]
   );
 
-  const paginatedOlder = useMemo(
-    () => olderPicks.filter((p) => p.match_date.split("T")[0] >= RECENT_CUTOFF),
-    [olderPicks]
-  );
-
-  const visibleOlder   = useMemo(() => paginatedOlder.slice(0, visibleCount), [paginatedOlder, visibleCount]);
-  const groupedToday   = useMemo(() => groupByDate(todayPicks),   [todayPicks]);
-  const groupedVisible = useMemo(() => groupByDate(visibleOlder),  [visibleOlder]);
-  const groupedHistory = useMemo(() => groupByDate(historyPicks),  [historyPicks]);
-
-  const hasMore   = visibleCount < paginatedOlder.length;
-  const remaining = Math.min(PAGE_SIZE, paginatedOlder.length - visibleCount);
+  const groupedToday = useMemo(() => groupByDate(todayPicks), [todayPicks]);
+  const groupedWeekRest = useMemo(() => groupByDate(currentWeekRest), [currentWeekRest]);
   // ───────────────────────────────────────────────────────────────────────────
 
   if (loading) return (
@@ -1161,99 +1441,14 @@ export default function PremiumPicksPage() {
         <Hero picks={picks} />
         <FilterBar active={activeFilter} onChange={setActiveFilter} picks={picks} />
         <OneXBetBanner />
-        {/* ── Subscription banners ── */}
-{user && !hasActiveSubscription() && (
-          <div
-            onClick={() => setShowSubscribe(true)}
-            style={{
-              margin: "0 0 20px",
-              borderRadius: 14,
-              overflow: "hidden",
-              cursor: "pointer",
-              position: "relative",
-              background: "linear-gradient(135deg, #1A1508 0%, #110F05 50%, #1A1508 100%)",
-              border: "1px solid rgba(201,168,76,0.35)",
-              boxShadow: "0 0 32px rgba(201,168,76,0.08), inset 0 1px 0 rgba(201,168,76,0.15)",
-            }}
-          >
-            {/* Glow top-right orb */}
-            <div style={{
-              position: "absolute", top: -40, right: -40,
-              width: 160, height: 160, borderRadius: "50%",
-              background: "radial-gradient(circle, rgba(201,168,76,0.12) 0%, transparent 70%)",
-              pointerEvents: "none",
-            }} />
-
-            {/* Gold top bar */}
-            <div style={{
-              height: 3,
-              background: "linear-gradient(90deg, transparent, #C9A84C, #E8C97A, #C9A84C, transparent)",
-            }} />
-
-            <div style={{ padding: "16px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                {/* Tag */}
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                  <span style={{
-                    fontSize: 9, letterSpacing: "2px", textTransform: "uppercase",
-                    fontWeight: 700, color: "#C9A84C",
-                    background: "rgba(201,168,76,0.1)", border: "1px solid rgba(201,168,76,0.25)",
-                    padding: "2px 8px", borderRadius: 3,
-                  }}>
-                    ⭐ Accès illimité
-                  </span>
-                </div>
-
-                {/* Headline */}
-                <div style={{
-                  fontFamily: "'Bebas Neue', sans-serif",
-                  fontSize: "clamp(17px, 4.5vw, 22px)",
-                  color: "#E8EAF0", letterSpacing: 1, lineHeight: 1.2, marginBottom: 6,
-                }}>
-                  Tous les picks,{" "}
-                  <span style={{ color: "#C9A84C" }}>sans limite</span>
-                </div>
-
-                {/* Sub */}
-                <div style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.5 }}>
-                  Abonnement mensuel · Accès immédiat · Annulable à tout moment
-                </div>
-              </div>
-
-              {/* CTA */}
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowSubscribe(true); }}
-                style={{
-                  background: "linear-gradient(135deg, #C9A84C, #E8C97A)",
-                  color: "#0A0C0F", border: "none", borderRadius: 8,
-                  padding: "11px 20px",
-                  fontFamily: "'Bebas Neue', sans-serif",
-                  fontSize: 15, letterSpacing: "1.5px",
-                  cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-                  boxShadow: "0 4px 16px rgba(201,168,76,0.3)",
-                  transition: "all 0.15s",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 6px 24px rgba(201,168,76,0.45)")}
-                onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "0 4px 16px rgba(201,168,76,0.3)")}
-              >
-                S&apos;abonner →
-              </button>
-            </div>
-          </div>
-        )}
-        {user && hasActiveSubscription() && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, padding: "10px 14px", background: "rgba(201,168,76,0.06)", border: "1px solid rgba(201,168,76,0.2)", borderRadius: 8 }}>
-            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#C9A84C", flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: "#C9A84C", letterSpacing: "0.5px" }}>
-              Abonné — accès illimité actif{user.subscription?.expiresAt ? ` jusqu'au ${new Date(user.subscription.expiresAt).toLocaleDateString("fr-FR")}` : ""}
-            </span>
-          </div>
-        )}
-        {user && !hasActiveSubscription() && user.subscription?.status === "EXPIRED" && (
-          <div style={{ fontSize: 11, color: "#EF4444", marginBottom: 8 }}>
-            Votre abonnement a expiré{user.subscription.expiresAt ? ` le ${new Date(user.subscription.expiresAt).toLocaleDateString("fr-FR")}` : ""}.
-          </div>
-        )}
+        {/* ── Subscription banner ── */}
+        <SubscribeBanner
+          isLoggedIn={!!user}
+          isSubscribed={!!user && hasActiveSubscription()}
+          subscriptionStatus={user?.subscription?.status}
+          expiresAt={user?.subscription?.expiresAt}
+          onSubscribe={() => setShowSubscribe(true)}
+        />
 
         {/* ── Main picks section ── */}
         <section id="today-picks" style={{ padding: "24px 16px", maxWidth: 700, margin: "0 auto" }}>
@@ -1290,8 +1485,8 @@ export default function PremiumPicksPage() {
             </>
           )}
 
-          {/* ── OLDER RECENT — paginated ── */}
-          {paginatedOlder.length > 0 && (
+          {/* ── PICKS RÉCENTS — rest of the current week, shown in full ── */}
+          {currentWeekRest.length > 0 && (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: todayPicks.length > 0 ? 12 : 0, marginBottom: 20 }}>
                 <span style={{ fontSize: 9, letterSpacing: "3px", color: "#7A8399", textTransform: "uppercase", fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -1299,50 +1494,18 @@ export default function PremiumPicksPage() {
                 </span>
                 <div style={{ flex: 1, height: 1, background: "#2A3140" }} />
                 <span style={{ fontSize: 10, color: "#7A8399", whiteSpace: "nowrap" }}>
-                  {Math.min(visibleCount, paginatedOlder.length)} / {paginatedOlder.length}
+                  {currentWeekRest.length} pick{currentWeekRest.length > 1 ? "s" : ""}
                 </span>
               </div>
 
-              {Object.keys(groupedVisible).sort().reverse().map((date) => (
-                <DateSection key={date} date={date} picks={groupedVisible[date]} onSelect={setSelectedPick} />
+              {Object.keys(groupedWeekRest).sort().reverse().map((date) => (
+                <DateSection key={date} date={date} picks={groupedWeekRest[date]} onSelect={setSelectedPick} />
               ))}
-
-              {hasMore && (
-                <div style={{ textAlign: "center", marginTop: 4, marginBottom: 28 }}>
-                  <button
-                    onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-                    style={{
-                      background: "transparent", border: "1px solid #2A3140", borderRadius: 10,
-                      color: "#C9A84C", fontSize: 12, fontWeight: 700, letterSpacing: "1.5px",
-                      textTransform: "uppercase", padding: "13px 32px", cursor: "pointer",
-                      fontFamily: "inherit", width: "100%", maxWidth: 320, transition: "all 0.2s",
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(201,168,76,0.06)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#C9A84C"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#2A3140"; }}
-                  >
-                    Voir plus — {remaining} pick{remaining > 1 ? "s" : ""}
-                  </button>
-                </div>
-              )}
             </>
           )}
 
-          {/* ── HISTORY accordion ── */}
-          {historyPicks.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <button onClick={() => setHistoryOpen((v) => !v)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", background: "#1A1F26", border: "1px solid #2A3140", borderRadius: 10, padding: 16, cursor: "pointer", fontSize: 11, letterSpacing: "2px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, fontFamily: "inherit", marginBottom: historyOpen ? 16 : 0, transition: "border-color 0.2s" }}>
-                <span>Historique ({historyPicks.length})</span>
-                <IconChevron open={historyOpen} />
-              </button>
-              {historyOpen && (
-                <div style={{ animation: "fadeIn 0.2s ease" }}>
-                  {Object.keys(groupedHistory).sort().reverse().map((date) => (
-                    <DateSection key={date} date={date} picks={groupedHistory[date]} onSelect={setSelectedPick} />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          {/* ── WEEK CALENDAR — everything before this week ── */}
+          <WeekCalendar picks={pastWeeksPicks} onSelect={setSelectedPick} />
         </section>
         <CompoundBetBanner />
 
