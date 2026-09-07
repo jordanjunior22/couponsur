@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import TypingIndicator from "@/components/TypingIndicator";
+import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 interface ChatMessage {
   _id?: string;
@@ -233,7 +234,7 @@ export default function ChatWidget() {
   if (hidden || !hydrated || authLoading) return null;
 
   return (
-    <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 999, fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ position: "fixed", bottom: `calc(${BOTTOM_SAFE_OFFSET} + 12px)`, right: 20, zIndex: 999, fontFamily: "'DM Sans', sans-serif" }}>
       <style>{`
         @keyframes chatFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .chat-panel { width: 340px; height: 460px; }

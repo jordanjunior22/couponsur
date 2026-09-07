@@ -4,6 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { OneXBetBanner } from "./OneXBetBanner";
 import { CompoundBetBanner } from "./CompoundBanner";
 import { trackEvent, generateEventId, getFbCookies } from "@/lib/pixelClient";
+import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Match {
@@ -1156,7 +1157,7 @@ export default function PremiumPicksPage() {
           🔥 {newPicksBanner} nouveau{newPicksBanner > 1 ? "x" : ""} pick{newPicksBanner > 1 ? "s" : ""} disponible{newPicksBanner > 1 ? "s" : ""}
         </div>
       )}
-      <main style={{ minHeight: "100vh", background: "#0A0C0F", paddingBottom: 80 }}>
+      <main style={{ minHeight: "100vh", background: "#0A0C0F", paddingBottom: `max(80px, ${BOTTOM_SAFE_OFFSET})` }}>
         <Hero picks={picks} />
         <FilterBar active={activeFilter} onChange={setActiveFilter} picks={picks} />
         <OneXBetBanner />

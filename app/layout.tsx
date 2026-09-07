@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
@@ -25,6 +25,15 @@ export const metadata: Metadata = {
   title: "Coupon Sur",
   manifest: "/manifest.json",
   description: "Nous sommes une équipe d’analystes sportifs spécialisés dans plusieurs championnats (Europe, Afrique, compétitions internationales)",
+};
+
+// viewportFit: "cover" lets the page draw under the iOS home-indicator
+// area in standalone/PWA mode — needed for env(safe-area-inset-bottom) to
+// resolve to anything other than 0 (used by BottomTabBar and the fixed
+// widgets that sit above it, see lib/layoutConstants.ts).
+export const viewport: Viewport = {
+  themeColor: "#0A0C0F",
+  viewportFit: "cover",
 };
 
 const FB_PIXEL_ID = process.env.NEXT_PUBLIC_FB_PIXEL_ID;

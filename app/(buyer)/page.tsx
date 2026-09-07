@@ -1,17 +1,11 @@
 "use client";
 import PremiumPicksPage from "@/components/PremiumPicksPage";
-import { Navbar } from "@/components/Navbar";
-import { Footer } from "@/components/Footer";
-import { ToolsHub } from "@/components/ToolsHub";
+
+// The brand mark + account access now live in the shared BuyerTopBar
+// (app/(buyer)/layout.tsx), present on every buyer tab — this screen is
+// just the picks feed itself.
 function BuyerPage() {
-  return (
-    <div>
-      <Navbar/>
-      <PremiumPicksPage/>
-      <Footer/>
-      <ToolsHub/>
-    </div>
-  )
+  return <PremiumPicksPage />;
 }
 
-export default BuyerPage
+export default BuyerPage;

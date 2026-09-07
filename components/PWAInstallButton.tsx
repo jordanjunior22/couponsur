@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 export default function PWAInstallButton() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -65,7 +66,7 @@ export default function PWAInstallButton() {
         onClick={handleInstall}
         style={{
           position: "fixed",
-          bottom: 16,
+          bottom: `calc(${BOTTOM_SAFE_OFFSET} + 12px)`,
           left: 16,
           right: 16,
           background: "#C9A84C",
@@ -89,7 +90,7 @@ export default function PWAInstallButton() {
     <div
       style={{
         position: "fixed",
-        bottom: 24,
+        bottom: `calc(${BOTTOM_SAFE_OFFSET} + 12px)`,
         left: 24,
         width: 320,
         background: "#111418",

@@ -1,13 +1,9 @@
-import type { Metadata } from "next";
-import GroupChatRoom from "@/components/GroupChatRoom";
+import { redirect } from "next/navigation";
 
-// Deliberately its own top-level route (not nested under the (buyer) group)
-// so it renders with none of that group's chrome (Navbar/Footer) — a
-// full-screen room you navigate to and close back to "/", not a popup.
-export const metadata: Metadata = {
-  title: "Groupe Premium — Coupon Sûr",
-};
-
-export default function GroupChatPage() {
-  return <GroupChatRoom />;
+// The premium group chat now lives at /groupe, as a tab inside the buyer
+// app's bottom tab bar (app/(buyer)/groupe/page.tsx) instead of its own
+// chrome-less route. Kept as a redirect rather than deleted — this old URL
+// may still be bookmarked or linked from a push notification.
+export default function GroupChatRedirect() {
+  redirect("/groupe");
 }

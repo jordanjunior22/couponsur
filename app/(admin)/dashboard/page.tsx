@@ -2900,7 +2900,7 @@ function SettingsTab() {
           Fonctionnalité
         </div>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
-          Générateur de matchs (IA)
+          Pronostic IA (générateur de matchs)
         </div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
           Permet aux utilisateurs de générer eux-mêmes une combinaison via le moteur de pronostics, à titre indicatif — rien n&apos;est enregistré en base ni vendu.
@@ -3000,7 +3000,7 @@ function SettingsTab() {
           Groupe Premium
         </div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
-          Discussion de groupe réservée aux admins et aux abonnés actifs, accessible depuis les outils (🧰) du site.
+          Discussion de groupe réservée aux admins et aux abonnés actifs, accessible depuis l&apos;onglet Groupe (👑) de l&apos;app.
         </div>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>

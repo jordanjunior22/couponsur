@@ -444,7 +444,7 @@ export default function GroupChatRoom() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100dvh", background: C.dark, fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: C.dark, fontFamily: "'DM Sans', sans-serif" }}>
       <style>{`
         @keyframes groupChatHighlight { 0%, 100% { background: transparent; } 40% { background: rgba(201,168,76,0.18); } }
         .gc-highlight { animation: groupChatHighlight ${HIGHLIGHT_MS}ms ease; }
@@ -729,7 +729,7 @@ function Spinner() {
 
 function GatedShell({ children, onClose }: { children: React.ReactNode; onClose?: () => void }) {
   return (
-    <div style={{ height: "100dvh", background: C.dark, display: "flex", flexDirection: "column", fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ height: "100%", background: C.dark, display: "flex", flexDirection: "column", fontFamily: "'DM Sans', sans-serif" }}>
       {onClose && (
         <div style={{ display: "flex", justifyContent: "flex-end", padding: 16 }}>
           <button onClick={onClose} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted }}>✕</button>
