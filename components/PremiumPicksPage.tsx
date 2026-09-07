@@ -1,5 +1,6 @@
 "use client";
 import { useState, useMemo, useEffect, useRef, useCallback, useId } from "react";
+import { PiChartLineUpBold, PiCalendarBlankBold, PiCaretDownBold } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { OneXBetBanner } from "./OneXBetBanner";
 import { CompoundBetBanner } from "./CompoundBanner";
@@ -316,8 +317,8 @@ function Hero({ picks }: { picks: Pick[] }) {
           nothing graded yet instead of showing an empty ring ── */}
       <div style={perfCardStyle}>
         <div style={perfHeaderStyle}>
-          <span style={{ fontSize: 10, color: "#7A8399", textTransform: "uppercase", letterSpacing: "1.5px", fontWeight: 600 }}>
-            📊 Performance
+          <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#7A8399", textTransform: "uppercase", letterSpacing: "1.5px", fontWeight: 600 }}>
+            <PiChartLineUpBold size={12} /> Performance
           </span>
           <div style={{ display: "flex", gap: 0, background: "#0A0C0F", borderRadius: 8, padding: 2 }}>
             <button onClick={() => setScope("week")} style={scope === "week" ? statTabActiveStyle : statTabInactiveStyle}>Semaine</button>
@@ -1029,15 +1030,13 @@ function WeekCalendar({ picks, onSelect }: { picks: Pick[]; onSelect: (p: Pick) 
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-        <span style={{ fontSize: 9, letterSpacing: "3px", color: "#7A8399", textTransform: "uppercase", fontWeight: 600, whiteSpace: "nowrap" }}>
-          📅 Semaines précédentes
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, letterSpacing: "3px", color: "#7A8399", textTransform: "uppercase", fontWeight: 600, whiteSpace: "nowrap" }}>
+          <PiCalendarBlankBold size={12} /> Semaines précédentes
         </span>
         <div style={{ flex: 1, height: 1, background: "#2A3140" }} />
-        <span style={{ fontSize: 10, color: "#7A8399", whiteSpace: "nowrap" }}>
-          {visible.length} / {weeks.length}
-        </span>
       </div>
 
+      <div style={{ position: "relative" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {visible.map(({ weekKey, picks: weekPicks, record }) => {
           const open = openWeekKey === weekKey;
@@ -1094,25 +1093,77 @@ function WeekCalendar({ picks, onSelect }: { picks: Pick[]; onSelect: (p: Pick) 
       </div>
 
       {hasMore && (
-        <div style={{ textAlign: "center", marginTop: 14 }}>
-          <button
-            onClick={() => setVisibleWeeks((c) => c + WEEKS_PAGE_SIZE)}
-            style={{
-              background: "transparent", border: "1px solid #2A3140", borderRadius: 10,
-              color: "#C9A84C", fontSize: 12, fontWeight: 700, letterSpacing: "1.5px",
-              textTransform: "uppercase", padding: "13px 32px", cursor: "pointer",
-              fontFamily: "inherit", width: "100%", maxWidth: 320, transition: "all 0.2s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(201,168,76,0.06)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#C9A84C"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#2A3140"; }}
-          >
-            Voir plus — {remaining} semaine{remaining > 1 ? "s" : ""}
-          </button>
-        </div>
+        <>
+          {/* Fade the last visible week out toward the page background,
+              hinting there's more beneath it, instead of a hard stop. */}
+          <div style={weekFadeStyle} />
+          <div style={{ display: "flex", justifyContent: "center", marginTop: -14, position: "relative" }}>
+            <button
+              onClick={() => setVisibleWeeks((c) => c + WEEKS_PAGE_SIZE)}
+              style={loadMoreWeeksStyle}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#C9A84C"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 24px rgba(201,168,76,0.15)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#2A3140"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "none"; }}
+            >
+              <WeekLoadDial progress={visible.length / weeks.length} />
+              <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.3 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#E8EAF0" }}>
+                  Encore {remaining} semaine{remaining > 1 ? "s" : ""}
+                </span>
+                <span style={{ fontSize: 10, color: "#7A8399" }}>
+                  {visible.length} / {weeks.length} affichées
+                </span>
+              </span>
+            </button>
+          </div>
+        </>
       )}
+      </div>
     </div>
   );
 }
+
+// A tiny "reveal progress" dial — deliberately not the WinRateRing (that
+// motif means win rate specifically); same gold-gradient stroke language,
+// but the fill here tracks how much of the week history is on screen, and
+// a chevron sits in the center instead of a percentage.
+function WeekLoadDial({ progress }: { progress: number }) {
+  const size = 34, stroke = 3, r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  return (
+    <span style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#2A3140" strokeWidth={stroke} />
+        <circle
+          cx={size / 2} cy={size / 2} r={r} fill="none"
+          stroke="url(#weekLoadGradient)" strokeWidth={stroke} strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={c * (1 - progress)}
+          style={{ transition: "stroke-dashoffset 0.4s ease" }}
+        />
+        <defs>
+          <linearGradient id="weekLoadGradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#E8C97A" />
+            <stop offset="100%" stopColor="#C9A84C" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#C9A84C" }}>
+        <PiCaretDownBold size={13} />
+      </span>
+    </span>
+  );
+}
+
+const weekFadeStyle: React.CSSProperties = {
+  height: 40, marginTop: -40, position: "relative",
+  background: "linear-gradient(to bottom, rgba(10,12,15,0), #0A0C0F)",
+  pointerEvents: "none",
+};
+
+const loadMoreWeeksStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 12,
+  background: "#111418", border: "1px solid #2A3140", borderRadius: 999,
+  padding: "8px 20px 8px 8px", cursor: "pointer", fontFamily: "inherit",
+  transition: "transform 0.2s ease, border-color 0.2s, box-shadow 0.2s",
+};
 
 // ─── Locked Predictions ───────────────────────────────────────────────────────
 function LockedPredictions({ pick, onUnlock }: { pick: Pick; onUnlock: () => void }) {
