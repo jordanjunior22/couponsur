@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import GroupMessageModel, { GroupSender, IGroupReplyPreview } from "@/models/GroupMessage";
+import GroupMessageModel, { GroupRoom, GroupSender, IGroupReplyPreview } from "@/models/GroupMessage";
 import { connectDB } from "@/utils/ConnectDb";
 import { requireGroupChatAccess } from "@/utils/groupChatAccess";
 import { maskPhone } from "@/utils/maskPhone";
@@ -15,8 +15,16 @@ const HISTORY_LIMIT = 200;
 // How much of the original message shows in a reply's quoted preview.
 const REPLY_PREVIEW_LENGTH = 140;
 
+// A request's room param defaults to "premium" — the room that existed
+// before this concept did, so any caller that forgets to pass it keeps
+// today's behavior instead of silently landing in the new room.
+function parseRoom(value: string | null): GroupRoom {
+  return value === "global" ? "global" : "premium";
+}
+
 interface LeanGroupMessage {
   _id: Types.ObjectId;
+  room?: GroupRoom;
   user: Types.ObjectId;
   phone: string;
   role: GroupSender;
@@ -59,17 +67,24 @@ function toClientMessage(msg: LeanGroupMessage, senderBlocked: boolean) {
   };
 }
 
-// ─── GET: fetch (and poll) the premium group chat history ─────────────────
-export async function GET() {
+// ─── GET: fetch (and poll) a group chat room's history ─────────────────────
+export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
-    const access = await requireGroupChatAccess();
+    const room = parseRoom(new URL(req.url).searchParams.get("room"));
+    const access = await requireGroupChatAccess(room);
     if ("error" in access) {
       return NextResponse.json({ success: false, message: access.error }, { status: access.status });
     }
 
-    const messages = await GroupMessageModel.find()
+    // "premium" has to match both explicitly-tagged docs and every message
+    // written before `room` existed (all of which were premium-room
+    // messages) — "global" is strict since every global doc is written
+    // with the field set from day one.
+    const roomFilter = room === "premium" ? { $or: [{ room: "premium" }, { room: { $exists: false } }] } : { room: "global" };
+
+    const messages = await GroupMessageModel.find(roomFilter)
       .sort({ createdAt: -1 })
       .limit(HISTORY_LIMIT)
       .lean<LeanGroupMessage[]>();
@@ -95,14 +110,17 @@ export async function GET() {
   }
 }
 
-// ─── POST: send a message to the group ─────────────────────────────────────
-// Body: { text?, image? (data URI), replyTo? (message id) } — at least one
-// of text/image is required.
+// ─── POST: send a message to a room ─────────────────────────────────────────
+// Body: { room?, text?, image? (data URI), replyTo? (message id) } — at
+// least one of text/image is required.
 export async function POST(req: NextRequest) {
   try {
     await connectDB();
 
-    const access = await requireGroupChatAccess();
+    const body = await req.json().catch(() => ({}));
+    const room = parseRoom(typeof body.room === "string" ? body.room : null);
+
+    const access = await requireGroupChatAccess(room);
     if ("error" in access) {
       return NextResponse.json({ success: false, message: access.error }, { status: access.status });
     }
@@ -113,7 +131,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json().catch(() => ({}));
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const rawImage = typeof body.image === "string" ? body.image : null;
     const replyToId = typeof body.replyTo === "string" ? body.replyTo : null;
@@ -158,8 +175,8 @@ export async function POST(req: NextRequest) {
 
     let replyTo: IGroupReplyPreview | null = null;
     if (replyToId) {
-      const original = await GroupMessageModel.findById(replyToId).select("user role phone text image");
-      if (original) {
+      const original = await GroupMessageModel.findById(replyToId).select("room user role phone text image");
+      if (original && (original.room ?? "premium") === room) {
         replyTo = {
           messageId: original._id,
           user: original.user,
@@ -171,11 +188,13 @@ export async function POST(req: NextRequest) {
         };
       }
       // A replyTo pointing at a message that no longer exists (e.g. it was
-      // deleted between the user opening the reply box and hitting send)
-      // just gets dropped silently — the new message still sends fine.
+      // deleted between the user opening the reply box and hitting send),
+      // or that belongs to the other room, just gets dropped silently —
+      // the new message still sends fine.
     }
 
     const message = await GroupMessageModel.create({
+      room,
       user: access.user.userId,
       phone: access.user.phone,
       role: access.user.role,

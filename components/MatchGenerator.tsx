@@ -1,5 +1,9 @@
 "use client";
 import { useState } from "react";
+import {
+  PiWarningFill, PiLockSimpleFill, PiSparkleFill,
+  PiArrowsClockwiseBold, PiSlidersHorizontalBold,
+} from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -47,23 +51,21 @@ const ALL_MARKET_CODES = Object.keys(MARKET_LABELS);
 const DEFAULT_MARKET_CODES = ["1X2", "DC"];
 
 // ─── AI warning — always visible, never conditional on having a result ──────
+// Same tinted-card language the rest of the app uses for warnings/errors
+// (see the auth forms' feedback banners) rather than a solid, heavy fill —
+// still unmistakably a warning, just not shouting louder than everything
+// else on the page.
 function AiWarning() {
   return (
-    <div
-      role="alert"
-      style={{
-        background: "#B91C1C", color: "#fff", border: "1px solid #7F1D1D",
-        borderRadius: 8, padding: "12px 14px", marginBottom: 14, lineHeight: 1.5,
-      }}
-    >
+    <div role="alert" style={warningCardStyle}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-        <span style={{ fontSize: 18, flexShrink: 0 }}>⚠️</span>
-        <span style={{ fontSize: 12 }}>
-          <strong>Analyse générée par une IA — non vérifiée par notre équipe.</strong>{" "}
+        <PiWarningFill size={16} color="#f87171" style={{ flexShrink: 0, marginTop: 1 }} />
+        <span style={{ fontSize: 12, color: "#fca5a5", lineHeight: 1.5 }}>
+          <strong style={{ color: "#fff" }}>Analyse générée par une IA — non vérifiée par notre équipe.</strong>{" "}
           Ces matchs n&apos;ont pas été analysés manuellement et peuvent contenir des erreurs. Utilise ce générateur à tes propres risques.
         </span>
       </div>
-      <div style={{ fontSize: 11, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.25)" }}>
+      <div style={{ fontSize: 11, color: "#fca5a5", marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(239,68,68,0.25)" }}>
         Les cotes des marchés de buts (BTTS, Over/Under) sont estimées par notre propre modèle statistique à partir des scores récents, pas des cotes réelles d&apos;un bookmaker.
       </div>
     </div>
@@ -71,11 +73,9 @@ function AiWarning() {
 }
 
 // ─── Tool content ─────────────────────────────────────────────────────────────
-// Rendered inside the Tools Hub sheet (see components/ToolsHub.tsx) — the hub
-// owns the header/back-button/close chrome and already knows this tool is
-// enabled, so this component only needs to know WHO currently has access
-// (to word the pre-attempt hint accurately) and does the actual generating.
-// Ephemeral by design: nothing generated here is ever saved.
+// This component only needs to know WHO currently has access (to word the
+// pre-attempt hint accurately) and does the actual generating. Ephemeral by
+// design: nothing generated here is ever saved.
 export function MatchGeneratorTool({
   access,
   marketAccess,
@@ -157,16 +157,19 @@ export function MatchGeneratorTool({
     <div>
       <AiWarning />
 
-      <div style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.5, marginBottom: 14 }}>
+      <div style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.5, marginBottom: 16 }}>
         Notre moteur d&apos;analyse génère des matchs à titre indicatif, gratuitement — rien n&apos;est enregistré ni vendu, c&apos;est juste pour t&apos;amuser.
       </div>
 
       {state !== "result" && (
-        <>
-          <label style={{ fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, display: "block", marginBottom: 6 }}>
-            Marchés
-          </label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+        <div style={configCardStyle}>
+          <div style={configHeaderStyle}>
+            <PiSlidersHorizontalBold size={13} color="#C9A84C" />
+            <span>Configuration</span>
+          </div>
+
+          <label style={labelStyle}>Marchés</label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
             {ALL_MARKET_CODES.map((code) => {
               const active = selectedMarkets.includes(code);
               const locked = isMarketLocked(code);
@@ -178,30 +181,28 @@ export function MatchGeneratorTool({
                   disabled={state === "loading" || locked}
                   title={locked ? "Réservé aux abonnés premium" : undefined}
                   style={{
-                    background: active ? "#3B82F6" : "#181C24",
-                    color: locked ? "#4A5568" : active ? "#fff" : "#7A8399",
-                    border: `1px solid ${active ? "#3B82F6" : "#2A3140"}`,
-                    borderRadius: 999, padding: "6px 12px", fontSize: 11, fontWeight: 600,
+                    background: active ? "linear-gradient(135deg, #E8C97A, #C9A84C)" : "#181C24",
+                    color: locked ? "#4A5568" : active ? "#0A0C0F" : "#9CA3AF",
+                    border: `1px solid ${active ? "#C9A84C" : "#2A3140"}`,
+                    borderRadius: 999, padding: "6px 12px", fontSize: 11, fontWeight: 700,
                     cursor: state === "loading" || locked ? "not-allowed" : "pointer", fontFamily: "inherit",
-                    display: "flex", alignItems: "center", gap: 4,
+                    display: "flex", alignItems: "center", gap: 5, transition: "all 0.15s",
                   }}
                 >
-                  {locked && "🔒"} {MARKET_LABELS[code]}
+                  {locked && <PiLockSimpleFill size={11} />} {MARKET_LABELS[code]}
                 </button>
               );
             })}
           </div>
 
           {ALL_MARKET_CODES.some(isMarketLocked) && (
-            <div style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.5, marginBottom: 14, display: "flex", alignItems: "flex-start", gap: 6 }}>
-              <span>🔒</span>
+            <div style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.5, marginBottom: 16, display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <PiLockSimpleFill size={13} style={{ flexShrink: 0, marginTop: 2 }} />
               <span>Les marchés verrouillés sont réservés aux abonnés premium — abonne-toi pour les débloquer.</span>
             </div>
           )}
 
-          <label style={{ fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, display: "block", marginBottom: 6 }}>
-            Cote totale souhaitée (optionnel)
-          </label>
+          <label style={labelStyle}>Cote totale souhaitée (optionnel)</label>
           <input
             type="number"
             inputMode="decimal"
@@ -214,28 +215,27 @@ export function MatchGeneratorTool({
             disabled={state === "loading"}
             style={{
               width: "100%", background: "#181C24", border: "1px solid #2A3140", borderRadius: 8,
-              color: "#E8EAF0", fontSize: 14, padding: "10px 12px", marginBottom: 14,
+              color: "#E8EAF0", fontSize: 14, padding: "10px 12px", marginBottom: 18,
               fontFamily: "inherit", outline: "none", boxSizing: "border-box",
             }}
           />
 
-          <button
-            onClick={generate}
-            disabled={state === "loading"}
-            style={{
-              background: state === "loading" ? "#1D4E8F" : "linear-gradient(135deg, #3B82F6, #60A5FA)",
-              color: "#fff", border: "none", borderRadius: 8, padding: "13px 20px",
-              fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, letterSpacing: "1.5px",
-              cursor: state === "loading" ? "not-allowed" : "pointer", width: "100%",
-            }}
-          >
-            {state === "loading" ? "Analyse en cours…" : "🔮 Générer des matchs"}
+          <button onClick={generate} disabled={state === "loading"} style={generateBtnStyle(state === "loading")}>
+            {state === "loading" ? (
+              <>
+                <span style={spinnerStyle} /> Analyse en cours…
+              </>
+            ) : (
+              <>
+                <PiSparkleFill size={16} /> Générer des matchs
+              </>
+            )}
           </button>
-        </>
+        </div>
       )}
 
       {state === "error" && (
-        <div style={{ marginTop: 12, fontSize: 12, color: "#EF4444", lineHeight: 1.5 }}>
+        <div style={errorCardStyle}>
           {errorMsg}
           {requiresPremium && (
             <span style={{ display: "block", marginTop: 4, color: "#7A8399" }}>
@@ -251,8 +251,9 @@ export function MatchGeneratorTool({
       {state === "result" && (
         <div>
           {restrictedMarkets.length > 0 && (
-            <div style={{ fontSize: 11, color: "#E8C97A", marginBottom: 10, lineHeight: 1.5 }}>
-              🔒 Réservé aux abonnés premium, non inclus : {restrictedMarkets.map((m) => MARKET_LABELS[m] || m).join(", ")}.
+            <div style={{ fontSize: 11, color: "#E8C97A", marginBottom: 12, lineHeight: 1.5, display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <PiLockSimpleFill size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+              <span>Réservé aux abonnés premium, non inclus : {restrictedMarkets.map((m) => MARKET_LABELS[m] || m).join(", ")}.</span>
             </div>
           )}
           {resultMessage && (
@@ -261,18 +262,28 @@ export function MatchGeneratorTool({
             </div>
           )}
 
+          {totalOdds !== null && (
+            <div style={oddsCardStyle}>
+              <div style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#7A8399", marginBottom: 4 }}>
+                Cote totale estimée
+              </div>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 36, color: "#C9A84C", letterSpacing: 1, lineHeight: 1 }}>
+                x{totalOdds}
+              </div>
+              {requestedOdds !== null && targetMissed && (
+                <div style={{ fontSize: 11, color: "#E8C97A", marginTop: 8 }}>
+                  Cote la plus proche trouvée aujourd&apos;hui — ta cible était x{requestedOdds}.
+                </div>
+              )}
+            </div>
+          )}
+
           {matches.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
               {matches.map((m, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-                    background: "#181C24", border: "1px solid #2A3140", borderRadius: 8, padding: "10px 12px",
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 9, letterSpacing: "1px", textTransform: "uppercase", color: "#7A8399", marginBottom: 2 }}>
+                <div key={i} style={matchCardStyle}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 9, letterSpacing: "1px", textTransform: "uppercase", color: "#7A8399", marginBottom: 3 }}>
                       {m.league}
                     </div>
                     <div style={{ fontSize: 13, color: "#E8EAF0", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -280,10 +291,10 @@ export function MatchGeneratorTool({
                     </div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ fontSize: 9, letterSpacing: "0.5px", textTransform: "uppercase", color: "#7A8399", marginBottom: 1 }}>
+                    <div style={{ fontSize: 9, letterSpacing: "0.5px", textTransform: "uppercase", color: "#7A8399", marginBottom: 2 }}>
                       {MARKET_LABELS[m.market] || m.market}
                     </div>
-                    <div style={{ fontSize: 13, color: "#3B82F6", fontWeight: 700 }}>{m.tip}</div>
+                    <div style={{ fontSize: 13, color: "#C9A84C", fontWeight: 700 }}>{m.tip}</div>
                     <div style={{ fontSize: 11, color: "#7A8399" }}>
                       @{m.odd}{m.isEstimatedOdd ? "*" : ""} · {m.confidence}%
                     </div>
@@ -293,28 +304,8 @@ export function MatchGeneratorTool({
             </div>
           )}
 
-          {totalOdds !== null && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: "#3B82F6" }}>x{totalOdds}</span>
-                <span style={{ fontSize: 10, color: "#7A8399", letterSpacing: "1px", textTransform: "uppercase" }}>Cote totale estimée</span>
-              </div>
-              {requestedOdds !== null && targetMissed && (
-                <div style={{ fontSize: 11, color: "#E8C97A", marginTop: 6 }}>
-                  Cote la plus proche trouvée aujourd&apos;hui — ta cible était x{requestedOdds}.
-                </div>
-              )}
-            </div>
-          )}
-
-          <button
-            onClick={generate}
-            style={{
-              background: "#222830", color: "#E8EAF0", border: "1px solid #2A3140", borderRadius: 8,
-              padding: "10px 20px", fontSize: 12, fontWeight: 600, cursor: "pointer", width: "100%", fontFamily: "inherit",
-            }}
-          >
-            🔁 Générer à nouveau
+          <button onClick={generate} style={regenerateBtnStyle}>
+            <PiArrowsClockwiseBold size={14} /> Générer à nouveau
           </button>
         </div>
       )}
@@ -332,3 +323,61 @@ export function MatchGeneratorTool({
     </div>
   );
 }
+
+/* ─── STYLES ──────────────────────────────────────────────────────────────── */
+
+const warningCardStyle: React.CSSProperties = {
+  background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)",
+  borderRadius: 10, padding: "12px 14px", marginBottom: 16, lineHeight: 1.5,
+};
+
+const configCardStyle: React.CSSProperties = {
+  background: "#111418", border: "1px solid #2A3140", borderRadius: 14, padding: 18, marginBottom: 4,
+};
+
+const configHeaderStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 7, fontSize: 10, letterSpacing: "1.5px",
+  textTransform: "uppercase", color: "#7A8399", fontWeight: 700, marginBottom: 16,
+};
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", color: "#7A8399",
+  fontWeight: 600, display: "block", marginBottom: 8,
+};
+
+const generateBtnStyle = (loading: boolean): React.CSSProperties => ({
+  background: loading ? "#8a742f" : "linear-gradient(135deg, #E8C97A, #C9A84C)",
+  color: "#0A0C0F", border: "none", borderRadius: 9, padding: "13px 20px",
+  fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, letterSpacing: "1.5px",
+  cursor: loading ? "not-allowed" : "pointer", width: "100%",
+  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+});
+
+const spinnerStyle: React.CSSProperties = {
+  width: 14, height: 14, borderRadius: "50%",
+  border: "2px solid rgba(10,12,15,0.3)", borderTopColor: "#0A0C0F",
+  animation: "spin 0.8s linear infinite", display: "inline-block",
+};
+
+const errorCardStyle: React.CSSProperties = {
+  marginTop: 4, fontSize: 12, color: "#f87171", lineHeight: 1.5,
+  background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)",
+  borderRadius: 10, padding: "12px 14px",
+};
+
+const oddsCardStyle: React.CSSProperties = {
+  background: "#111418", border: "1px solid #2A3140", borderRadius: 14,
+  padding: "16px 18px", marginBottom: 14, textAlign: "center",
+};
+
+const matchCardStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+  background: "#181C24", border: "1px solid #2A3140", borderLeft: "3px solid #C9A84C",
+  borderRadius: 8, padding: "10px 12px",
+};
+
+const regenerateBtnStyle: React.CSSProperties = {
+  background: "transparent", color: "#C9A84C", border: "1px solid #2A3140", borderRadius: 9,
+  padding: "11px 20px", fontSize: 12, fontWeight: 700, letterSpacing: "0.5px", cursor: "pointer",
+  width: "100%", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+};

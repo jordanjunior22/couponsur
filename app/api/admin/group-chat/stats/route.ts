@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import GroupMessageModel from "@/models/GroupMessage";
+import { NextRequest, NextResponse } from "next/server";
+import GroupMessageModel, { GroupRoom } from "@/models/GroupMessage";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
@@ -14,10 +14,16 @@ async function requireAdmin() {
   return { user: decoded };
 }
 
-// ─── GET: storage footprint of the premium group chat (ADMIN ONLY) ────────
-// Reports how much room the room's messages/images are taking up in Mongo,
-// so an admin can decide whether "clear all chats" is worth doing.
-export async function GET() {
+function parseRoom(value: string | null): GroupRoom {
+  return value === "global" ? "global" : "premium";
+}
+
+// ─── GET: storage footprint of one room's chat (ADMIN ONLY) ───────────────
+// Defaults to "premium" — the room the dashboard already called this
+// without a `room` param for. Reports how much room the room's
+// messages/images are taking up in Mongo, so an admin can decide whether
+// "clear all chats" is worth doing.
+export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
@@ -26,7 +32,11 @@ export async function GET() {
       return NextResponse.json({ success: false, message: auth.error }, { status: auth.status });
     }
 
+    const room = parseRoom(new URL(req.url).searchParams.get("room"));
+    const roomFilter = room === "premium" ? { $or: [{ room: "premium" }, { room: { $exists: false } }] } : { room: "global" };
+
     const [agg] = await GroupMessageModel.aggregate([
+      { $match: roomFilter },
       {
         $group: {
           _id: null,

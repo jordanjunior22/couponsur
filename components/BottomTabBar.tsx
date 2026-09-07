@@ -7,11 +7,10 @@ import type { IconType } from "react-icons";
 import {
   PiHouseSimple, PiHouseSimpleFill,
   PiClockCounterClockwise, PiClockCounterClockwiseFill,
-  PiCrownSimple, PiCrownSimpleFill,
+  PiChatCircleDots, PiChatCircleDotsFill,
   PiSparkle, PiSparkleFill,
   PiUser, PiUserFill,
 } from "react-icons/pi";
-import { useAuth } from "@/context/AuthContext";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { BOTTOM_TAB_BAR_HEIGHT } from "@/lib/layoutConstants";
 
@@ -32,7 +31,6 @@ interface Tab {
 
 export function BottomTabBar() {
   const pathname = usePathname();
-  const { user, hasActiveSubscription } = useAuth();
   const settings = useAppSettings();
   // Raw sync with the external store (localStorage) — read once on mount;
   // the derived "is it unseen" boolean below is computed in render instead
@@ -59,17 +57,19 @@ export function BottomTabBar() {
     } catch { /* ignore */ }
   };
 
-  // Same eligibility check ToolsHub used to gate the group-chat entry:
-  // admin, or a subscriber with an active subscription — and only while
-  // the admin panel's availability toggle is on.
-  const isGroupChatEligible = !!user && (user.role === "ADMIN" || hasActiveSubscription());
-  const showGroupe = !!settings?.groupChatEnabled && isGroupChatEligible;
+  // Unlike the old single premium-only room, the Chat tab now leads to a
+  // picker with two rooms (Groupe Premium + Chat Global) — eligibility for
+  // Premium specifically is decided *inside* that picker (same posture as
+  // Historique/Profil: the tab itself doesn't gate on login or
+  // subscription, only on whether admin has switched at least one of the
+  // two rooms on at all).
+  const showChat = !!settings && (settings.globalChatEnabled || settings.groupChatEnabled);
   const showPronostic = !!settings?.matchGeneratorEnabled;
 
   const tabs: Tab[] = [
     { href: "/", label: "Accueil", icon: PiHouseSimple, iconActive: PiHouseSimpleFill, exact: true },
     { href: "/historique", label: "Historique", icon: PiClockCounterClockwise, iconActive: PiClockCounterClockwiseFill },
-    ...(showGroupe ? [{ href: "/groupe", label: "Groupe", icon: PiCrownSimple, iconActive: PiCrownSimpleFill }] : []),
+    ...(showChat ? [{ href: "/groupe", label: "Chat", icon: PiChatCircleDots, iconActive: PiChatCircleDotsFill }] : []),
     // "Pronostic IA" — our branded name for the AI match-generation engine,
     // not a generic "Outils"/"AI Tools" label.
     ...(showPronostic ? [{ href: "/pronostic", label: "Pronostic IA", icon: PiSparkle, iconActive: PiSparkleFill, badge: pronosticUnseen, onNavigate: markPronosticSeen }] : []),

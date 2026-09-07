@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import GroupMessageModel from "@/models/GroupMessage";
+import { NextRequest, NextResponse } from "next/server";
+import GroupMessageModel, { GroupRoom } from "@/models/GroupMessage";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
@@ -14,10 +14,15 @@ async function requireAdmin() {
   return { user: decoded };
 }
 
-// ─── DELETE: wipe every message in the premium group chat (ADMIN ONLY) ────
-// Irreversible — reclaims whatever storage the room's messages/images were
-// using. The confirmation prompt lives client-side (dashboard SettingsTab).
-export async function DELETE() {
+function parseRoom(value: string | null): GroupRoom {
+  return value === "global" ? "global" : "premium";
+}
+
+// ─── DELETE: wipe every message in one room (ADMIN ONLY) ───────────────────
+// Defaults to "premium". Irreversible — reclaims whatever storage that
+// room's messages/images were using. The confirmation prompt lives
+// client-side (dashboard SettingsTab).
+export async function DELETE(req: NextRequest) {
   try {
     await connectDB();
 
@@ -26,7 +31,10 @@ export async function DELETE() {
       return NextResponse.json({ success: false, message: auth.error }, { status: auth.status });
     }
 
-    const result = await GroupMessageModel.deleteMany({});
+    const room = parseRoom(new URL(req.url).searchParams.get("room"));
+    const roomFilter = room === "premium" ? { $or: [{ room: "premium" }, { room: { $exists: false } }] } : { room: "global" };
+
+    const result = await GroupMessageModel.deleteMany(roomFilter);
 
     return NextResponse.json({ success: true, data: { deletedCount: result.deletedCount ?? 0 } });
   } catch (error) {

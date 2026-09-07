@@ -43,6 +43,7 @@ export async function PUT(req: NextRequest) {
       matchGeneratorMarketAccess,
       matchGeneratorMatchCount,
       groupChatEnabled,
+      globalChatEnabled,
     } = body;
 
     const update: Record<string, unknown> = {};
@@ -152,6 +153,16 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.groupChatEnabled = groupChatEnabled;
+    }
+
+    if (globalChatEnabled !== undefined) {
+      if (typeof globalChatEnabled !== "boolean") {
+        return NextResponse.json(
+          { success: false, message: "globalChatEnabled must be a boolean" },
+          { status: 400 }
+        );
+      }
+      update.globalChatEnabled = globalChatEnabled;
     }
 
     if (Object.keys(update).length === 0) {

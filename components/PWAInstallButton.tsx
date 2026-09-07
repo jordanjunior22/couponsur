@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePWAInstall } from "@/hooks/usePWAInstall";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 export default function PWAInstallButton() {
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [installed, setInstalled] = useState(false);
+  const { canInstall, promptInstall } = usePWAInstall();
   const [dismissed, setDismissed] = useState(false);
 
   const isMobile =
@@ -13,43 +13,16 @@ export default function PWAInstallButton() {
     /iPhone|Android|iPad/i.test(navigator.userAgent);
 
   useEffect(() => {
-    if (window.matchMedia("(display-mode: standalone)").matches) {
-      setInstalled(true);
-    }
-
-    const handler = (e: any) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-
-    window.addEventListener("beforeinstallprompt", handler);
-
-    window.addEventListener("appinstalled", () => {
-      setInstalled(true);
-    });
-
     const savedDismiss = localStorage.getItem("pwa_dismissed");
     if (savedDismiss) setDismissed(true);
-
-    return () => {
-      window.removeEventListener("beforeinstallprompt", handler);
-    };
   }, []);
 
   const handleInstall = async () => {
-    if (!deferredPrompt) return;
-
-    deferredPrompt.prompt();
-    const choice = await deferredPrompt.userChoice;
-
-    if (choice.outcome === "accepted") {
-      setInstalled(true);
-    } else {
+    const outcome = await promptInstall();
+    if (outcome === "dismissed") {
       localStorage.setItem("pwa_dismissed", "true");
       setDismissed(true);
     }
-
-    setDeferredPrompt(null);
   };
 
   const handleDismiss = () => {
@@ -57,7 +30,7 @@ export default function PWAInstallButton() {
     setDismissed(true);
   };
 
-  if (installed || !deferredPrompt || dismissed) return null;
+  if (!canInstall || dismissed) return null;
 
   // ───────────────────────── MOBILE UI ─────────────────────────
   if (isMobile) {

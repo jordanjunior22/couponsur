@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import type { GroupRoom } from "@/models/GroupMessage";
 
 interface ReplyPreview {
   messageId: string;
@@ -131,9 +131,16 @@ function compressImage(file: File): Promise<string> {
   });
 }
 
-export default function GroupChatRoom() {
+interface GroupChatRoomProps {
+  room: GroupRoom;
+  title: string;
+  subtitle: string;
+  icon: string;
+  onClose: () => void;
+}
+
+export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: GroupChatRoomProps) {
   const { user, loading: authLoading, hasActiveSubscription } = useAuth();
-  const router = useRouter();
 
   const [messages, setMessages] = useState<GroupMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(true);
@@ -178,12 +185,13 @@ export default function GroupChatRoom() {
   }, []);
 
   const isAdmin = user?.role === "ADMIN";
-  const isEligible = !!user && (isAdmin || hasActiveSubscription());
+  // "global" has no subscription gate at all — any logged-in user passes.
+  const isEligible = !!user && (room === "global" || isAdmin || hasActiveSubscription());
 
   // ─── Fetch / poll ───────────────────────────────────────────────────────
   const fetchMessages = useCallback(async () => {
     try {
-      const res = await fetch("/api/group-chat", { credentials: "include" });
+      const res = await fetch(`/api/group-chat?room=${room}`, { credentials: "include" });
       const data = await res.json();
       if (!mountedRef.current) return;
       if (data?.success) {
@@ -198,7 +206,7 @@ export default function GroupChatRoom() {
     } finally {
       if (mountedRef.current) setLoadingMessages(false);
     }
-  }, []);
+  }, [room]);
 
   useEffect(() => {
     if (authLoading || !isEligible) {
@@ -305,7 +313,7 @@ export default function GroupChatRoom() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, image: imageToSend, replyTo: replySnapshot?.id ?? null }),
+        body: JSON.stringify({ room, text, image: imageToSend, replyTo: replySnapshot?.id ?? null }),
       });
       const data = await res.json();
       if (data?.success) {
@@ -405,7 +413,7 @@ export default function GroupChatRoom() {
   const pinnedMessages = useMemo(() => messages.filter((m) => m.pinned), [messages]);
   const visibleMessages = filter === "starred" ? messages.filter((m) => starred.includes(m._id)) : messages;
 
-  const close = () => router.push("/");
+  const close = onClose;
 
   // ─── Gated states ───────────────────────────────────────────────────────
   if (authLoading) {
@@ -417,7 +425,7 @@ export default function GroupChatRoom() {
         <GatedCard
           icon="🔒"
           title="Connexion requise"
-          text="Connectez-vous avec un compte abonné (ou admin) pour rejoindre le groupe premium."
+          text={`Connectez-vous pour rejoindre ${title}.`}
           onHome={close}
         />
       </GatedShell>
@@ -453,10 +461,10 @@ export default function GroupChatRoom() {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}`, background: C.dark3, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 20 }}>👑</span>
+          <span style={{ fontSize: 20 }}>{icon}</span>
           <div>
-            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1, color: C.text }}>Groupe Premium</div>
-            <div style={{ fontSize: 10, color: C.muted }}>Réservé aux abonnés &amp; à l&apos;équipe</div>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1, color: C.text }}>{title}</div>
+            <div style={{ fontSize: 10, color: C.muted }}>{subtitle}</div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

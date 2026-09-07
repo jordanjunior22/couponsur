@@ -53,6 +53,11 @@ export interface ISettings extends Document {
    *  already requested and meant to be live; an admin can still flip it
    *  off (e.g. during moderation or an incident) without touching code. */
   groupChatEnabled: boolean;
+  /** Master switch for "Chat Global" — same shape as groupChatEnabled, but
+   *  gates the room open to every logged-in user rather than just admins +
+   *  active subscribers. On by default for the same reason: it ships ready
+   *  to use, not as an opt-in beta. */
+  globalChatEnabled: boolean;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -67,6 +72,7 @@ const SettingsSchema = new Schema<ISettings>(
     matchGeneratorMarketAccess: { type: Schema.Types.Mixed, default: () => ({ ...DEFAULT_MARKET_ACCESS }) },
     matchGeneratorMatchCount: { type: Number, default: 3, min: 1, max: 10 },
     groupChatEnabled: { type: Boolean, default: true },
+    globalChatEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

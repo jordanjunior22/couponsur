@@ -14,6 +14,8 @@ export interface AppSettings {
   // missing entirely — `!== false` treats that as "on", same fallback
   // the server itself uses.
   groupChatEnabled: boolean;
+  // Same shape, for "Chat Global" (open to any logged-in user).
+  globalChatEnabled: boolean;
 }
 
 const FALLBACK_SETTINGS: AppSettings = {
@@ -21,6 +23,7 @@ const FALLBACK_SETTINGS: AppSettings = {
   matchGeneratorAccess: "PREMIUM",
   matchGeneratorMarketAccess: {},
   groupChatEnabled: false,
+  globalChatEnabled: false,
 };
 
 // Shared between BottomTabBar (which tabs to show) and the Outils page
@@ -45,6 +48,7 @@ export function useAppSettings(): AppSettings | null {
               ? data.data.matchGeneratorMarketAccess
               : {},
           groupChatEnabled: data?.data?.groupChatEnabled !== false,
+          globalChatEnabled: data?.data?.globalChatEnabled !== false,
         });
       } catch {
         if (!cancelled) setSettings(FALLBACK_SETTINGS);

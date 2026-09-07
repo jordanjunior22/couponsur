@@ -5,10 +5,12 @@ import Link from "next/link";
 import {
   PiUserCircleFill, PiDeviceMobileFill, PiStarFill,
   PiWrenchFill, PiKeyFill, PiSignOutBold,
+  PiDownloadSimpleBold, PiCheckCircleFill, PiShareFatBold,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { SubscribePayment } from "@/components/PremiumPicksPage";
 import { validateCameroonPhone, formatCameroonPhone } from "@/utils/cameroonPhone";
+import { usePWAInstall, isIOS } from "@/hooks/usePWAInstall";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 // Replaces the old Navbar avatar dropdown (UserMenu): login/signup when
@@ -27,6 +29,7 @@ export default function ProfilPage() {
 
         {authLoading ? null : user ? <AccountPanel /> : <AuthPanel />}
 
+        <InstallAppCard />
         <LegalLinks />
       </div>
     </main>
@@ -307,6 +310,68 @@ function ChangePasswordSheet({ onClose, changePassword }: { onClose: () => void;
   );
 }
 
+// ─── INSTALL THE APP ────────────────────────────────────────────────────────
+// Deliberate, findable version of the floating PWAInstallButton banner
+// (which only appears once, uninvited, and can be dismissed for good) —
+// shares its capture of the browser's `beforeinstallprompt` event via
+// usePWAInstall so both are triggering the same native prompt, not two
+// independent copies of that logic.
+function InstallAppCard() {
+  const { installed, canInstall, promptInstall } = usePWAInstall();
+  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const handleInstall = async () => {
+    const outcome = await promptInstall();
+    if (outcome === "accepted") setStatus({ text: "Application installée avec succès !", ok: true });
+    else if (outcome === "dismissed") setStatus({ text: "Installation annulée.", ok: false });
+  };
+
+  if (installed) {
+    return (
+      <div style={{ ...cardStyle, marginTop: 16, display: "flex", alignItems: "center", gap: 10 }}>
+        <PiCheckCircleFill size={20} color="#22C55E" />
+        <span style={{ fontSize: 13, color: "#E5E7EB" }}>Application installée</span>
+      </div>
+    );
+  }
+
+  if (canInstall) {
+    return (
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={legalHeadStyle}>Application</div>
+        <button onClick={handleInstall} style={installBtnStyle}>
+          <PiDownloadSimpleBold size={16} /> Installer l&apos;application
+        </button>
+        {status && (
+          <div style={{ fontSize: 12, marginTop: 10, color: status.ok ? "#4ade80" : "#7A8399" }}>
+            {status.ok ? "✅ " : ""}{status.text}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Safari/iOS never fires beforeinstallprompt — the only way onto the
+  // home screen there is the manual Share-sheet route, so that's what
+  // shows instead of a button that would never do anything.
+  if (isIOS()) {
+    return (
+      <div style={{ ...cardStyle, marginTop: 16 }}>
+        <div style={legalHeadStyle}>Application</div>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+          <PiShareFatBold size={16} color="#C9A84C" style={{ flexShrink: 0, marginTop: 2 }} />
+          <div style={{ fontSize: 12, color: "#9CA3AF", lineHeight: 1.6 }}>
+            Appuyez sur <strong style={{ color: "#E5E7EB" }}>Partager</strong> dans Safari, puis{" "}
+            <strong style={{ color: "#E5E7EB" }}>Sur l&apos;écran d&apos;accueil</strong> pour installer l&apos;application.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 // ─── LEGAL / SUPPORT (moved out of the old page-bottom Footer) ─────────────
 function LegalLinks() {
   return (
@@ -382,6 +447,12 @@ const feedbackStyle: React.CSSProperties = { fontSize: 12, padding: "9px 12px", 
 const submitBtnStyle: React.CSSProperties = { width: "100%", marginTop: 16, padding: "11px 0", borderRadius: 9, background: "#C9A84C", color: "#0A0C0F", fontWeight: 700, fontSize: 14, border: "none", letterSpacing: "0.02em", fontFamily: "inherit" };
 
 const switchTextStyle: React.CSSProperties = { marginTop: 14, fontSize: 12, color: "#4B5563", textAlign: "center" };
+
+const installBtnStyle: React.CSSProperties = {
+  width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+  padding: "11px 0", borderRadius: 9, background: "#C9A84C", color: "#0A0C0F",
+  fontWeight: 700, fontSize: 13, border: "none", cursor: "pointer", fontFamily: "inherit",
+};
 
 const switchLinkStyle: React.CSSProperties = { color: "#C9A84C", cursor: "pointer", fontWeight: 600 };
 

@@ -1,7 +1,9 @@
 "use client";
 import { useState, useMemo, useEffect, useRef, useCallback, useId } from "react";
-import { PiChartLineUpBold, PiCalendarBlankBold, PiCaretDownBold } from "react-icons/pi";
+import Link from "next/link";
+import { PiChartLineUpBold, PiCalendarBlankBold, PiCaretDownBold, PiFireFill, PiSparkleFill, PiCaretRightBold } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
+import { useAppSettings } from "@/hooks/useAppSettings";
 import { OneXBetBanner } from "./OneXBetBanner";
 import { CompoundBetBanner } from "./CompoundBanner";
 import { SubscribeBanner } from "./SubscribeBanner";
@@ -204,6 +206,37 @@ const IconFail = () => (
 // ─── Win-rate progress ring ───────────────────────────────────────────────────
 // Shared by the Hero's stat card and every WeekCalendar row so the "gold ring
 // around a percentage" reads as one consistent motif across the page.
+// Animates a displayed number toward `target` over `duration`ms (ease-out
+// cubic) instead of snapping — used so the ring's percentage counts up
+// whenever the buyer switches scope (Semaine/Global) or new data lands,
+// rather than just flickering to a new value.
+function useCountUp(target: number | null, duration = 700): number | null {
+  const [display, setDisplay] = useState(target ?? 0);
+  const displayRef = useRef(display);
+  useEffect(() => { displayRef.current = display; }, [display]);
+
+  useEffect(() => {
+    if (target === null) return;
+    const from = displayRef.current;
+    if (from === target) return;
+    let frame: number;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(Math.round(from + (target - from) * eased));
+      if (t < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+    // Deliberately only re-runs when the target changes — `from` is read
+    // fresh from the ref at that moment, not tracked as a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, duration]);
+
+  return target === null ? null : display;
+}
+
 function WinRateRing({ rate, size = 64, stroke = 5 }: { rate: number | null; size?: number; stroke?: number }) {
   // Every ring on the page (Hero + one per WeekCalendar row) needs its own
   // gradient id — duplicate SVG ids are invalid even when the defs are
@@ -211,7 +244,8 @@ function WinRateRing({ rate, size = 64, stroke = 5 }: { rate: number | null; siz
   const gradientId = `winRateGradient-${useId()}`;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
-  const pct = rate ?? 0;
+  const animated = useCountUp(rate);
+  const pct = animated ?? 0;
   return (
     <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
       <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
@@ -221,7 +255,6 @@ function WinRateRing({ rate, size = 64, stroke = 5 }: { rate: number | null; siz
             cx={size / 2} cy={size / 2} r={r} fill="none"
             stroke={`url(#${gradientId})`} strokeWidth={stroke} strokeLinecap="round"
             strokeDasharray={c} strokeDashoffset={c - (pct / 100) * c}
-            style={{ transition: "stroke-dashoffset 0.6s cubic-bezier(0.32,0.72,0,1)" }}
           />
         )}
         <defs>
@@ -232,7 +265,7 @@ function WinRateRing({ rate, size = 64, stroke = 5 }: { rate: number | null; siz
         </defs>
       </svg>
       <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Bebas Neue', sans-serif", fontSize: size * 0.3, color: "#C9A84C" }}>
-        {rate !== null ? `${rate}%` : "—"}
+        {rate !== null ? `${pct}%` : "—"}
       </div>
     </div>
   );
@@ -291,6 +324,35 @@ function Hero({ picks }: { picks: Pick[] }) {
 
   const todayCount = publishedPicks.filter((p) => p.match_date.split("T")[0] === today).length;
 
+  // Current win streak — most recent graded picks first, counting
+  // consecutive WINs until the first LOSS (refunds don't break it, they're
+  // a void, not a result). Global by design — a streak spanning a week
+  // boundary is still a streak.
+  const streak = useMemo(() => {
+    const gradedDesc = publishedPicks
+      .filter((p) => p.outcome === "WIN" || p.outcome === "LOSS")
+      .sort((a, b) => b.match_date.localeCompare(a.match_date));
+    let count = 0;
+    for (const p of gradedDesc) {
+      if (p.outcome === "WIN") count++;
+      else break;
+    }
+    return count;
+  }, [publishedPicks]);
+
+  // Last up to 6 weeks (including the current one) as a tiny trend strip —
+  // reuses the same week grouping WeekCalendar uses, just capped short.
+  const weekTrend = useMemo(() => {
+    const groups: Record<string, Pick[]> = {};
+    publishedPicks.forEach((p) => {
+      const key = getWeekKey(p.match_date);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(p);
+    });
+    return Object.keys(groups).sort().slice(-6).map((weekKey) => ({ weekKey, record: computeRecord(groups[weekKey]) }));
+  }, [publishedPicks]);
+  const gradedWeeksInTrend = weekTrend.filter((w) => w.record.graded > 0).length;
+
   return (
     <div style={{ padding: "26px 16px 20px", maxWidth: 700, margin: "0 auto", textAlign: "center" }}>
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "clamp(28px, 7vw, 40px)", color: "#E8EAF0", letterSpacing: 2, marginBottom: 6 }}>
@@ -316,6 +378,11 @@ function Hero({ picks }: { picks: Pick[] }) {
       {/* ── Performance card — one compact row, collapses further when there's
           nothing graded yet instead of showing an empty ring ── */}
       <div style={perfCardStyle}>
+        {streak >= 2 && (
+          <div style={streakBadgeStyle}>
+            <PiFireFill size={11} /> {streak} d&apos;affilée
+          </div>
+        )}
         <div style={perfHeaderStyle}>
           <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: "#7A8399", textTransform: "uppercase", letterSpacing: "1.5px", fontWeight: 600 }}>
             <PiChartLineUpBold size={12} /> Performance
@@ -347,6 +414,34 @@ function Hero({ picks }: { picks: Pick[] }) {
           <div style={{ fontSize: 12, color: "#7A8399", textAlign: "left", marginTop: 10 }}>
             Aucun pick jugé {scope === "week" ? "cette semaine" : "pour l'instant"}.
             {todayCount > 0 && <> <span style={{ color: "#C9A84C", fontWeight: 700 }}>{todayCount}</span> aujourd&apos;hui.</>}
+          </div>
+        )}
+
+        {/* Trend strip — win rate per week, last up to 6 weeks, current
+            week picked out in full gold. Only worth showing once there's
+            actually a trend to read. */}
+        {gradedWeeksInTrend >= 2 && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #1F2937" }}>
+            <div style={{ fontSize: 9, color: "#7A8399", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 8, textAlign: "left" }}>
+              Tendance
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 28 }}>
+              {weekTrend.map(({ weekKey, record }) => {
+                const isCurrent = weekKey === currentWeekKey;
+                const h = record.graded > 0 ? Math.max(4, (record.winRate! / 100) * 28) : 3;
+                return (
+                  <div
+                    key={weekKey}
+                    title={`${formatWeekRange(weekKey)} — ${record.graded > 0 ? `${record.winRate}%` : "aucun pick"}`}
+                    style={{
+                      flex: 1, height: h, borderRadius: 3,
+                      background: record.graded === 0 ? "#2A3140" : isCurrent ? "linear-gradient(180deg, #E8C97A, #C9A84C)" : "rgba(201,168,76,0.35)",
+                      transition: "height 0.5s cubic-bezier(0.32,0.72,0,1)",
+                    }}
+                  />
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -415,12 +510,36 @@ const warnTextStyle: React.CSSProperties = {
 };
 
 const perfCardStyle: React.CSSProperties = {
+  position: "relative",
   background: "#111418", border: "1px solid #2A3140", borderRadius: 14,
   padding: "14px 18px", maxWidth: 420, margin: "0 auto",
 };
 
+const streakBadgeStyle: React.CSSProperties = {
+  position: "absolute", top: -11, right: 16,
+  display: "flex", alignItems: "center", gap: 4,
+  background: "linear-gradient(135deg, #F97316, #EA580C)", color: "#fff",
+  fontSize: 10, fontWeight: 700, letterSpacing: "0.3px",
+  padding: "4px 10px", borderRadius: 999,
+  boxShadow: "0 4px 14px rgba(234,88,12,0.4)",
+  animation: "pulse 2.4s ease-in-out infinite",
+};
+
 const perfHeaderStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap",
+};
+
+const noMatchCardStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 14,
+  background: "#111418", border: "1px solid #2A3140", borderRadius: 14,
+  padding: "16px 18px", marginBottom: 20, textDecoration: "none",
+  transition: "border-color 0.2s",
+};
+
+const noMatchIconStyle: React.CSSProperties = {
+  width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+  background: "rgba(201,168,76,0.1)", border: "1px solid rgba(201,168,76,0.25)",
+  display: "flex", alignItems: "center", justifyContent: "center", color: "#C9A84C",
 };
 
 const statTabActiveStyle: React.CSSProperties = {
@@ -1334,6 +1453,7 @@ export default function PremiumPicksPage() {
   const [showSubscribe, setShowSubscribe] = useState(false);
   const [newPicksBanner, setNewPicksBanner] = useState<number | null>(null);
   const { user, hasActiveSubscription, refreshUser } = useAuth();
+  const settings = useAppSettings();
 
   // Kept outside React state so the polling/focus refresh below can diff
   // "what we already had" vs "what just came back" without re-subscribing
@@ -1534,6 +1654,22 @@ export default function PremiumPicksPage() {
                 <DateSection key={date} date={date} picks={groupedToday[date]} onSelect={setSelectedPick} />
               ))}
             </>
+          )}
+
+          {/* ── NO MATCH TODAY — nudge toward Pronostic IA instead of a dead end ── */}
+          {todayPicks.length === 0 && settings?.matchGeneratorEnabled && (
+            <Link href="/pronostic" style={noMatchCardStyle}>
+              <span style={noMatchIconStyle}><PiSparkleFill size={22} /></span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 1, color: "#E8EAF0", marginBottom: 3 }}>
+                  Pas de match aujourd&apos;hui
+                </div>
+                <div style={{ fontSize: 11.5, color: "#7A8399", lineHeight: 1.4 }}>
+                  Envie de parier quand même ? Essaie notre générateur Pronostic IA.
+                </div>
+              </div>
+              <PiCaretRightBold size={16} color="#7A8399" style={{ flexShrink: 0 }} />
+            </Link>
           )}
 
           {/* ── PICKS RÉCENTS — rest of the current week, shown in full ── */}

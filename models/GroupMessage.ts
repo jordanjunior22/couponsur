@@ -13,11 +13,19 @@ export interface IGroupReplyPreview {
   text: string; // truncated preview, see REPLY_PREVIEW_LENGTH below
 }
 
-// One flat collection = one shared room: the premium group chat. Unlike
-// Conversation (one document per visitor thread), every message here lives
-// in the same room, so there's no parent "conversation" document — just a
-// stream of messages ordered by createdAt.
+export type GroupRoom = "premium" | "global";
+
+// One flat collection, two rooms: the original premium group chat, and
+// "Chat Global" (open to any logged-in user). Unlike Conversation (one
+// document per visitor thread), every message here lives in one of two
+// streams distinguished by `room`, ordered by createdAt.
 export interface IGroupMessage extends Document {
+  // Absent on every document written before this field existed — those are
+  // all premium-room messages (the only room that existed then). Every
+  // reader of this field (queries, API routes) treats "missing" the same
+  // as "premium" rather than backfilling every old document; see the group
+  // chat API routes for the exact query shape this requires.
+  room?: GroupRoom;
   user: Types.ObjectId;
   // Denormalized at send time so history renders without a join, and so a
   // deleted/renamed account doesn't blank out old messages. Stored in full
@@ -60,6 +68,10 @@ const GroupReplyPreviewSchema = new Schema<IGroupReplyPreview>(
 
 const GroupMessageSchema = new Schema<IGroupMessage>(
   {
+    // No `default` here on purpose — every write after this change sets it
+    // explicitly (see app/api/group-chat/route.ts's POST), so a default
+    // would only ever paper over a bug that forgot to pass it.
+    room: { type: String, enum: ["premium", "global"] },
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
     phone: { type: String, required: true },
     role: { type: String, enum: ["USER", "ADMIN"], required: true },
@@ -83,9 +95,11 @@ const GroupMessageSchema = new Schema<IGroupMessage>(
 // Mongoose's pre-validate hook typing friction for no real benefit — this
 // model is only ever written to through that one route.
 
-// Messages are always fetched newest-window in createdAt order.
+// Messages are always fetched newest-window in createdAt order, scoped to
+// one room at a time.
 GroupMessageSchema.index({ createdAt: 1 });
 GroupMessageSchema.index({ pinned: 1 });
+GroupMessageSchema.index({ room: 1, createdAt: 1 });
 
 const GroupMessageModel: Model<IGroupMessage> =
   mongoose.models.GroupMessage ||

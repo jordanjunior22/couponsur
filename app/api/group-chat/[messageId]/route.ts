@@ -52,21 +52,27 @@ export async function PATCH(
   try {
     await connectDB();
 
-    const access = await requireGroupChatAccess();
+    const { messageId } = await params;
+    // Fetched before the access check so that check can be run against
+    // *this* message's own room, not a guess from the request — a message
+    // is always exactly as premium- or global-gated as the room it lives
+    // in, regardless of which room the caller claims to be acting in.
+    const message = await GroupMessageModel.findById(messageId);
+    if (!message) {
+      return NextResponse.json({ success: false, message: "Message introuvable" }, { status: 404 });
+    }
+    const room = message.room ?? "premium";
+
+    const access = await requireGroupChatAccess(room);
     if ("error" in access) {
       return NextResponse.json({ success: false, message: access.error }, { status: access.status });
     }
 
-    const { messageId } = await params;
     const body = await req.json().catch(() => ({}));
 
     if (typeof body.pinned === "boolean") {
       if (access.user.role !== "ADMIN") {
         return NextResponse.json({ success: false, message: "Réservé aux admins" }, { status: 403 });
-      }
-      const message = await GroupMessageModel.findById(messageId);
-      if (!message) {
-        return NextResponse.json({ success: false, message: "Message introuvable" }, { status: 404 });
       }
       message.pinned = body.pinned;
       await message.save();
@@ -78,6 +84,10 @@ export async function PATCH(
         { success: false, message: "Vous avez été bloqué de ce groupe par un administrateur." },
         { status: 403 }
       );
+    }
+
+    if (message.user.toString() !== access.user.userId) {
+      return NextResponse.json({ success: false, message: "Message introuvable" }, { status: 404 });
     }
 
     const text = typeof body.text === "string" ? body.text.trim() : "";
@@ -92,11 +102,6 @@ export async function PATCH(
       if (reason) {
         return NextResponse.json({ success: false, message: moderationMessage(reason) }, { status: 400 });
       }
-    }
-
-    const message = await GroupMessageModel.findOne({ _id: messageId, user: access.user.userId });
-    if (!message) {
-      return NextResponse.json({ success: false, message: "Message introuvable" }, { status: 404 });
     }
 
     message.text = text;
@@ -121,12 +126,20 @@ export async function DELETE(
   try {
     await connectDB();
 
-    const access = await requireGroupChatAccess();
+    const { messageId } = await params;
+    // Same reasoning as PATCH above — the room to gate against comes from
+    // the message being deleted, not the caller's say-so.
+    const existing = await GroupMessageModel.findById(messageId).select("room");
+    if (!existing) {
+      return NextResponse.json({ success: false, message: "Message introuvable" }, { status: 404 });
+    }
+    const room = existing.room ?? "premium";
+
+    const access = await requireGroupChatAccess(room);
     if ("error" in access) {
       return NextResponse.json({ success: false, message: access.error }, { status: access.status });
     }
 
-    const { messageId } = await params;
     const filter =
       access.user.role === "ADMIN"
         ? { _id: messageId }
