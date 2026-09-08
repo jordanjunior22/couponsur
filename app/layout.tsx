@@ -31,9 +31,23 @@ export const metadata: Metadata = {
 // area in standalone/PWA mode — needed for env(safe-area-inset-bottom) to
 // resolve to anything other than 0 (used by BottomTabBar and the fixed
 // widgets that sit above it, see lib/layoutConstants.ts).
+//
+// maximumScale/userScalable lock out pinch-zoom and double-tap-zoom —
+// the thing that actually makes a redesigned-to-look-like-an-app site
+// still *feel* like a browser tab (a native app never lets a gesture
+// zoom the whole UI). iOS Safari has ignored this in an ordinary browser
+// tab since iOS 10 for accessibility reasons, but it's still honored
+// once the site is added to the home screen and running standalone —
+// so in practice this is exactly "disable zoom in the PWA, leave normal
+// browsing untouched" without needing to branch on display-mode at all.
+// Android's WebView-based standalone mode honors it directly either way.
 export const viewport: Viewport = {
   themeColor: "#0A0C0F",
   viewportFit: "cover",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 const FB_PIXEL_ID = process.env.NEXT_PUBLIC_FB_PIXEL_ID;

@@ -19,6 +19,18 @@
   }
 }
 
+/* Kills the double-tap-to-zoom gesture and the old ~300ms tap-response
+   delay browsers used to wait out in case a second tap was coming — the
+   other half of the app/layout.tsx viewport change (which handles
+   pinch-zoom). text-size-adjust stops iOS/Android from silently
+   rescaling text on rotation, the third small thing that reads as
+   "browser tab" rather than "app" if left on. */
+html {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
