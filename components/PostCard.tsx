@@ -58,15 +58,17 @@ const CAPTION_TRUNCATE_AT = 180;
 // (`white-space: pre-wrap`, the actual fix for admin formatting getting
 // silently collapsed by default HTML whitespace rules) — collapsing it
 // behind "…plus" past CAPTION_TRUNCATE_AT characters, Instagram-caption
-// style, rather than dumping a wall of text into the feed.
-function ExpandableText({ authorName, text }: { authorName: string; text: string }) {
+// style, rather than dumping a wall of text into the feed. No author name
+// prefix here — that already lives in the header row above the media, so
+// repeating it here would just be noise.
+function ExpandableText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const isLong = text.length > CAPTION_TRUNCATE_AT;
   const shown = expanded || !isLong ? text : text.slice(0, CAPTION_TRUNCATE_AT).trimEnd();
 
   return (
     <div style={{ fontSize: 13.5, color: "#F5F5F5", lineHeight: 1.45, marginBottom: 4, whiteSpace: "pre-wrap", overflowWrap: "break-word" }}>
-      <span style={{ fontWeight: 700 }}>{authorName}</span> {shown}
+      {shown}
       {isLong && !expanded && (
         <>
           {"… "}
@@ -96,9 +98,9 @@ function timeAgo(iso: string): string {
 
 // One post in the Actus feed — borderless, divider-separated, full-bleed
 // media: the same visual language as a modern Instagram feed rather than a
-// bordered "card" (avatar + bold name header, edge-to-edge photo,
-// icon-only action row, bold like count, "name + caption" line, collapsed
-// "view comments" link, small caps timestamp last). Posting is admin-only —
+// bordered "card" (avatar + bold name header, a square edge-to-edge photo,
+// icon-only action row, bold like count, caption, collapsed "view
+// comments" link, small caps timestamp last). Posting is admin-only —
 // everything interactive here is a buyer action.
 export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: ClientPost) => void }) {
   const { user } = useAuth();
@@ -229,7 +231,7 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
       {post.image && (
         <div style={mediaWrapStyle} onDoubleClick={handleImageDoubleClick}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={post.image} alt="" style={{ width: "100%", display: "block" }} draggable={false} />
+          <img src={post.image} alt="" style={mediaImgStyle} draggable={false} />
           {heartPop && (
             <span style={heartOverlayStyle}>
               <PiHeartFill size={84} color="#fff" style={{ filter: "drop-shadow(0 2px 10px rgba(0,0,0,0.35))" }} />
@@ -262,7 +264,7 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
           {post.likeCount > 0 ? `${post.likeCount} j'aime${post.likeCount > 1 ? "" : ""}` : "Soyez le premier à aimer"}
         </div>
 
-        {post.text && <ExpandableText authorName={post.authorName} text={post.text} />}
+        {post.text && <ExpandableText text={post.text} />}
 
         {post.comments.length > 0 && !commentsOpen && (
           <button onClick={() => setCommentsOpen(true)} style={viewCommentsBtnStyle}>
@@ -408,8 +410,16 @@ const avatarStyle: React.CSSProperties = {
   color: "#0A0C0F", fontSize: 12, fontWeight: 700,
 };
 
+// A fixed 1:1 square, cropped to fill — every post's media occupies the
+// exact same footprint in the feed regardless of the source photo's own
+// aspect ratio, the same consistency Instagram's grid/feed enforces
+// instead of letting post heights jump around per-image.
 const mediaWrapStyle: React.CSSProperties = {
-  position: "relative", background: "#000",
+  position: "relative", background: "#000", aspectRatio: "1 / 1", overflow: "hidden",
+};
+
+const mediaImgStyle: React.CSSProperties = {
+  width: "100%", height: "100%", objectFit: "cover", display: "block",
 };
 
 const heartOverlayStyle: React.CSSProperties = {
