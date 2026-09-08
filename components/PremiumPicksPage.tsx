@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect, useRef, useCallback, useId } from "react";
 import Link from "next/link";
-import { PiChartLineUpBold, PiCalendarBlankBold, PiCaretDownBold, PiFireFill, PiSparkleFill, PiCaretRightBold, PiCalendarXBold } from "react-icons/pi";
+import { PiChartLineUpBold, PiCalendarBlankBold, PiCaretDownBold, PiFireFill, PiRobotFill, PiCaretRightBold, PiCalendarXBold } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { OneXBetBanner } from "./OneXBetBanner";
@@ -1200,7 +1200,7 @@ function TodayNudgeRow({ date }: { date: string }) {
         {formatDate(date)}
       </div>
       <Link href="/pronostic" style={{ ...noMatchCardStyle, marginBottom: 0 }}>
-        <span style={noMatchIconStyle}><PiSparkleFill size={22} /></span>
+        <span style={noMatchIconStyle}><PiRobotFill size={22} /></span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 1, color: "#E8EAF0", marginBottom: 3 }}>
             Pronostics pas encore disponibles

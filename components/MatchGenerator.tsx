@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import {
-  PiWarningFill, PiLockSimpleFill, PiSparkleFill,
+  PiWarningFill, PiLockSimpleFill, PiRobotFill,
   PiArrowsClockwiseBold, PiSlidersHorizontalBold,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
@@ -228,7 +228,7 @@ export function MatchGeneratorTool({
               </>
             ) : (
               <>
-                <PiSparkleFill size={16} /> Générer des matchs
+                <PiRobotFill size={16} /> Générer des matchs
               </>
             )}
           </button>

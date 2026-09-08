@@ -1,6 +1,6 @@
 "use client";
 
-import { PiSparkleFill } from "react-icons/pi";
+import { PiRobotFill } from "react-icons/pi";
 import { MatchGeneratorTool } from "@/components/MatchGenerator";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
@@ -26,7 +26,7 @@ export default function PronosticPage() {
   return (
     <main style={{ minHeight: "100vh", background: "#0A0C0F", padding: "20px 16px", paddingBottom: BOTTOM_SAFE_OFFSET }}>
       <div style={{ maxWidth: 600, margin: "0 auto" }}>
-        <div style={titleStyle}><PiSparkleFill size={17} /> Pronostic IA</div>
+        <div style={titleStyle}><PiRobotFill size={17} /> Pronostic IA</div>
         <div style={subtitleStyle}>Notre moteur de génération de matchs par IA, à titre indicatif.</div>
         {settings && (
           <MatchGeneratorTool access={settings.matchGeneratorAccess} marketAccess={settings.matchGeneratorMarketAccess} />

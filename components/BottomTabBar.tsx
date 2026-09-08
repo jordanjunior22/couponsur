@@ -8,7 +8,7 @@ import {
   PiHouseSimple, PiHouseSimpleFill,
   PiMegaphone, PiMegaphoneFill,
   PiChatCircleDots, PiChatCircleDotsFill,
-  PiSparkle, PiSparkleFill,
+  PiRobot, PiRobotFill,
   PiClockCounterClockwise, PiClockCounterClockwiseFill,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
@@ -107,9 +107,17 @@ export function BottomTabBar() {
     ...(showChat ? [{ href: "/groupe", label: "Chat", icon: PiChatCircleDots, iconActive: PiChatCircleDotsFill, badgeCount: formatBadgeCount(unreadChatTotal) }] : []),
     // "Pronostic IA" — our branded name for the AI match-generation engine,
     // not a generic "Outils"/"AI Tools" label.
-    ...(showPronostic ? [{ href: "/pronostic", label: "Pronostic IA", icon: PiSparkle, iconActive: PiSparkleFill, badge: pronosticUnseen, onNavigate: markPronosticSeen }] : []),
+    ...(showPronostic ? [{ href: "/pronostic", label: "Pronostic IA", icon: PiRobot, iconActive: PiRobotFill, badge: pronosticUnseen, onNavigate: markPronosticSeen }] : []),
     { href: "/historique", label: "Historique", icon: PiClockCounterClockwise, iconActive: PiClockCounterClockwiseFill },
   ];
+
+  // Inside an actual chat room (not the /groupe picker itself) the room
+  // wants the full remaining viewport for messages + composer — the
+  // floating bar would just sit on top of that, so it's hidden entirely
+  // rather than left floating over the conversation. ChatRoomScreen
+  // reclaims the height this frees up (see lib/layoutConstants.ts).
+  const inChatRoom = pathname === "/groupe/premium" || pathname === "/groupe/global";
+  if (inChatRoom) return null;
 
   return (
     // Outer strip spans the full viewport width so the floating card below
