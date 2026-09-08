@@ -50,13 +50,13 @@ export function SubscribeBanner({ isLoggedIn, isSubscribed, subscriptionStatus, 
 
             {/* Headline */}
             <div style={headlineStyle}>
-              Tous les picks,{" "}
+              Tous les pronostics,{" "}
               <span style={{ color: "#C9A84C" }}>sans limite</span>
             </div>
 
             {/* Sub */}
             <div style={{ fontSize: 11, color: "#7A8399", lineHeight: 1.5 }}>
-              Abonnement mensuel · Accès immédiat · Annulable à tout moment
+              Abonnement mensuel · Pronostic IA sans restriction · Annulable à tout moment
             </div>
           </div>
 

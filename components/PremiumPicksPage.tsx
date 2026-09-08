@@ -1710,13 +1710,13 @@ export default function PremiumPicksPage() {
             </>
           )}
 
-          {/* ── NO MATCH TODAY — nudge toward Pronostic IA instead of a dead end ── */}
+          {/* ── NO MATCH YET — nudge toward Pronostic IA instead of a dead end ── */}
           {todayPicks.length === 0 && settings?.matchGeneratorEnabled && (
             <Link href="/pronostic" style={noMatchCardStyle}>
               <span style={noMatchIconStyle}><PiSparkleFill size={22} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 1, color: "#E8EAF0", marginBottom: 3 }}>
-                  Pas de match aujourd&apos;hui
+                  Pronostics pas encore disponibles
                 </div>
                 <div style={{ fontSize: 11.5, color: "#7A8399", lineHeight: 1.4 }}>
                   Envie de parier quand même ? Essaie notre générateur Pronostic IA.
