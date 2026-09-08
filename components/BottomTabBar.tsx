@@ -119,6 +119,13 @@ export function BottomTabBar() {
   const inChatRoom = pathname === "/groupe/premium" || pathname === "/groupe/global";
   if (inChatRoom) return null;
 
+  // useAppSettings() returns null until its first fetch resolves — until
+  // then we don't actually know which of Actus/Chat/Pronostic IA to show,
+  // so rendering the real tab list would start at just Accueil+Historique
+  // and then pop in extra tabs a moment later. A skeleton in the exact
+  // same floating-pill shell reserves the final layout up front instead.
+  if (!settings) return <TabBarSkeleton />;
+
   return (
     // Outer strip spans the full viewport width so the floating card below
     // can be centered in it, but the strip itself is transparent and
@@ -149,6 +156,34 @@ export function BottomTabBar() {
     </div>
   );
 }
+
+// Placeholder shown in the exact same floating pill shell while
+// useAppSettings() is still resolving (see the `!settings` branch above).
+// Five slots — the maximum possible tab count — so the real bar never has
+// to grow wider than this once it swaps in; it can only ever end up with
+// the same or fewer real tabs.
+function TabBarSkeleton() {
+  return (
+    <div style={outerStyle}>
+      <nav style={barStyle} aria-hidden="true">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} style={itemStyle}>
+            <span className="cs-skeleton" style={skeletonCircleStyle} />
+            <span className="cs-skeleton" style={skeletonLabelStyle} />
+          </div>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+const skeletonCircleStyle: React.CSSProperties = {
+  width: 34, height: 34, borderRadius: "50%",
+};
+
+const skeletonLabelStyle: React.CSSProperties = {
+  width: 26, height: 7, borderRadius: 3,
+};
 
 const outerStyle: React.CSSProperties = {
   position: "fixed",

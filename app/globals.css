@@ -1,8 +1,18 @@
 @import "tailwindcss";
 
+/* The app is a single fixed dark theme, not a light/dark-adaptive one —
+   every buyer page already paints its own #0A0C0F background inline, so
+   this is what shows everywhere else: the PWA's own surrounding surface
+   (overscroll/rubber-band bounce past the top or bottom on iOS, any gap
+   before a page's own inline background paints, safe-area padding a page
+   doesn't cover). Left as the old Next.js starter default (white, only
+   switching dark under prefers-color-scheme) that background flashed
+   white in exactly those spots — a "browser tab" tell a native app never
+   has. Hard-coded dark unconditionally instead of following system
+   light/dark, matching how the rest of the app already behaves. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0A0C0F;
+  --foreground: #E8EAF0;
 }
 
 @theme inline {
@@ -12,13 +22,6 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 /* Kills the double-tap-to-zoom gesture and the old ~300ms tap-response
    delay browsers used to wait out in case a second tap was coming — the
    other half of the app/layout.tsx viewport change (which handles
@@ -26,6 +29,7 @@
    rescaling text on rotation, the third small thing that reads as
    "browser tab" rather than "app" if left on. */
 html {
+  background: var(--background);
   touch-action: manipulation;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -89,3 +93,17 @@ body {
 .cs-loader-glow { position: absolute; inset: -35%; border-radius: 50%; filter: blur(4px); animation: pulse 1.7s ease-in-out infinite; }
 .cs-loader-ring { position: absolute; inset: 0; border-radius: 50%; animation: spin 0.85s linear infinite; }
 .cs-loader-core { position: absolute; top: 50%; left: 50%; width: 26%; height: 26%; transform: translate(-50%, -50%); border-radius: 50%; opacity: 0.9; animation: pulse 1.7s ease-in-out infinite; }
+
+/* Shared skeleton-placeholder shimmer (currently components/BottomTabBar.tsx's
+   TabBarSkeleton) — a soft light-sweep across a dark block, the standard
+   "content is on its way" signal instead of a static gray box or nothing
+   at all while data is still loading. */
+@keyframes skeletonShimmer {
+  0%   { background-position: -135% 0; }
+  100% { background-position: 235% 0; }
+}
+.cs-skeleton {
+  background: linear-gradient(90deg, #1B1F26 25%, #262C36 37%, #1B1F26 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.6s ease-in-out infinite;
+}
