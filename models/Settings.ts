@@ -58,6 +58,8 @@ export interface ISettings extends Document {
    *  active subscribers. On by default for the same reason: it ships ready
    *  to use, not as an opt-in beta. */
   globalChatEnabled: boolean;
+  /** Master switch for the "Actus" news feed tab — same shape again. */
+  newsFeedEnabled: boolean;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -73,6 +75,7 @@ const SettingsSchema = new Schema<ISettings>(
     matchGeneratorMatchCount: { type: Number, default: 3, min: 1, max: 10 },
     groupChatEnabled: { type: Boolean, default: true },
     globalChatEnabled: { type: Boolean, default: true },
+    newsFeedEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

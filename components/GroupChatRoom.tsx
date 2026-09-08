@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { markRoomRead } from "@/hooks/useUnreadChat";
+import { compressImageToDataUri } from "@/utils/imageCompression";
 import type { GroupRoom } from "@/models/GroupMessage";
 
 interface ReplyPreview {
@@ -93,44 +94,9 @@ function accentColorFor(role: "USER" | "ADMIN", userId: string, isOwn: boolean):
   return colorForUser(userId);
 }
 
-// Downscales + re-encodes an image client-side before it ever reaches the
-// server — keeps the request small and keeps MongoDB storage (which the
-// admin panel reports on and can clear) from ballooning on full-resolution
-// phone photos.
-function compressImage(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
-      const w = Math.max(1, Math.round(img.width * scale));
-      const h = Math.max(1, Math.round(img.height * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) { reject(new Error("Le navigateur ne supporte pas le traitement d'image")); return; }
-      ctx.drawImage(img, 0, 0, w, h);
-
-      let quality = 0.82;
-      let dataUri = canvas.toDataURL("image/jpeg", quality);
-      let tries = 0;
-      while (dataUri.length * 0.75 > MAX_IMAGE_BYTES && tries < 5) {
-        quality = Math.max(0.3, quality - 0.15);
-        dataUri = canvas.toDataURL("image/jpeg", quality);
-        tries++;
-      }
-      if (dataUri.length * 0.75 > MAX_IMAGE_BYTES) {
-        reject(new Error("Image trop volumineuse, même après compression"));
-        return;
-      }
-      resolve(dataUri);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Impossible de charger cette image")); };
-    img.src = url;
-  });
-}
+// Downscale/re-encode moved to utils/imageCompression.ts, shared with the
+// admin news-post composer — see compressImageToDataUri.
+const compressImage = (file: File) => compressImageToDataUri(file, { maxDimension: MAX_IMAGE_DIMENSION, maxBytes: MAX_IMAGE_BYTES });
 
 interface GroupChatRoomProps {
   room: GroupRoom;

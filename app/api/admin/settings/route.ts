@@ -44,6 +44,7 @@ export async function PUT(req: NextRequest) {
       matchGeneratorMatchCount,
       groupChatEnabled,
       globalChatEnabled,
+      newsFeedEnabled,
     } = body;
 
     const update: Record<string, unknown> = {};
@@ -163,6 +164,16 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.globalChatEnabled = globalChatEnabled;
+    }
+
+    if (newsFeedEnabled !== undefined) {
+      if (typeof newsFeedEnabled !== "boolean") {
+        return NextResponse.json(
+          { success: false, message: "newsFeedEnabled must be a boolean" },
+          { status: 400 }
+        );
+      }
+      update.newsFeedEnabled = newsFeedEnabled;
     }
 
     if (Object.keys(update).length === 0) {

@@ -6,6 +6,7 @@ import Link from "next/link";
 import SoccerVitalImportModal from "@/components/SoccerVitalImportModal";
 import DecimalInput from "@/components/DecimalInput";
 import TypingIndicator from "@/components/TypingIndicator";
+import { compressImageToDataUri } from "@/utils/imageCompression";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 interface Match {
@@ -213,6 +214,13 @@ const Icons = {
       <path d="M1.5 6.5v3a1 1 0 001 1h1.3l6.7 3V2.5l-6.7 3H2.5a1 1 0 00-1 1z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M6.5 10.5v2.3a1 1 0 001 1h.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M12.8 6a2.4 2.4 0 010 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  ),
+  posts: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="5" cy="6" r="1.2" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M2 11.5l3.2-3 2.3 2 2.8-3.5L14 11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
   transactions: () => (
@@ -2931,6 +2939,102 @@ function SettingsTab() {
         title="Chat Global"
         description="Discussion ouverte à tout membre connecté, accessible depuis l&apos;onglet Chat (🌍) de l&apos;app."
       />
+
+      <NewsFeedToggleCard />
+    </div>
+  );
+}
+
+// ─── News feed toggle ───────────────────────────────────────────────────────
+// Just the enable switch — unlike the chat rooms there's no bulk "storage
+// used / wipe all" concern here beyond individual posts, which PostsTab's
+// own delete button already covers per-post.
+function NewsFeedToggleCard() {
+  const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) setEnabled(data.data.newsFeedEnabled !== false);
+      } catch (e) {
+        console.error("Settings fetch:", e);
+      }
+    })();
+  }, []);
+
+  const saveEnabled = async (next: boolean) => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newsFeedEnabled: next }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setEnabled(data.data.newsFeedEnabled !== false);
+        setSaveMsg("Enregistré avec succès.");
+      } else {
+        setEnabled(!next);
+        setSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setEnabled(!next);
+      setSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setSaving(false);
+      setTimeout(() => setSaveMsg(null), 3000);
+    }
+  };
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+      <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+        Fonctionnalité
+      </div>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+        Actus
+      </div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+        Fil d&apos;actualités (news + sondages équipe vs équipe), accessible depuis l&apos;onglet Actus (📣) de l&apos;app. Gérez les publications elles-mêmes dans l&apos;onglet Actualités.
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+          Activer la fonctionnalité
+        </label>
+        <button
+          onClick={() => { const next = !enabled; setEnabled(next); saveEnabled(next); }}
+          disabled={saving}
+          style={{
+            width: 44, height: 24, borderRadius: 12, position: "relative", cursor: saving ? "not-allowed" : "pointer",
+            background: enabled ? C.gold : C.dark4, border: `1px solid ${enabled ? C.gold : C.border}`,
+            transition: "background 0.15s", flexShrink: 0, padding: 0,
+          }}
+        >
+          <span style={{
+            position: "absolute", top: 2, left: enabled ? 22 : 2, width: 18, height: 18, borderRadius: "50%",
+            background: enabled ? C.dark : C.muted, transition: "left 0.15s",
+          }} />
+        </button>
+      </div>
+
+      {saveMsg && (
+        <div style={{
+          fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
+          background: saveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+          border: `1px solid ${saveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+          color: saveMsg.includes("succès") ? C.green : C.red,
+        }}>
+          {saveMsg}
+        </div>
+      )}
     </div>
   );
 }
@@ -3755,8 +3859,275 @@ function AccessDenied() {
   );
 }
 
+// ─── Actus (news feed) ───────────────────────────────────────────────────────
+// Self-contained — its own fetch/create/publish/delete, same posture as
+// GroupChatAdminCard: this section doesn't need to thread its state
+// through the rest of the dashboard's shared fetch effect.
+interface AdminPost {
+  _id: string;
+  text: string;
+  image: string | null;
+  poll: { optionALabel: string; optionBLabel: string; counts: { a: number; b: number }; total: number } | null;
+  likeCount: number;
+  shareCount: number;
+  comments: { _id: string }[];
+  isPublished: boolean;
+  createdAt: string;
+}
+
+function PostsTab() {
+  const [posts, setPosts] = useState<AdminPost[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [textDraft, setTextDraft] = useState("");
+  const [imageDataUri, setImageDataUri] = useState<string | null>(null);
+  const [compressing, setCompressing] = useState(false);
+  const [pollEnabled, setPollEnabled] = useState(false);
+  const [pollA, setPollA] = useState("");
+  const [pollB, setPollB] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createMsg, setCreateMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const fetchPosts = async () => {
+    try {
+      const res = await fetch("/api/admin/posts", { credentials: "include" });
+      const data = await res.json();
+      if (data?.success) setPosts(data.data);
+    } catch (e) {
+      console.error("Admin posts fetch:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchPosts(); }, []);
+
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return;
+    setCompressing(true);
+    try {
+      setImageDataUri(await compressImageToDataUri(file));
+    } catch (err) {
+      setCreateMsg({ text: err instanceof Error ? err.message : "Impossible de traiter cette image", ok: false });
+    } finally {
+      setCompressing(false);
+    }
+  };
+
+  const resetForm = () => {
+    setTextDraft(""); setImageDataUri(null); setPollEnabled(false); setPollA(""); setPollB("");
+  };
+
+  const handleCreate = async () => {
+    if (!textDraft.trim() && !imageDataUri) {
+      setCreateMsg({ text: "Le post ne peut pas être vide", ok: false });
+      return;
+    }
+    if (pollEnabled && (!pollA.trim() || !pollB.trim())) {
+      setCreateMsg({ text: "Un sondage a besoin des deux options", ok: false });
+      return;
+    }
+    setCreating(true);
+    setCreateMsg(null);
+    try {
+      const res = await fetch("/api/admin/posts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: textDraft.trim(),
+          image: imageDataUri,
+          pollOptionA: pollEnabled ? pollA.trim() : undefined,
+          pollOptionB: pollEnabled ? pollB.trim() : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setPosts((prev) => [data.data, ...prev]);
+        resetForm();
+        setCreateMsg({ text: "Publié avec succès.", ok: true });
+      } else {
+        setCreateMsg({ text: data.message || "Échec de la publication.", ok: false });
+      }
+    } catch {
+      setCreateMsg({ text: "Erreur réseau.", ok: false });
+    } finally {
+      setCreating(false);
+      setTimeout(() => setCreateMsg(null), 3500);
+    }
+  };
+
+  const togglePublish = async (post: AdminPost) => {
+    setBusyId(post._id);
+    try {
+      const res = await fetch(`/api/admin/posts/${post._id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isPublished: !post.isPublished }),
+      });
+      const data = await res.json();
+      if (data?.success) setPosts((prev) => prev.map((p) => (p._id === post._id ? data.data : p)));
+    } catch { /* ignore */ }
+    finally { setBusyId(null); }
+  };
+
+  const deletePost = async (post: AdminPost) => {
+    if (!confirm("Supprimer définitivement ce post (et ses commentaires) ?")) return;
+    setBusyId(post._id);
+    try {
+      const res = await fetch(`/api/admin/posts/${post._id}`, { method: "DELETE", credentials: "include" });
+      const data = await res.json();
+      if (data?.success) setPosts((prev) => prev.filter((p) => p._id !== post._id));
+    } catch { /* ignore */ }
+    finally { setBusyId(null); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 16 }}>
+          Nouvelle actu
+        </div>
+
+        <textarea
+          value={textDraft}
+          onChange={(e) => setTextDraft(e.target.value)}
+          placeholder="Texte de la publication…"
+          rows={3}
+          style={{ ...adminTextareaStyle }}
+        />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+          <label style={adminFileLabelStyle}>
+            {compressing ? "Compression…" : imageDataUri ? "Changer l'image" : "Ajouter une image"}
+            <input type="file" accept="image/*" onChange={handleImageSelect} disabled={compressing} style={{ display: "none" }} />
+          </label>
+          {imageDataUri && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={imageDataUri} alt="" style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.border}` }} />
+          )}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16 }}>
+          <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+            Sondage (équipe vs équipe)
+          </label>
+          <button
+            onClick={() => setPollEnabled((v) => !v)}
+            style={{
+              width: 40, height: 22, borderRadius: 11, position: "relative", cursor: "pointer", padding: 0,
+              background: pollEnabled ? C.gold : C.dark4, border: `1px solid ${pollEnabled ? C.gold : C.border}`,
+            }}
+          >
+            <span style={{ position: "absolute", top: 2, left: pollEnabled ? 20 : 2, width: 16, height: 16, borderRadius: "50%", background: pollEnabled ? C.dark : C.muted, transition: "left 0.15s" }} />
+          </button>
+        </div>
+
+        {pollEnabled && (
+          <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+            <input value={pollA} onChange={(e) => setPollA(e.target.value)} placeholder="Équipe A" style={adminInputStyle} />
+            <input value={pollB} onChange={(e) => setPollB(e.target.value)} placeholder="Équipe B" style={adminInputStyle} />
+          </div>
+        )}
+
+        <button onClick={handleCreate} disabled={creating || compressing} style={{ ...adminPublishBtnStyle, opacity: creating ? 0.6 : 1, marginTop: 16 }}>
+          {creating ? "Publication…" : "Publier"}
+        </button>
+
+        {createMsg && (
+          <div style={{
+            fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
+            background: createMsg.ok ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${createMsg.ok ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+            color: createMsg.ok ? C.green : C.red,
+          }}>
+            {createMsg.text}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
+          Publications ({posts.length})
+        </div>
+
+        {loading ? (
+          <div style={{ fontSize: 12, color: C.muted }}>Chargement…</div>
+        ) : posts.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.muted }}>Aucune publication pour l&apos;instant.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {posts.map((post) => (
+              <div key={post._id} style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, opacity: post.isPublished ? 1 : 0.55 }}>
+                <div style={{ display: "flex", gap: 12 }}>
+                  {post.image && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={post.image} alt="" style={{ width: 52, height: 52, borderRadius: 8, objectFit: "cover", flexShrink: 0, border: `1px solid ${C.border}` }} />
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, color: C.text, lineHeight: 1.4, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                      {post.text || <span style={{ color: C.muted }}>(sans texte)</span>}
+                    </div>
+                    {post.poll && (
+                      <div style={{ fontSize: 11, color: C.gold, marginBottom: 4 }}>
+                        🏆 {post.poll.optionALabel} vs {post.poll.optionBLabel} — {post.poll.total} vote{post.poll.total > 1 ? "s" : ""}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 11, color: C.muted }}>
+                      ❤️ {post.likeCount} · 💬 {post.comments.length} · 🔁 {post.shareCount} · {!post.isPublished && <span style={{ color: C.red }}>non publié</span>}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button onClick={() => togglePublish(post)} disabled={busyId === post._id} style={adminSmallBtnStyle}>
+                    {post.isPublished ? "Dépublier" : "Publier"}
+                  </button>
+                  <button onClick={() => deletePost(post)} disabled={busyId === post._id} style={{ ...adminSmallBtnStyle, color: C.red, borderColor: "rgba(239,68,68,0.3)" }}>
+                    Supprimer
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const adminTextareaStyle: React.CSSProperties = {
+  width: "100%", background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
+  color: C.text, fontSize: 13, padding: "10px 12px", fontFamily: "inherit", outline: "none", resize: "vertical", boxSizing: "border-box",
+};
+
+const adminInputStyle: React.CSSProperties = {
+  flex: 1, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
+  color: C.text, fontSize: 13, padding: "10px 12px", fontFamily: "inherit", outline: "none",
+};
+
+const adminFileLabelStyle: React.CSSProperties = {
+  background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 14px",
+  fontSize: 12, color: C.text, cursor: "pointer", fontWeight: 600,
+};
+
+const adminPublishBtnStyle: React.CSSProperties = {
+  width: "100%", background: C.gold, color: C.dark, border: "none", borderRadius: 8,
+  padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.5px",
+};
+
+const adminSmallBtnStyle: React.CSSProperties = {
+  background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6, color: C.text,
+  fontSize: 11, fontWeight: 600, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit",
+};
+
 // ─── Main Admin Dashboard ───────────────────────────────────────────────────────
-type Tab = "overview" | "picks" | "users" | "revenue" | "transactions" | "messages" | "announcements" | "settings";
+type Tab = "overview" | "picks" | "users" | "revenue" | "transactions" | "messages" | "announcements" | "posts" | "settings";
 
 export default function AdminDashboard() {
   const { user, loading: authLoading, logout } = useAuth();
@@ -3905,6 +4276,7 @@ export default function AdminDashboard() {
     { id: "transactions", label: "Transactions", icon: Icons.transactions },
     { id: "messages", label: "Messages", icon: Icons.messages, badge: awaitingReplyCount || undefined },
     { id: "announcements", label: "Annonces", icon: Icons.announcements },
+    { id: "posts", label: "Actualités", icon: Icons.posts },
     { id: "settings", label: "Paramètres", icon: Icons.settings },
   ];
 
@@ -4048,6 +4420,7 @@ export default function AdminDashboard() {
                 {tab === "transactions" && <TransactionsTab />}
                 {tab === "messages" && <MessagesTab conversations={conversations} setConversations={setConversations} loading={conversationsLoading} users={users} />}
                 {tab === "announcements" && <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} loading={announcementsLoading} />}
+                {tab === "posts" && <PostsTab />}
                 {tab === "settings" && <SettingsTab />}
               </>
             )}

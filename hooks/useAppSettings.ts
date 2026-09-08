@@ -16,6 +16,8 @@ export interface AppSettings {
   groupChatEnabled: boolean;
   // Same shape, for "Chat Global" (open to any logged-in user).
   globalChatEnabled: boolean;
+  // Same shape again, for the "Actus" news feed tab.
+  newsFeedEnabled: boolean;
 }
 
 const FALLBACK_SETTINGS: AppSettings = {
@@ -24,6 +26,7 @@ const FALLBACK_SETTINGS: AppSettings = {
   matchGeneratorMarketAccess: {},
   groupChatEnabled: false,
   globalChatEnabled: false,
+  newsFeedEnabled: false,
 };
 
 // Shared between BottomTabBar (which tabs to show) and the Outils page
@@ -49,6 +52,7 @@ export function useAppSettings(): AppSettings | null {
               : {},
           groupChatEnabled: data?.data?.groupChatEnabled !== false,
           globalChatEnabled: data?.data?.globalChatEnabled !== false,
+          newsFeedEnabled: data?.data?.newsFeedEnabled !== false,
         });
       } catch {
         if (!cancelled) setSettings(FALLBACK_SETTINGS);

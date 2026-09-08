@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import type { IconType } from "react-icons";
 import {
   PiHouseSimple, PiHouseSimpleFill,
+  PiMegaphone, PiMegaphoneFill,
   PiClockCounterClockwise, PiClockCounterClockwiseFill,
   PiChatCircleDots, PiChatCircleDotsFill,
   PiSparkle, PiSparkleFill,
@@ -69,6 +70,7 @@ export function BottomTabBar() {
   // two rooms on at all).
   const showChat = !!settings && (settings.globalChatEnabled || settings.groupChatEnabled);
   const showPronostic = !!settings?.matchGeneratorEnabled;
+  const showActus = !!settings?.newsFeedEnabled;
 
   // Same eligibility a viewer would actually pass server-side for each
   // room — only queried for unread counts when true, so an ineligible
@@ -84,6 +86,7 @@ export function BottomTabBar() {
 
   const tabs: Tab[] = [
     { href: "/", label: "Accueil", icon: PiHouseSimple, iconActive: PiHouseSimpleFill, exact: true },
+    ...(showActus ? [{ href: "/actus", label: "Actus", icon: PiMegaphone, iconActive: PiMegaphoneFill }] : []),
     { href: "/historique", label: "Historique", icon: PiClockCounterClockwise, iconActive: PiClockCounterClockwiseFill },
     ...(showChat ? [{ href: "/groupe", label: "Chat", icon: PiChatCircleDots, iconActive: PiChatCircleDotsFill, badgeCount: formatBadgeCount(unreadChatTotal) }] : []),
     // "Pronostic IA" — our branded name for the AI match-generation engine,
