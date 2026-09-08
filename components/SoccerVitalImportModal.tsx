@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
 import DecimalInput from "./DecimalInput";
+import { InlineLoader } from "./LoadingSpinner";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface ScrapedMatch {
@@ -359,11 +360,7 @@ export default function SoccerVitalImportModal({ onClose, onPickCreated, tipOpti
 
                     {/* Loading */}
                     {loading && (
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 0", gap: 16 }}>
-                            <div style={{ width: 44, height: 44, border: `4px solid ${C.border}`, borderTopColor: C.gold, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-                            <div style={{ fontSize: 12, color: C.muted, letterSpacing: "1px" }}>Récupération des prédictions…</div>
-                            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-                        </div>
+                        <InlineLoader size={44} label="Récupération des prédictions…" padding="60px 0" />
                     )}
 
                     {/* Error */}

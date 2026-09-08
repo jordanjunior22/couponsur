@@ -14,7 +14,6 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { useUnreadChatCounts, formatBadgeCount } from "@/hooks/useUnreadChat";
-import { BOTTOM_TAB_BAR_HEIGHT } from "@/lib/layoutConstants";
 
 // Same localStorage key the old ToolsHub FAB used for its "Nouveau" pill —
 // kept so a visitor who already dismissed it doesn't see it resurface here.
@@ -113,80 +112,146 @@ export function BottomTabBar() {
   ];
 
   return (
-    <nav style={barStyle} aria-label="Navigation principale">
-      {tabs.map((tab) => {
-        const active = tab.exact ? pathname === tab.href : pathname.startsWith(tab.href);
-        const Icon = active ? tab.iconActive : tab.icon;
-        return (
-          <Link key={tab.href} href={tab.href} onClick={tab.onNavigate} style={itemStyle(active)}>
-            <span style={iconWrapStyle}>
-              <Icon size={21} />
-              {tab.badgeCount ? <span style={countBadgeStyle}>{tab.badgeCount}</span> : tab.badge && <span style={dotStyle} />}
-            </span>
-            <span style={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{tab.label}</span>
-          </Link>
-        );
-      })}
-    </nav>
+    // Outer strip spans the full viewport width so the floating card below
+    // can be centered in it, but the strip itself is transparent and
+    // click-through everywhere except where the card actually sits — a
+    // visitor scrolling near the very bottom edge never has their taps
+    // swallowed by empty margin.
+    <div style={outerStyle}>
+      <nav style={barStyle} aria-label="Navigation principale">
+        {tabs.map((tab) => {
+          const active = tab.exact ? pathname === tab.href : pathname.startsWith(tab.href);
+          const Icon = active ? tab.iconActive : tab.icon;
+          return (
+            <Link key={tab.href} href={tab.href} onClick={tab.onNavigate} className="cb-tab-item" style={itemStyle}>
+              <span style={iconWrapStyle}>
+                <span style={circleStyle(active)} />
+                <Icon size={19} color={active ? "#0A0C0F" : "#7A8399"} style={{ position: "relative", zIndex: 1, transition: "color 0.3s" }} />
+                {tab.badgeCount ? (
+                  <span style={countBadgeStyle}>{tab.badgeCount}</span>
+                ) : tab.badge ? (
+                  <span style={dotStyle} />
+                ) : null}
+              </span>
+              <span style={labelStyle(active)}>{tab.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
+    </div>
   );
 }
 
-const barStyle: React.CSSProperties = {
+const outerStyle: React.CSSProperties = {
   position: "fixed",
   bottom: 0,
   left: 0,
   right: 0,
   zIndex: 900,
   display: "flex",
-  background: "#0A0C0F",
-  borderTop: "1px solid #1F2937",
-  height: BOTTOM_TAB_BAR_HEIGHT,
-  paddingBottom: "env(safe-area-inset-bottom)",
+  justifyContent: "center",
+  padding: "0 12px calc(14px + env(safe-area-inset-bottom))",
+  pointerEvents: "none",
 };
 
-const iconWrapStyle: React.CSSProperties = {
-  position: "relative",
+// Glass floating pill — frosted, edge-lit, lifted off the page with a soft
+// shadow instead of the old edge-to-edge strip with a flat hairline top
+// border. This is the piece that actually reads as "designed", not just
+// "functional".
+const barStyle: React.CSSProperties = {
+  pointerEvents: "auto",
   display: "flex",
-  lineHeight: 1,
+  alignItems: "stretch",
+  width: "100%",
+  maxWidth: 460,
+  gap: 2,
+  background: "linear-gradient(180deg, rgba(22,25,31,0.88), rgba(14,16,20,0.92))",
+  backdropFilter: "blur(22px) saturate(160%)",
+  WebkitBackdropFilter: "blur(22px) saturate(160%)",
+  border: "1px solid rgba(255,255,255,0.07)",
+  borderRadius: 26,
+  padding: "7px 7px",
+  boxShadow: "0 16px 40px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06)",
 };
 
-const dotStyle: React.CSSProperties = {
-  position: "absolute",
-  top: -2,
-  right: -6,
-  width: 8,
-  height: 8,
-  borderRadius: "50%",
-  background: "#EF4444",
-  border: "1px solid #0A0C0F",
-};
-
-const countBadgeStyle: React.CSSProperties = {
-  position: "absolute",
-  top: -6,
-  right: -10,
-  minWidth: 16,
-  height: 16,
-  padding: "0 4px",
-  borderRadius: 999,
-  background: "#EF4444",
-  border: "1px solid #0A0C0F",
-  color: "#fff",
-  fontSize: 9,
-  fontWeight: 700,
-  lineHeight: "14px",
-  textAlign: "center",
-  boxSizing: "border-box",
-};
-
-const itemStyle = (active: boolean): React.CSSProperties => ({
+const itemStyle: React.CSSProperties = {
   flex: 1,
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  gap: 2,
+  gap: 3,
   textDecoration: "none",
-  color: active ? "#C9A84C" : "#7A8399",
-  transition: "color 0.15s",
+  padding: "3px 2px",
+  minWidth: 0,
+};
+
+// The active tab's icon sits on a solid gold circle that pops in with a
+// slight overshoot — everything else (label position, size) stays fixed
+// between states so switching tabs never shifts layout, just swaps one
+// small filled disc in and out behind the icon.
+const circleStyle = (active: boolean): React.CSSProperties => ({
+  position: "absolute",
+  top: "50%",
+  left: "50%",
+  width: 34,
+  height: 34,
+  borderRadius: "50%",
+  background: "linear-gradient(135deg, #E8C97A, #C9A84C)",
+  boxShadow: active ? "0 2px 12px rgba(201,168,76,0.45)" : "none",
+  transform: active ? "translate(-50%, -50%) scale(1)" : "translate(-50%, -50%) scale(0)",
+  opacity: active ? 1 : 0,
+  transition: "all 0.38s cubic-bezier(0.34, 1.56, 0.64, 1)",
 });
+
+const iconWrapStyle: React.CSSProperties = {
+  position: "relative",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 34,
+  height: 34,
+  lineHeight: 1,
+};
+
+const labelStyle = (active: boolean): React.CSSProperties => ({
+  fontSize: 9.5,
+  fontWeight: active ? 700 : 500,
+  color: active ? "#E8C97A" : "#5B6478",
+  letterSpacing: "0.1px",
+  transition: "color 0.3s, font-weight 0.3s",
+});
+
+// Positioned relative to iconWrapStyle's full 34×34 box (which centers a
+// ~19px glyph inside it, ~7.5px inset per side) rather than the glyph
+// itself, so these numbers land at the glyph's visual top-right corner.
+const dotStyle: React.CSSProperties = {
+  position: "absolute",
+  top: 2,
+  right: -2,
+  width: 7,
+  height: 7,
+  borderRadius: "50%",
+  background: "#EF4444",
+  border: "1.5px solid #14161A",
+};
+
+const countBadgeStyle: React.CSSProperties = {
+  position: "absolute",
+  top: 0,
+  right: -3,
+  minWidth: 15,
+  height: 15,
+  padding: "0 3.5px",
+  borderRadius: 999,
+  background: "linear-gradient(135deg, #FF6B6B, #EF4444)",
+  border: "1.5px solid #14161A",
+  color: "#fff",
+  fontSize: 8.5,
+  fontWeight: 800,
+  lineHeight: "12px",
+  textAlign: "center",
+  boxSizing: "border-box",
+  boxShadow: "0 0 0 0 rgba(239,68,68,0.5)",
+  animation: "badgePulse 2s ease-out infinite",
+};

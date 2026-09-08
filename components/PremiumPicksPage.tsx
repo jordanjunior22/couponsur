@@ -7,6 +7,7 @@ import { useAppSettings } from "@/hooks/useAppSettings";
 import { OneXBetBanner } from "./OneXBetBanner";
 import { CompoundBetBanner } from "./CompoundBanner";
 import { SubscribeBanner } from "./SubscribeBanner";
+import { Spinner, PageLoader } from "./LoadingSpinner";
 import { trackEvent, generateEventId, getFbCookies } from "@/lib/pixelClient";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
@@ -369,6 +370,7 @@ function Hero({ picks }: { picks: Pick[] }) {
   const gradedWeeksInTrend = weekTrend.filter((w) => w.record.graded > 0).length;
 
   return (
+    <div style={heroBgStyle}>
     <div style={{ padding: "26px 16px 20px", maxWidth: 700, margin: "0 auto", textAlign: "center" }}>
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "clamp(28px, 7vw, 40px)", color: "#E8EAF0", letterSpacing: 2, marginBottom: 6 }}>
         Pronostics Football Premium
@@ -463,8 +465,20 @@ function Hero({ picks }: { picks: Pick[] }) {
 
       <ScrollCue targetId="today-picks" />
     </div>
+    </div>
   );
 }
+
+// Photo behind the Hero — dark from the very top (so the title/stat card
+// text always reads cleanly over it) and ramping to fully opaque by the
+// bottom edge, so it dissolves into the page's own #0A0C0F background
+// underneath instead of ending in a visible hard seam.
+const heroBgStyle: React.CSSProperties = {
+  backgroundImage: "linear-gradient(to bottom, rgba(10,12,15,0.7) 0%, rgba(10,12,15,0.88) 55%, #0A0C0F 100%), url('/bg.jpeg')",
+  backgroundSize: "cover, cover",
+  backgroundPosition: "center 25%, center 25%",
+  backgroundRepeat: "no-repeat, no-repeat",
+};
 
 // ─── Scroll cue ───────────────────────────────────────────────────────────────
 // Replaces the old solid "Voir les pronostics du jour" button — a quiet,
@@ -731,9 +745,18 @@ export function SubscribePayment({ onSuccess, onBack }: { onSuccess: () => void;
 
   const priceLabel = monthlyPrice != null ? `${monthlyPrice.toLocaleString("fr-FR")} FCFA` : "…";
 
+  // What unlocking one pronostic a day would cost over the same 30-day
+  // stretch the subscription covers — the comparison a buyer actually cares
+  // about, not just a bare price tag. Computed against the live
+  // subscriptionMonthlyPrice (admin-configurable), not a hardcoded saving,
+  // so this stays honest if that price ever changes.
+  const DAILY_UNLOCK_REFERENCE_PRICE = 250;
+  const monthlyIfPayingDaily = DAILY_UNLOCK_REFERENCE_PRICE * 30;
+  const savings = monthlyPrice != null ? monthlyIfPayingDaily - monthlyPrice : null;
+
   if (step === "processing") return (
     <div style={{ textAlign: "center", padding: "32px 16px" }}>
-      <div style={{ width: 48, height: 48, border: "4px solid #2A3140", borderTopColor: "#C9A84C", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 20px" }} />
+      <Spinner size={48} style={{ margin: "0 auto 20px" }} />
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#C9A84C", letterSpacing: 2, marginBottom: 8 }}>Initialisation du paiement…</div>
       <div style={{ fontSize: 12, color: "#7A8399", lineHeight: 1.6 }}>Connexion à {operator === "mtn" ? "MTN MoMo" : "Orange Money"} en cours.<br />Veuillez patienter.</div>
     </div>
@@ -797,11 +820,28 @@ export function SubscribePayment({ onSuccess, onBack }: { onSuccess: () => void;
   return (
     <div>
       <div style={{ background: "rgba(201,168,76,0.05)", border: "1px solid rgba(201,168,76,0.15)", borderRadius: 10, padding: "12px 14px", marginBottom: 20 }}>
-        <div style={{ fontSize: 13, color: "#E8EAF0", fontWeight: 600, marginBottom: 6 }}>Abonnement Mensuel</div>
-        <div style={{ fontSize: 12, color: "#7A8399", lineHeight: 1.6, marginBottom: 10 }}>Accès illimité à tous les picks pendant 30 jours — plus besoin de débloquer un par un.</div>
-        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: "#C9A84C" }}>
+        <div style={{ fontSize: 13, color: "#E8EAF0", fontWeight: 600, marginBottom: 10 }}>Abonnement Mensuel</div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: "#E8EAF0", lineHeight: 1.5 }}>
+            <span style={{ marginTop: 2, flexShrink: 0 }}><IconCheck size={13} /></span>
+            Accès illimité à tous les pronostics pendant 30 jours — plus besoin de débloquer un par un.
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: "#E8EAF0", lineHeight: 1.5 }}>
+            <span style={{ marginTop: 2, flexShrink: 0 }}><IconCheck size={13} /></span>
+            Accès complet à Pronostic IA — tous les marchés débloqués, sans restriction.
+          </div>
+        </div>
+
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: "#C9A84C", marginBottom: savings && savings > 0 ? 10 : 0 }}>
           {priceLabel}<span style={{ fontSize: 12, color: "#7A8399", fontFamily: "'DM Sans', sans-serif" }}> / mois</span>
         </div>
+
+        {savings != null && savings > 0 && (
+          <div style={{ fontSize: 11.5, color: "#22C55E", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "8px 10px", lineHeight: 1.5 }}>
+            💰 Économisez <strong>{savings.toLocaleString("fr-FR")} FCFA</strong> par mois par rapport à débloquer un pronostic à {DAILY_UNLOCK_REFERENCE_PRICE} FCFA chaque jour ({monthlyIfPayingDaily.toLocaleString("fr-FR")} FCFA/mois).
+          </div>
+        )}
       </div>
       {errorMsg && <div style={{ fontSize: 12, color: "#EF4444", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>{errorMsg}</div>}
       <div style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#7A8399", fontWeight: 600, marginBottom: 8 }}>Opérateur Mobile Money</div>
@@ -918,7 +958,7 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
 
   if (step === "processing") return (
     <div style={{ textAlign: "center", padding: "32px 16px" }}>
-      <div style={{ width: 48, height: 48, border: "4px solid #2A3140", borderTopColor: "#C9A84C", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 20px" }} />
+      <Spinner size={48} style={{ margin: "0 auto 20px" }} />
       <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: "#C9A84C", letterSpacing: 2, marginBottom: 8 }}>Initialisation du paiement…</div>
       <div style={{ fontSize: 12, color: "#7A8399", lineHeight: 1.6 }}>Connexion à {operator === "mtn" ? "MTN MoMo" : "Orange Money"} en cours.<br />Veuillez patienter.</div>
     </div>
@@ -1144,6 +1184,33 @@ function BlankDateRow({ date }: { date: string }) {
         <PiCalendarXBold size={15} />
         Aucun pronostic publié ce jour-là
       </div>
+    </div>
+  );
+}
+
+// Today's slot in Picks Récents when nothing's been posted yet — same
+// date-heading shape as BlankDateRow, but the box underneath is the actual
+// Pronostic IA nudge (gold, clickable) instead of a muted "nothing here"
+// notice, since today — unlike a past blank day — is still actionable.
+function TodayNudgeRow({ date }: { date: string }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 10, letterSpacing: "2px", textTransform: "uppercase", color: "#C9A84C", fontWeight: 500, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 4, height: 4, background: "#C9A84C", borderRadius: "50%", flexShrink: 0, display: "inline-block" }} />
+        {formatDate(date)}
+      </div>
+      <Link href="/pronostic" style={{ ...noMatchCardStyle, marginBottom: 0 }}>
+        <span style={noMatchIconStyle}><PiSparkleFill size={22} /></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 1, color: "#E8EAF0", marginBottom: 3 }}>
+            Pronostics pas encore disponibles
+          </div>
+          <div style={{ fontSize: 11.5, color: "#7A8399", lineHeight: 1.4 }}>
+            Envie de parier quand même ? Essaie notre générateur Pronostic IA.
+          </div>
+        </div>
+        <PiCaretRightBold size={16} color="#7A8399" style={{ flexShrink: 0 }} />
+      </Link>
     </div>
   );
 }
@@ -1615,15 +1682,18 @@ export default function PremiumPicksPage() {
     getWeekDayKeys(currentWeekKey).forEach((d) => { if (d < today) days.add(d); });
     return Array.from(days).sort().reverse();
   }, [groupedWeekRest, currentWeekKey, today]);
+
+  // Today has no dedicated "Picks du jour" section when it's empty — the
+  // Pronostic IA nudge takes that slot instead, at the top of Picks
+  // Récents (today being the most recent date), rather than floating as
+  // its own block between two sections.
+  const showTodayNudge = todayPicks.length === 0 && !!settings?.matchGeneratorEnabled;
   // ───────────────────────────────────────────────────────────────────────────
 
   if (loading) return (
     <>
       <GlobalStyles />
-      <div style={{ height: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#0A0C0F", gap: 16 }}>
-        <div style={{ width: 50, height: 50, border: "4px solid #2A3140", borderTopColor: "#C9A84C", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-        <div style={{ fontSize: 10, letterSpacing: "3px", color: "#7A8399", textTransform: "uppercase" }}>Chargement des picks…</div>
-      </div>
+      <PageLoader label="Chargement des picks…" />
     </>
   );
 
@@ -1710,24 +1780,8 @@ export default function PremiumPicksPage() {
             </>
           )}
 
-          {/* ── NO MATCH YET — nudge toward Pronostic IA instead of a dead end ── */}
-          {todayPicks.length === 0 && settings?.matchGeneratorEnabled && (
-            <Link href="/pronostic" style={noMatchCardStyle}>
-              <span style={noMatchIconStyle}><PiSparkleFill size={22} /></span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 1, color: "#E8EAF0", marginBottom: 3 }}>
-                  Pronostics pas encore disponibles
-                </div>
-                <div style={{ fontSize: 11.5, color: "#7A8399", lineHeight: 1.4 }}>
-                  Envie de parier quand même ? Essaie notre générateur Pronostic IA.
-                </div>
-              </div>
-              <PiCaretRightBold size={16} color="#7A8399" style={{ flexShrink: 0 }} />
-            </Link>
-          )}
-
           {/* ── PICKS RÉCENTS — rest of the current week, every day shown ── */}
-          {weekRestDays.length > 0 && (
+          {(weekRestDays.length > 0 || showTodayNudge) && (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: todayPicks.length > 0 ? 12 : 0, marginBottom: 20 }}>
                 <span style={{ fontSize: 9, letterSpacing: "3px", color: "#7A8399", textTransform: "uppercase", fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -1738,6 +1792,10 @@ export default function PremiumPicksPage() {
                   {currentWeekRest.length} pick{currentWeekRest.length > 1 ? "s" : ""}
                 </span>
               </div>
+
+              {/* Today, first — most recent date — only when it's empty
+                  (picks show via the "Picks du jour" section above instead). */}
+              {showTodayNudge && <TodayNudgeRow date={today} />}
 
               {weekRestDays.map((date) => (
                 groupedWeekRest[date]

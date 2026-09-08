@@ -5,6 +5,7 @@ import Link from "next/link";
 import { PiLockKeyOpenFill } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { HistoryItem } from "@/components/HistoryItem";
+import { InlineLoader } from "@/components/LoadingSpinner";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 // Full-page version of what used to be the "Historique des déblocages"
@@ -45,12 +46,7 @@ export default function HistoriquePage() {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {loading && (
-              <div style={loadingWrapStyle}>
-                <div style={spinnerStyle} />
-                <div style={{ fontSize: 12, color: "#C9A84C" }}>Chargement...</div>
-              </div>
-            )}
+            {loading && <InlineLoader size={32} label="Chargement..." padding="40px 0" />}
 
             {!loading && data.length === 0 && (
               <div style={{ color: "#7A8399", fontSize: 12, textAlign: "center", padding: "40px 0" }}>
@@ -95,19 +91,3 @@ const gateBtnStyle: React.CSSProperties = {
   textDecoration: "none",
 };
 
-const loadingWrapStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: 8,
-  padding: "40px 0",
-};
-
-const spinnerStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: "50%",
-  border: "3px solid #1F2937",
-  borderTop: "3px solid #C9A84C",
-  animation: "spin 1s linear infinite",
-};

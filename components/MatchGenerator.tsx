@@ -5,6 +5,7 @@ import {
   PiArrowsClockwiseBold, PiSlidersHorizontalBold,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
+import { Spinner } from "./LoadingSpinner";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface GeneratedMatch {
@@ -223,7 +224,7 @@ export function MatchGeneratorTool({
           <button onClick={generate} disabled={state === "loading"} style={generateBtnStyle(state === "loading")}>
             {state === "loading" ? (
               <>
-                <span style={spinnerStyle} /> Analyse en cours…
+                <Spinner size={14} variant="dark" glow={false} /> Analyse en cours…
               </>
             ) : (
               <>
@@ -352,12 +353,6 @@ const generateBtnStyle = (loading: boolean): React.CSSProperties => ({
   cursor: loading ? "not-allowed" : "pointer", width: "100%",
   display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
 });
-
-const spinnerStyle: React.CSSProperties = {
-  width: 14, height: 14, borderRadius: "50%",
-  border: "2px solid rgba(10,12,15,0.3)", borderTopColor: "#0A0C0F",
-  animation: "spin 0.8s linear infinite", display: "inline-block",
-};
 
 const errorCardStyle: React.CSSProperties = {
   marginTop: 4, fontSize: 12, color: "#f87171", lineHeight: 1.5,

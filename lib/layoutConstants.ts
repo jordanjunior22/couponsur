@@ -10,7 +10,11 @@ export const TOP_BAR_HEIGHT = 56;
 // it or leaves an awkward gap above it: the bar itself, the buyer pages
 // that reserve bottom padding for it, and the floating widgets
 // (ChatWidget, PWAInstallButton) that used to hug the raw viewport edge.
-export const BOTTOM_TAB_BAR_HEIGHT = 60;
+// The bar itself is a floating glass pill now (not an edge-to-edge strip),
+// so this is the pill's own footprint *plus* the small gap it floats above
+// the true viewport bottom — the one number every consumer needs, so it's
+// rounded up rather than chased to the pixel.
+export const BOTTOM_TAB_BAR_HEIGHT = 88;
 
 // CSS length for the safe space to reserve above anything fixed to the
 // viewport bottom on a buyer page — the bar's own height plus the iOS

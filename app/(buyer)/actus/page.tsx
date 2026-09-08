@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PiMegaphoneFill } from "react-icons/pi";
 import { PostCard, type ClientPost } from "@/components/PostCard";
+import { InlineLoader } from "@/components/LoadingSpinner";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 // The "Actus" feed — admin-authored news + team-vs-team polls. Same
@@ -61,12 +62,7 @@ export default function ActusPage() {
       <div style={{ maxWidth: 600, margin: "0 auto" }}>
         <div style={titleStyle}><PiMegaphoneFill size={17} /> Actus</div>
 
-        {loading && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "60px 16px" }}>
-            <div style={spinnerStyle} />
-            <div style={{ fontSize: 12, color: "#7A8399" }}>Chargement…</div>
-          </div>
-        )}
+        {loading && <InlineLoader size={36} label="Chargement…" padding="60px 16px" />}
 
         {!loading && error && (
           <div style={{ textAlign: "center", padding: "40px 16px", color: "#7A8399" }}>
@@ -97,12 +93,6 @@ export default function ActusPage() {
 const titleStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 8,
   fontSize: 15, fontWeight: 700, color: "#C9A84C", marginBottom: 14, padding: "0 16px",
-};
-
-const spinnerStyle: React.CSSProperties = {
-  width: 32, height: 32, borderRadius: "50%",
-  border: "3px solid #1F2937", borderTop: "3px solid #C9A84C",
-  animation: "spin 1s linear infinite",
 };
 
 const retryBtnStyle: React.CSSProperties = {

@@ -92,7 +92,11 @@ export function CompoundBetBanner() {
   return (
     <>
       <style>{`
-        .cb-wrap { font-family: 'DM Sans', sans-serif; margin-bottom: 16px; }
+        /* Centered to the same width as the picks feed above it
+           (#today-picks uses maxWidth 700 + auto margins) — otherwise this
+           stretches edge-to-edge on wider screens while everything above
+           it stays column-width, which reads as misaligned. */
+        .cb-wrap { font-family: 'DM Sans', sans-serif; margin: 0 auto 16px; max-width: 700px; }
 
         /* ── Toggle button — same scale as .xbet-banner (OneXBetBanner) so
            the two banners read as one consistent family stacked together ── */
@@ -105,7 +109,7 @@ export function CompoundBetBanner() {
           width: calc(100% - 32px);
           box-sizing: border-box;
           margin: 8px 16px;
-          background: linear-gradient(135deg, #0A1628 0%, #3c260d 60%, #0A1628 100%);
+          background: linear-gradient(135deg, #0A1628 0%, #050810 60%, #0A1628 100%);
           border: 1px solid #1A3A6B;
           border-left: 3px solid #1565C0;
           border-radius: 10px;

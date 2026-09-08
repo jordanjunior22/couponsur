@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { markRoomRead } from "@/hooks/useUnreadChat";
 import { compressImageToDataUri } from "@/utils/imageCompression";
+import { InlineLoader } from "@/components/LoadingSpinner";
 import type { GroupRoom } from "@/models/GroupMessage";
 
 interface ReplyPreview {
@@ -388,7 +389,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
 
   // ─── Gated states ───────────────────────────────────────────────────────
   if (authLoading) {
-    return <GatedShell><Spinner /></GatedShell>;
+    return <GatedShell><InlineLoader label="Chargement…" /></GatedShell>;
   }
   if (!user) {
     return (
@@ -489,7 +490,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
       {/* Messages */}
       <div ref={listRef} onScroll={handleScroll} style={{ flex: 1, overflowY: "auto", padding: "14px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
         {loadingMessages ? (
-          <div style={{ margin: "auto" }}><Spinner /></div>
+          <div style={{ margin: "auto" }}><InlineLoader size={32} label="Chargement des messages…" padding="0" /></div>
         ) : visibleMessages.length === 0 ? (
           <div style={{ margin: "auto", textAlign: "center", color: C.muted, fontSize: 13, padding: "0 20px" }}>
             {filter === "starred" ? "Aucun message favori pour l'instant ⭐" : "Soyez le premier à écrire dans le groupe premium 👋"}
@@ -695,14 +696,6 @@ function IconBtn({ children, onClick, title, dim, active, activeColor = C.gold, 
     >
       {children}
     </button>
-  );
-}
-
-function Spinner() {
-  return (
-    <div style={{ width: 28, height: 28, border: `3px solid ${C.border}`, borderTopColor: C.gold, borderRadius: "50%", animation: "gcSpin 0.7s linear infinite" }}>
-      <style>{`@keyframes gcSpin { to { transform: rotate(360deg); } }`}</style>
-    </div>
   );
 }
 

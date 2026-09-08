@@ -51,3 +51,29 @@ body {
   70%  { transform: scale(1.05); opacity: 1; }
   100% { transform: scale(1);    opacity: 0; }
 }
+
+/* The Chat tab's unread count badge (components/BottomTabBar.tsx) — a
+   quiet red pulse-ring so a fresh unread nudges the eye without looping
+   a distracting animation on every render forever (ease-out + 2s gap
+   between pulses reads as "occasional attention", not "alarm"). */
+@keyframes badgePulse {
+  0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+  100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+}
+
+/* Shared "pressable" feedback for the bottom tab bar's Link items — a
+   quick scale-down on press so the floating glass pill feels tactile,
+   the one bit of polish inline styles can't express (no :active pseudo
+   on inline style objects). */
+.cb-tab-item { transition: transform 0.15s ease; }
+.cb-tab-item:active { transform: scale(0.92); }
+
+/* components/LoadingSpinner.tsx's ring — positioning/animation only;
+   colors are supplied per-instance via inline style (see that file) so
+   this stays a single reusable shape rather than one class per palette.
+   Reuses the `spin`/`pulse` keyframes already defined above. */
+.cs-loader { position: relative; display: inline-block; flex-shrink: 0; }
+.cs-loader-glow { position: absolute; inset: -35%; border-radius: 50%; filter: blur(4px); animation: pulse 1.7s ease-in-out infinite; }
+.cs-loader-ring { position: absolute; inset: 0; border-radius: 50%; animation: spin 0.85s linear infinite; }
+.cs-loader-core { position: absolute; top: 50%; left: 50%; width: 26%; height: 26%; transform: translate(-50%, -50%); border-radius: 50%; opacity: 0.9; animation: pulse 1.7s ease-in-out infinite; }

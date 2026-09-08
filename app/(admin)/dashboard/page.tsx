@@ -7,6 +7,7 @@ import SoccerVitalImportModal from "@/components/SoccerVitalImportModal";
 import DecimalInput from "@/components/DecimalInput";
 import TypingIndicator from "@/components/TypingIndicator";
 import { compressImageToDataUri } from "@/utils/imageCompression";
+import { Spinner as ModernSpinner } from "@/components/LoadingSpinner";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 interface Match {
@@ -361,15 +362,11 @@ function StatCard({ label, value, sub, accent }: { label: string; value: string 
   );
 }
 
+// Thin wrapper so every existing call site (`<Spinner />`, `<Spinner
+// size={44} />`) keeps working unchanged while the actual visual comes
+// from the shared modern loader used across the buyer app.
 function Spinner({ size = 40 }: { size?: number }) {
-  return (
-    <div style={{
-      width: size, height: size,
-      border: `${size > 30 ? 4 : 3}px solid #2A3140`,
-      borderTopColor: C.gold, borderRadius: "50%",
-      animation: "spin 0.8s linear infinite",
-    }} />
-  );
+  return <ModernSpinner size={size} />;
 }
 
 // ─── Simple SVG line chart (no external chart library needed) ─────────────────
