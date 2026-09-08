@@ -7,10 +7,9 @@ import type { IconType } from "react-icons";
 import {
   PiHouseSimple, PiHouseSimpleFill,
   PiMegaphone, PiMegaphoneFill,
-  PiClockCounterClockwise, PiClockCounterClockwiseFill,
   PiChatCircleDots, PiChatCircleDotsFill,
   PiSparkle, PiSparkleFill,
-  PiUser, PiUserFill,
+  PiClockCounterClockwise, PiClockCounterClockwiseFill,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { useAppSettings } from "@/hooks/useAppSettings";
@@ -84,15 +83,33 @@ export function BottomTabBar() {
   // hook's own poll interval.
   useEffect(() => { refreshUnread(); }, [pathname, refreshUnread]);
 
+  // Order is deliberate, not alphabetical or "as features shipped" — it's
+  // built around one goal: keep people coming back.
+  //   1. Accueil — the anchor. Every tab bar needs a fixed "home", non-negotiable.
+  //   2. Actus    — freshest content (new posts, shifting poll %, comments)
+  //                 right after home, so "what's new" is the very next thing
+  //                 a visitor sees. No badge mechanism of its own, so it
+  //                 leans on early position instead to get noticed.
+  //   3. Chat     — the single strongest return-visit driver an app can have
+  //                 (real-time, unread badge) gets the bar's most reachable,
+  //                 most-glanced-at slot: dead center.
+  //   4. Pronostic IA — a fun, occasional tool; a single-shot action, not an
+  //                 ongoing thread worth checking back on, so it sits after
+  //                 the two "keep checking" features rather than competing
+  //                 with them for attention.
+  //   5. Historique — pure personal lookup, nothing new ever appears here on
+  //                 its own. Least reason to pull someone back, so it takes
+  //                 the last slot — reachable when wanted, never pushy.
+  // Profil is gone entirely — the avatar in BuyerTopBar already opens it,
+  // so this bar can spend its five slots on things worth returning for.
   const tabs: Tab[] = [
     { href: "/", label: "Accueil", icon: PiHouseSimple, iconActive: PiHouseSimpleFill, exact: true },
     ...(showActus ? [{ href: "/actus", label: "Actus", icon: PiMegaphone, iconActive: PiMegaphoneFill }] : []),
-    { href: "/historique", label: "Historique", icon: PiClockCounterClockwise, iconActive: PiClockCounterClockwiseFill },
     ...(showChat ? [{ href: "/groupe", label: "Chat", icon: PiChatCircleDots, iconActive: PiChatCircleDotsFill, badgeCount: formatBadgeCount(unreadChatTotal) }] : []),
     // "Pronostic IA" — our branded name for the AI match-generation engine,
     // not a generic "Outils"/"AI Tools" label.
     ...(showPronostic ? [{ href: "/pronostic", label: "Pronostic IA", icon: PiSparkle, iconActive: PiSparkleFill, badge: pronosticUnseen, onNavigate: markPronosticSeen }] : []),
-    { href: "/profil", label: "Profil", icon: PiUser, iconActive: PiUserFill },
+    { href: "/historique", label: "Historique", icon: PiClockCounterClockwise, iconActive: PiClockCounterClockwiseFill },
   ];
 
   return (

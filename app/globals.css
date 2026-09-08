@@ -40,3 +40,14 @@ body {
 @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes scaleIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* The Actus feed's double-tap-to-like heart (components/PostCard.tsx) —
+   pops in, settles, then fades out on its own so the component never has
+   to time a manual removal beyond unmounting it after the animation ends. */
+@keyframes heartPop {
+  0%   { transform: scale(0);    opacity: 0; }
+  30%  { transform: scale(1.15); opacity: 1; }
+  50%  { transform: scale(0.95); opacity: 1; }
+  70%  { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1);    opacity: 0; }
+}

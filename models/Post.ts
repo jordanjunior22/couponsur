@@ -35,6 +35,12 @@ export interface IPoll {
 // "team vs team" poll (the post's own photo doubles as the matchup
 // graphic; the poll itself is just the two vote labels + tallies).
 export interface IPost extends Document {
+  // Chosen per-post at creation time (see app/api/admin/posts/route.ts) —
+  // an admin can post as "Coupon Sûr" or under any other display name
+  // instead of every post being attributed to the same fixed brand name.
+  // No `default` in the schema (see PostSchema below) — every reader falls
+  // back to "Coupon Sûr" for documents written before this field existed.
+  authorName?: string;
   text: string;
   image: string | null; // data URI, same convention as GroupMessage.image
   imageBytes: number;
@@ -80,6 +86,7 @@ const PollSchema = new Schema<IPoll>(
 
 const PostSchema = new Schema<IPost>(
   {
+    authorName: { type: String, trim: true, maxlength: 60, default: "Coupon Sûr" },
     text: { type: String, default: "", trim: true, maxlength: 2000 },
     image: { type: String, default: null },
     imageBytes: { type: Number, default: 0 },

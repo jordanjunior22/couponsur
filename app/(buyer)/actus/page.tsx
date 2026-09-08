@@ -52,33 +52,38 @@ export default function ActusPage() {
   };
 
   return (
-    <main style={{ minHeight: "100vh", background: "#0A0C0F", padding: "20px 16px", paddingBottom: BOTTOM_SAFE_OFFSET }}>
+    // No horizontal padding here on purpose — PostCard's photos bleed to
+    // the true screen edges (its header/caption/etc. carry their own 16px
+    // inset), the same full-bleed-media feel a native feed app has. Only
+    // the title and the loading/empty states need their own inset since
+    // they live outside PostCard.
+    <main style={{ minHeight: "100vh", background: "#0A0C0F", paddingTop: 16, paddingBottom: BOTTOM_SAFE_OFFSET }}>
       <div style={{ maxWidth: 600, margin: "0 auto" }}>
         <div style={titleStyle}><PiMegaphoneFill size={17} /> Actus</div>
 
         {loading && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "60px 0" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "60px 16px" }}>
             <div style={spinnerStyle} />
             <div style={{ fontSize: 12, color: "#7A8399" }}>Chargement…</div>
           </div>
         )}
 
         {!loading && error && (
-          <div style={{ textAlign: "center", padding: "40px 0", color: "#7A8399" }}>
+          <div style={{ textAlign: "center", padding: "40px 16px", color: "#7A8399" }}>
             <div style={{ fontSize: 13, marginBottom: 10 }}>Impossible de charger les actus.</div>
             <button onClick={() => fetchPosts(true)} style={retryBtnStyle}>Réessayer</button>
           </div>
         )}
 
         {!loading && !error && posts.length === 0 && (
-          <div style={{ textAlign: "center", padding: "60px 0", color: "#7A8399" }}>
+          <div style={{ textAlign: "center", padding: "60px 16px", color: "#7A8399" }}>
             <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, letterSpacing: 2, marginBottom: 8 }}>Aucune actu pour l&apos;instant</div>
             <div style={{ fontSize: 12 }}>Revenez bientôt.</div>
           </div>
         )}
 
         {!loading && !error && posts.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column" }}>
             {posts.map((post) => (
               <PostCard key={post._id} post={post} onUpdate={updatePost} />
             ))}
@@ -91,7 +96,7 @@ export default function ActusPage() {
 
 const titleStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 8,
-  fontSize: 15, fontWeight: 700, color: "#C9A84C", marginBottom: 18,
+  fontSize: 15, fontWeight: 700, color: "#C9A84C", marginBottom: 14, padding: "0 16px",
 };
 
 const spinnerStyle: React.CSSProperties = {

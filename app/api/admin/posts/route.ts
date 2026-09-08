@@ -37,9 +37,9 @@ export async function GET() {
 }
 
 // ─── POST: publish a new post (ADMIN ONLY) ─────────────────────────────────
-// Body: { text?, image? (data URI), pollOptionA?, pollOptionB? } — a poll
-// needs both option labels or neither; the post's own image doubles as the
-// matchup graphic when it's a "team vs team" poll.
+// Body: { authorName?, text?, image? (data URI), pollOptionA?, pollOptionB? }
+// — a poll needs both option labels or neither; the post's own image
+// doubles as the matchup graphic when it's a "team vs team" poll.
 export async function POST(req: NextRequest) {
   try {
     await connectDB();
@@ -50,6 +50,10 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({}));
+    // Whoever's posting picks the byline each time — defaults to "Coupon
+    // Sûr" rather than requiring it, so leaving it blank still works.
+    const authorNameRaw = typeof body.authorName === "string" ? body.authorName.trim() : "";
+    const authorName = authorNameRaw.slice(0, 60) || "Coupon Sûr";
     const text = typeof body.text === "string" ? body.text.trim() : "";
     const rawImage = typeof body.image === "string" ? body.image : null;
     const pollOptionA = typeof body.pollOptionA === "string" ? body.pollOptionA.trim() : "";
@@ -83,6 +87,7 @@ export async function POST(req: NextRequest) {
     }
 
     const post = await PostModel.create({
+      authorName,
       text,
       image,
       imageBytes,

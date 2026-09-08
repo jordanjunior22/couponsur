@@ -16,6 +16,7 @@ import { maskPhone } from "@/utils/maskPhone";
 // app/api/group-chat/route.ts.
 interface SerializablePost {
   _id: { toString(): string };
+  authorName?: string;
   text: string;
   image: string | null;
   shareCount?: number;
@@ -54,6 +55,10 @@ export function toClientPost(post: SerializablePost, viewerId: string | null) {
 
   return {
     _id: post._id.toString(),
+    // Documents written before this field existed have no authorName at
+    // all — same "missing means the old default" fallback used throughout
+    // this codebase (e.g. groupChatEnabled's `!== false`).
+    authorName: post.authorName || "Coupon Sûr",
     text: post.text,
     image: post.image,
     poll,

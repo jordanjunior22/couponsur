@@ -3865,6 +3865,7 @@ function AccessDenied() {
 // through the rest of the dashboard's shared fetch effect.
 interface AdminPost {
   _id: string;
+  authorName: string;
   text: string;
   image: string | null;
   poll: { optionALabel: string; optionBLabel: string; counts: { a: number; b: number }; total: number } | null;
@@ -3875,9 +3876,26 @@ interface AdminPost {
   createdAt: string;
 }
 
+const LAST_AUTHOR_NAME_KEY = "couponsur_admin_last_author_name";
+
 function PostsTab() {
   const [posts, setPosts] = useState<AdminPost[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Remembers whatever name was last used on this browser — a fresh admin
+  // session still defaults to "Coupon Sûr", but posting a run of updates
+  // under e.g. an individual admin's name doesn't mean retyping it each time.
+  const [authorName, setAuthorName] = useState("Coupon Sûr");
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LAST_AUTHOR_NAME_KEY);
+      if (saved) setAuthorName(saved);
+    } catch { /* private browsing etc. — just falls back to the default */ }
+  }, []);
+  const updateAuthorName = (value: string) => {
+    setAuthorName(value);
+    try { localStorage.setItem(LAST_AUTHOR_NAME_KEY, value); } catch { /* ignore */ }
+  };
 
   const [textDraft, setTextDraft] = useState("");
   const [imageDataUri, setImageDataUri] = useState<string | null>(null);
@@ -3887,6 +3905,13 @@ function PostsTab() {
   const [pollB, setPollB] = useState("");
   const [creating, setCreating] = useState(false);
   const [createMsg, setCreateMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  // Editing reuses the same form as creating — the only difference is
+  // whether submit POSTs a new post or PATCHes this one. `preEditAuthorName`
+  // is a snapshot so cancelling an edit restores whatever name was showing
+  // before (rather than leaving the edited post's name stuck in the field).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [preEditAuthorName, setPreEditAuthorName] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -3923,7 +3948,26 @@ function PostsTab() {
     setTextDraft(""); setImageDataUri(null); setPollEnabled(false); setPollA(""); setPollB("");
   };
 
-  const handleCreate = async () => {
+  const startEdit = (post: AdminPost) => {
+    setEditingId(post._id);
+    setPreEditAuthorName(authorName);
+    setAuthorName(post.authorName);
+    setTextDraft(post.text);
+    setImageDataUri(post.image);
+    setPollEnabled(!!post.poll);
+    setPollA(post.poll?.optionALabel ?? "");
+    setPollB(post.poll?.optionBLabel ?? "");
+    setCreateMsg(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    if (preEditAuthorName !== null) { setAuthorName(preEditAuthorName); setPreEditAuthorName(null); }
+    resetForm();
+    setCreateMsg(null);
+  };
+
+  const handleSubmit = async () => {
     if (!textDraft.trim() && !imageDataUri) {
       setCreateMsg({ text: "Le post ne peut pas être vide", ok: false });
       return;
@@ -3935,24 +3979,31 @@ function PostsTab() {
     setCreating(true);
     setCreateMsg(null);
     try {
-      const res = await fetch("/api/admin/posts", {
-        method: "POST",
+      const res = await fetch(editingId ? `/api/admin/posts/${editingId}` : "/api/admin/posts", {
+        method: editingId ? "PATCH" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          authorName: authorName.trim(),
           text: textDraft.trim(),
           image: imageDataUri,
-          pollOptionA: pollEnabled ? pollA.trim() : undefined,
-          pollOptionB: pollEnabled ? pollB.trim() : undefined,
+          pollOptionA: pollEnabled ? pollA.trim() : "",
+          pollOptionB: pollEnabled ? pollB.trim() : "",
         }),
       });
       const data = await res.json();
       if (data?.success) {
-        setPosts((prev) => [data.data, ...prev]);
+        if (editingId) {
+          setPosts((prev) => prev.map((p) => (p._id === editingId ? data.data : p)));
+          setEditingId(null);
+          setPreEditAuthorName(null);
+        } else {
+          setPosts((prev) => [data.data, ...prev]);
+        }
         resetForm();
-        setCreateMsg({ text: "Publié avec succès.", ok: true });
+        setCreateMsg({ text: editingId ? "Modifications enregistrées." : "Publié avec succès.", ok: true });
       } else {
-        setCreateMsg({ text: data.message || "Échec de la publication.", ok: false });
+        setCreateMsg({ text: data.message || "Échec de l'opération.", ok: false });
       }
     } catch {
       setCreateMsg({ text: "Erreur réseau.", ok: false });
@@ -3978,12 +4029,15 @@ function PostsTab() {
   };
 
   const deletePost = async (post: AdminPost) => {
-    if (!confirm("Supprimer définitivement ce post (et ses commentaires) ?")) return;
+    if (!confirm("Supprimer définitivement ce post et tout ce qui lui est lié (likes, commentaires, votes) ? Cette action est irréversible.")) return;
     setBusyId(post._id);
     try {
       const res = await fetch(`/api/admin/posts/${post._id}`, { method: "DELETE", credentials: "include" });
       const data = await res.json();
-      if (data?.success) setPosts((prev) => prev.filter((p) => p._id !== post._id));
+      if (data?.success) {
+        setPosts((prev) => prev.filter((p) => p._id !== post._id));
+        if (editingId === post._id) cancelEdit();
+      }
     } catch { /* ignore */ }
     finally { setBusyId(null); }
   };
@@ -3991,9 +4045,25 @@ function PostsTab() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
-        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 16 }}>
-          Nouvelle actu
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1 }}>
+            {editingId ? "Modifier l'actu" : "Nouvelle actu"}
+          </div>
+          {editingId && (
+            <button onClick={cancelEdit} style={{ ...adminSmallBtnStyle, color: C.muted }}>Annuler</button>
+          )}
         </div>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+          Publier en tant que
+        </label>
+        <input
+          value={authorName}
+          onChange={(e) => updateAuthorName(e.target.value)}
+          placeholder="Coupon Sûr"
+          maxLength={60}
+          style={{ ...adminInputStyle, width: "100%", marginBottom: 12, boxSizing: "border-box" }}
+        />
 
         <textarea
           value={textDraft}
@@ -4009,8 +4079,13 @@ function PostsTab() {
             <input type="file" accept="image/*" onChange={handleImageSelect} disabled={compressing} style={{ display: "none" }} />
           </label>
           {imageDataUri && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={imageDataUri} alt="" style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.border}` }} />
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={imageDataUri} alt="" style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", border: `1px solid ${C.border}` }} />
+              <button onClick={() => setImageDataUri(null)} style={{ ...adminSmallBtnStyle, color: C.red, borderColor: "rgba(239,68,68,0.3)" }}>
+                Retirer
+              </button>
+            </>
           )}
         </div>
 
@@ -4036,8 +4111,8 @@ function PostsTab() {
           </div>
         )}
 
-        <button onClick={handleCreate} disabled={creating || compressing} style={{ ...adminPublishBtnStyle, opacity: creating ? 0.6 : 1, marginTop: 16 }}>
-          {creating ? "Publication…" : "Publier"}
+        <button onClick={handleSubmit} disabled={creating || compressing} style={{ ...adminPublishBtnStyle, opacity: creating ? 0.6 : 1, marginTop: 16 }}>
+          {creating ? "Enregistrement…" : editingId ? "Enregistrer les modifications" : "Publier"}
         </button>
 
         {createMsg && (
@@ -4071,6 +4146,9 @@ function PostsTab() {
                     <img src={post.image} alt="" style={{ width: 52, height: 52, borderRadius: 8, objectFit: "cover", flexShrink: 0, border: `1px solid ${C.border}` }} />
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: C.gold, marginBottom: 3, letterSpacing: "0.3px" }}>
+                      {post.authorName}
+                    </div>
                     <div style={{ fontSize: 13, color: C.text, lineHeight: 1.4, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
                       {post.text || <span style={{ color: C.muted }}>(sans texte)</span>}
                     </div>
@@ -4085,6 +4163,9 @@ function PostsTab() {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button onClick={() => startEdit(post)} disabled={busyId === post._id} style={{ ...adminSmallBtnStyle, color: C.gold, borderColor: "rgba(201,168,76,0.3)" }}>
+                    Modifier
+                  </button>
                   <button onClick={() => togglePublish(post)} disabled={busyId === post._id} style={adminSmallBtnStyle}>
                     {post.isPublished ? "Dépublier" : "Publier"}
                   </button>
