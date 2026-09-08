@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { markRoomRead } from "@/hooks/useUnreadChat";
 import type { GroupRoom } from "@/models/GroupMessage";
 
 interface ReplyPreview {
@@ -198,6 +199,10 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         setMessages(data.data);
         setAccessError(null);
         setAmIBlocked(!!data.amIBlocked);
+        // Viewing the room live is the read action — same moment the tab
+        // bar / room picker's unread badges key off of (see
+        // hooks/useUnreadChat.ts).
+        if (data.me) markRoomRead(data.me, room);
       } else if (res.status === 401 || res.status === 403) {
         setAccessError(data?.message || "Accès refusé");
       }

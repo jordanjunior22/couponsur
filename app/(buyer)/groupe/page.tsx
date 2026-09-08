@@ -4,6 +4,7 @@ import Link from "next/link";
 import { PiGlobeHemisphereWestFill, PiCrownSimpleFill, PiLockSimpleFill, PiCaretRightBold } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { useAppSettings } from "@/hooks/useAppSettings";
+import { useUnreadChatCounts, formatBadgeCount } from "@/hooks/useUnreadChat";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 
 // The "Chat" tab's landing screen — a picker between the two rooms
@@ -18,6 +19,11 @@ export default function ChatHubPage() {
   const globalOn = !!settings?.globalChatEnabled;
   const premiumOn = !!settings?.groupChatEnabled;
 
+  const { premium: premiumUnread, global: globalUnread } = useUnreadChatCounts(
+    isPremiumEligible && premiumOn,
+    !!user && globalOn
+  );
+
   return (
     <main style={{ minHeight: "100vh", background: "#0A0C0F", padding: "20px 16px", paddingBottom: BOTTOM_SAFE_OFFSET }}>
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
@@ -30,6 +36,7 @@ export default function ChatHubPage() {
           description="Ouvert à tous les membres connectés."
           enterable={!!user && globalOn}
           lockedText={!user ? "Connectez-vous pour rejoindre" : "Temporairement indisponible"}
+          unreadCount={globalUnread}
         />
 
         <RoomCard
@@ -40,6 +47,7 @@ export default function ChatHubPage() {
           enterable={isPremiumEligible && premiumOn}
           lockedText={!user ? "Connectez-vous pour rejoindre" : !premiumOn ? "Temporairement indisponible" : "Réservé aux abonnés premium"}
           upsellHref={user && !isPremiumEligible ? "/profil" : undefined}
+          unreadCount={premiumUnread}
         />
       </div>
     </main>
@@ -47,7 +55,7 @@ export default function ChatHubPage() {
 }
 
 function RoomCard({
-  href, icon, label, description, enterable, lockedText, upsellHref,
+  href, icon, label, description, enterable, lockedText, upsellHref, unreadCount,
 }: {
   href: string;
   icon: React.ReactNode;
@@ -56,10 +64,16 @@ function RoomCard({
   enterable: boolean;
   lockedText: string;
   upsellHref?: string;
+  unreadCount?: number;
 }) {
+  const badge = enterable ? formatBadgeCount(unreadCount ?? 0) : null;
+
   const content = (
     <>
-      <span style={iconWrapStyle}>{icon}</span>
+      <span style={iconWrapStyle}>
+        {icon}
+        {badge && <span style={unreadBadgeStyle}>{badge}</span>}
+      </span>
       <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
         <div style={cardTitleStyle}>{label}</div>
         <div style={cardDescStyle}>{enterable ? description : lockedText}</div>
@@ -87,9 +101,18 @@ const cardStyle: React.CSSProperties = {
 };
 
 const iconWrapStyle: React.CSSProperties = {
+  position: "relative",
   width: 44, height: 44, borderRadius: 12, flexShrink: 0,
   background: "rgba(201,168,76,0.1)", border: "1px solid rgba(201,168,76,0.25)",
   display: "flex", alignItems: "center", justifyContent: "center", color: "#C9A84C",
+};
+
+const unreadBadgeStyle: React.CSSProperties = {
+  position: "absolute", top: -6, right: -6,
+  minWidth: 18, height: 18, padding: "0 5px",
+  borderRadius: 999, background: "#EF4444", border: "2px solid #0A0C0F",
+  color: "#fff", fontSize: 10, fontWeight: 700, lineHeight: "14px",
+  textAlign: "center", boxSizing: "border-box",
 };
 
 const cardTitleStyle: React.CSSProperties = { fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1, color: "#E8EAF0", marginBottom: 2 };
