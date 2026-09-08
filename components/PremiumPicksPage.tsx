@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect, useRef, useCallback, useId } from "react";
 import Link from "next/link";
-import { PiChartLineUpBold, PiCalendarBlankBold, PiCaretDownBold, PiFireFill, PiSparkleFill, PiCaretRightBold } from "react-icons/pi";
+import { PiChartLineUpBold, PiCalendarBlankBold, PiCaretDownBold, PiFireFill, PiSparkleFill, PiCaretRightBold, PiCalendarXBold } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { OneXBetBanner } from "./OneXBetBanner";
@@ -86,6 +86,21 @@ function formatWeekRange(weekKey: string): string {
   const startLabel = start.toLocaleDateString("fr-FR", { day: "numeric", month: sameMonth ? undefined : "short" });
   const endLabel = end.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
   return `${startLabel} – ${endLabel}`;
+}
+
+// The 7 calendar-day date strings (Monday..Sunday) that make up the week
+// keyed by `weekKey` — lets a week's expanded view show every day, not
+// just the ones that happen to have a pick, so a day with nothing posted
+// reads as "empty" instead of silently not existing.
+function getWeekDayKeys(weekKey: string): string[] {
+  const start = new Date(weekKey + "T00:00:00Z");
+  const days: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + i);
+    days.push(d.toISOString().split("T")[0]);
+  }
+  return days;
 }
 
 interface Tally { wins: number; losses: number; refunds: number; graded: number; winRate: number | null }
@@ -1110,6 +1125,29 @@ function DateSection({ date, picks, onSelect }: { date: string; picks: Pick[]; o
   );
 }
 
+// A day inside a week's breakdown that has no pick at all — rendered
+// instead of just silently skipping the day, so a week with 2 picks reads
+// as "2 posted, 5 quiet days" rather than looking like it only ever had 2
+// days. Deliberately quiet/desaturated (dashed border, muted icon) so it
+// never competes visually with an actual pick card next to it.
+function BlankDateRow({ date }: { date: string }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 10, letterSpacing: "2px", textTransform: "uppercase", color: "#4A5568", fontWeight: 500, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 4, height: 4, background: "#3A4455", borderRadius: "50%", flexShrink: 0, display: "inline-block" }} />
+        {formatDate(date)}
+      </div>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
+        border: "1px dashed #2A3140", borderRadius: 10, color: "#4A5568", fontSize: 12,
+      }}>
+        <PiCalendarXBold size={15} />
+        Aucun pronostic publié ce jour-là
+      </div>
+    </div>
+  );
+}
+
 const WEEKS_PAGE_SIZE = 4;
 
 // ─── Week Calendar ────────────────────────────────────────────────────────────
@@ -1201,8 +1239,12 @@ function WeekCalendar({ picks, onSelect }: { picks: Pick[]; onSelect: (p: Pick) 
 
               {open && (
                 <div style={{ padding: "0 16px 16px", animation: "fadeIn 0.2s ease" }}>
-                  {Object.keys(grouped).sort().reverse().map((date) => (
-                    <DateSection key={date} date={date} picks={grouped[date]} onSelect={onSelect} />
+                  {/* Every day of the week, not just the ones with a pick —
+                      a quiet day still shows, just as a blank-date row. */}
+                  {getWeekDayKeys(weekKey).reverse().map((date) => (
+                    grouped[date]
+                      ? <DateSection key={date} date={date} picks={grouped[date]} onSelect={onSelect} />
+                      : <BlankDateRow key={date} date={date} />
                   ))}
                 </div>
               )}
@@ -1561,6 +1603,18 @@ export default function PremiumPicksPage() {
 
   const groupedToday = useMemo(() => groupByDate(todayPicks), [todayPicks]);
   const groupedWeekRest = useMemo(() => groupByDate(currentWeekRest), [currentWeekRest]);
+
+  // Every day "Picks Récents" should show, newest first: any day with a
+  // pick (past or pre-published future date this week), plus every past
+  // day of the current week even with nothing posted (rendered as a blank
+  // date instead of just vanishing) — never a future day with nothing yet,
+  // since that day just hasn't happened. "Today" is always excluded, it
+  // has its own section above.
+  const weekRestDays = useMemo(() => {
+    const days = new Set<string>(Object.keys(groupedWeekRest));
+    getWeekDayKeys(currentWeekKey).forEach((d) => { if (d < today) days.add(d); });
+    return Array.from(days).sort().reverse();
+  }, [groupedWeekRest, currentWeekKey, today]);
   // ───────────────────────────────────────────────────────────────────────────
 
   if (loading) return (
@@ -1672,8 +1726,8 @@ export default function PremiumPicksPage() {
             </Link>
           )}
 
-          {/* ── PICKS RÉCENTS — rest of the current week, shown in full ── */}
-          {currentWeekRest.length > 0 && (
+          {/* ── PICKS RÉCENTS — rest of the current week, every day shown ── */}
+          {weekRestDays.length > 0 && (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: todayPicks.length > 0 ? 12 : 0, marginBottom: 20 }}>
                 <span style={{ fontSize: 9, letterSpacing: "3px", color: "#7A8399", textTransform: "uppercase", fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -1685,8 +1739,10 @@ export default function PremiumPicksPage() {
                 </span>
               </div>
 
-              {Object.keys(groupedWeekRest).sort().reverse().map((date) => (
-                <DateSection key={date} date={date} picks={groupedWeekRest[date]} onSelect={setSelectedPick} />
+              {weekRestDays.map((date) => (
+                groupedWeekRest[date]
+                  ? <DateSection key={date} date={date} picks={groupedWeekRest[date]} onSelect={setSelectedPick} />
+                  : <BlankDateRow key={date} date={date} />
               ))}
             </>
           )}
