@@ -4,6 +4,7 @@ import UserModel from "@/models/Users";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { sendPushToAdmins } from "@/lib/webpush";
 
 // Resolves who's talking: a logged-in visitor is identified by their
 // userId (reliable, can't be spoofed via query/body); an anonymous
@@ -100,6 +101,15 @@ export async function POST(req: NextRequest) {
       },
       { new: true, upsert: true }
     );
+
+    // Fire-and-forget — this route only ever handles messages sent BY the
+    // visitor (admin replies go through /api/admin/conversations/[id]),
+    // so every message here is one the admin needs to see and respond to.
+    sendPushToAdmins({
+      title: "💬 Nouveau message",
+      body: `${identity.phone} : ${text.slice(0, 120)}`,
+      url: "/dashboard",
+    }).catch((e) => console.error("Push on chat message failed:", e));
 
     return NextResponse.json({ success: true, data: conversation }, { status: 201 });
   } catch (error) {

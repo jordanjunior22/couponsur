@@ -10,6 +10,7 @@ import AnnouncementBanner from "@/components/AnnouncementBanner";
 import AnnouncementPopup from "@/components/AnnouncementPopup";
 import ActivityPing from "@/components/ActivityPing";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
+import AdminPushNotificationPrompt from "@/components/AdminPushNotificationPrompt";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -98,6 +99,7 @@ export default function RootLayout({
         <AuthProvider>
           <LoadWrapper>
             <PushNotificationPrompt />
+            <AdminPushNotificationPrompt />
             <AnnouncementBanner />
             <AnnouncementPopup />
             <ActivityPing />

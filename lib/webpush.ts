@@ -6,7 +6,8 @@
  * Docs: https://github.com/web-push-libs/web-push
  */
 import webpush from "web-push";
-import PushSubscriptionModel from "@/models/PushSubscription";
+import PushSubscriptionModel, { IPushSubscription } from "@/models/PushSubscription";
+import UserModel, { UserRole } from "@/models/Users";
 import { connectDB } from "@/utils/ConnectDb";
 
 const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
@@ -40,20 +41,15 @@ export interface PushSendResult {
   removed: number;
 }
 
-// Broadcasts to every stored subscription. Not configured (no VAPID
-// keys set) is treated as a no-op rather than an error — callers (e.g.
-// the pick-publish hook) shouldn't fail the actual request just because
-// push notifications haven't been set up yet.
-export async function sendPushToAll(payload: PushPayload): Promise<PushSendResult> {
-  if (!ensureConfigured()) {
-    console.warn("sendPushToAll: VAPID keys not configured — skipping push");
-    return { attempted: 0, sent: 0, removed: 0 };
-  }
-
-  await connectDB();
-  const subscriptions = await PushSubscriptionModel.find();
+// Shared delivery loop used by every "send to this set of subscriptions"
+// helper below — fans out with allSettled (one dead/slow endpoint can't
+// block the rest) and sweeps subscriptions the push service reports as
+// gone (404/410 = the browser unsubscribed or the subscription expired).
+async function deliverPush(
+  subscriptions: IPushSubscription[],
+  payload: PushPayload
+): Promise<PushSendResult> {
   const body = JSON.stringify(payload);
-
   let sent = 0;
   const toRemove: string[] = [];
 
@@ -66,9 +62,6 @@ export async function sendPushToAll(payload: PushPayload): Promise<PushSendResul
         );
         sent++;
       } catch (error) {
-        // 404/410 = the browser unsubscribed or the subscription expired —
-        // clean it up so we stop paying for a dead endpoint on every push.
-        // Anything else (network blip, etc.) is left alone to retry next time.
         const statusCode = (error as { statusCode?: number })?.statusCode;
         if (statusCode === 404 || statusCode === 410) {
           toRemove.push(sub.endpoint);
@@ -84,4 +77,43 @@ export async function sendPushToAll(payload: PushPayload): Promise<PushSendResul
   }
 
   return { attempted: subscriptions.length, sent, removed: toRemove.length };
+}
+
+// Broadcasts to every stored subscription. Not configured (no VAPID
+// keys set) is treated as a no-op rather than an error — callers (e.g.
+// the pick-publish hook) shouldn't fail the actual request just because
+// push notifications haven't been set up yet.
+export async function sendPushToAll(payload: PushPayload): Promise<PushSendResult> {
+  if (!ensureConfigured()) {
+    console.warn("sendPushToAll: VAPID keys not configured — skipping push");
+    return { attempted: 0, sent: 0, removed: 0 };
+  }
+
+  await connectDB();
+  const subscriptions = await PushSubscriptionModel.find();
+  return deliverPush(subscriptions, payload);
+}
+
+// Broadcasts only to subscriptions belonging to ADMIN accounts — the
+// admin-side counterpart of sendPushToAll, for operational alerts (a pick
+// was bought, a subscription activated, a customer sent a chat message)
+// that only the admin(s) running the site need to see, not every buyer.
+// An admin subscribes the same way a buyer does (see
+// components/AdminPushNotificationPrompt.tsx →
+// POST /api/push/subscribe), which tags the subscription with their
+// userId — that's what lets this filter to admins only.
+export async function sendPushToAdmins(payload: PushPayload): Promise<PushSendResult> {
+  if (!ensureConfigured()) {
+    console.warn("sendPushToAdmins: VAPID keys not configured — skipping push");
+    return { attempted: 0, sent: 0, removed: 0 };
+  }
+
+  await connectDB();
+  const admins = await UserModel.find({ role: UserRole.ADMIN }).select("_id");
+  if (admins.length === 0) return { attempted: 0, sent: 0, removed: 0 };
+
+  const subscriptions = await PushSubscriptionModel.find({
+    user: { $in: admins.map((a) => a._id) },
+  });
+  return deliverPush(subscriptions, payload);
 }

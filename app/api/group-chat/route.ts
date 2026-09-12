@@ -7,6 +7,7 @@ import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage
 import { detectProhibitedContact, moderationMessage } from "@/utils/chatModeration";
 import UserModel from "@/models/Users";
 import { Types } from "mongoose";
+import { sendPushToAdmins } from "@/lib/webpush";
 
 // How many past messages a poll/first-load returns. This is a live chat,
 // not a searchable archive, so a fixed recent window keeps the payload
@@ -203,6 +204,16 @@ export async function POST(req: NextRequest) {
       imageBytes,
       replyTo,
     });
+
+    // Fire-and-forget — only when a buyer (not an admin themselves) posts,
+    // so admins replying to each other never self-notify.
+    if (access.user.role !== "ADMIN") {
+      sendPushToAdmins({
+        title: `💬 Message — groupe ${room === "premium" ? "premium" : "global"}`,
+        body: `${maskPhone(access.user.phone)} : ${text ? text.slice(0, 120) : "📷 Image"}`,
+        url: "/dashboard",
+      }).catch((e) => console.error("Push on group chat message failed:", e));
+    }
 
     return NextResponse.json(
       // Sender can't be blocked here — that was already rejected above.

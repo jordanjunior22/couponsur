@@ -21,6 +21,7 @@ import UserModel from "@/models/Users";
 import Pick from "@/models/Picks";
 import { paymentStatus, isFapshiError } from "@/utils/fapshi";
 import { sendServerEvent } from "@/lib/metaConversions";
+import { sendPushToAdmins } from "@/lib/webpush";
 
 export type FulfillResult =
   | { outcome: "already_fulfilled" }
@@ -96,6 +97,14 @@ export async function fulfillPaymentByTransId(transId: string): Promise<FulfillR
       sourceUrl: payment.sourceUrl ?? undefined,
     });
 
+    // Fire-and-forget — a push failure must never fail the fulfillment
+    // that just granted the buyer their subscription.
+    sendPushToAdmins({
+      title: "💳 Nouvel abonnement",
+      body: `Abonnement mensuel activé — ${payment.phone} (${payment.amount} XAF)`,
+      url: "/dashboard",
+    }).catch((e) => console.error("Push on subscription activation failed:", e));
+
     return { outcome: "fulfilled", type: "SUBSCRIPTION" };
   }
 
@@ -131,6 +140,13 @@ export async function fulfillPaymentByTransId(transId: string): Promise<FulfillR
     fbp: payment.fbp ?? undefined,
     sourceUrl: payment.sourceUrl ?? undefined,
   });
+
+  // Fire-and-forget, same reasoning as the subscription push above.
+  sendPushToAdmins({
+    title: "💰 Pronostic acheté",
+    body: `${pick?.title ?? "Un pronostic"} acheté par ${payment.phone} (${payment.amount} XAF)`,
+    url: "/dashboard",
+  }).catch((e) => console.error("Push on pick purchase failed:", e));
 
   return { outcome: "fulfilled", type: "PICK" };
 }
