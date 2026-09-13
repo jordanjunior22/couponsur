@@ -2540,6 +2540,14 @@ function SettingsTab() {
   const [genMarketAccess, setGenMarketAccess] = useState<Record<string, "EVERYONE" | "PREMIUM">>({});
   const [genMarketSaving, setGenMarketSaving] = useState<string | null>(null); // which market code is mid-save, if any
 
+  // ── Push notifications test button ──────────────────────────────────────
+  // Tracks which target is currently sending ("admins" | "all" | null) so
+  // the two buttons can disable/label independently instead of sharing one
+  // generic "sending" flag.
+  const [testPushSending, setTestPushSending] = useState<"admins" | "all" | null>(null);
+  const [testPushMsg, setTestPushMsg] = useState<string | null>(null);
+  const [testPushOk, setTestPushOk] = useState(true);
+
   useEffect(() => {
     (async () => {
       try {
@@ -2692,6 +2700,58 @@ function SettingsTab() {
     }
   };
 
+  // Sends a real push through the same pipeline as an actual event
+  // (sendPushToAdmins / sendPushToAll in lib/webpush.ts) so this button
+  // tests the whole chain — VAPID config, stored subscriptions, the phone
+  // OS delivering it — not just that the API route responds.
+  // target "admins" requires an admin account to have tapped "Activer" on
+  // the banner above at least once on this device. target "all" reaches
+  // every real subscribed visitor/customer — gated behind a confirm()
+  // since, unlike every other action here, it can't be undone once sent.
+  const handleTestPush = async (target: "admins" | "all") => {
+    if (target === "all" && !confirm(
+      "Ceci va envoyer une vraie notification push à TOUS les visiteurs/clients abonnés (pas seulement les admins), avec un message précisant que c'est un test.\n\nContinuer ?"
+    )) return;
+
+    setTestPushSending(target);
+    setTestPushMsg(null);
+    try {
+      const res = await fetch("/api/admin/push/test", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        const { attempted, sent, removed } = data.data;
+        const who = target === "all" ? "appareil(s) abonné(s)" : "appareil(s) admin abonné(s)";
+        setTestPushOk(sent > 0);
+        if (attempted === 0) {
+          setTestPushMsg(
+            target === "all"
+              ? "Aucun visiteur abonné pour l'instant."
+              : "Aucun admin abonné — active d'abord les notifications via la bannière en haut de page."
+          );
+        } else {
+          setTestPushMsg(
+            `Envoyée à ${sent}/${attempted} ${who}.` +
+            (removed > 0 ? ` ${removed} abonnement(s) expiré(s) nettoyé(s).` : "") +
+            (sent < attempted ? " Voir les logs serveur pour le détail des échecs." : "")
+          );
+        }
+      } else {
+        setTestPushOk(false);
+        setTestPushMsg(data.message || "Échec de l'envoi.");
+      }
+    } catch {
+      setTestPushOk(false);
+      setTestPushMsg("Erreur réseau lors de l'envoi.");
+    } finally {
+      setTestPushSending(null);
+    }
+  };
+
   const iStyle: React.CSSProperties = {
     background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
     color: C.text, fontSize: 14, padding: "10px 12px", width: "100%",
@@ -2753,6 +2813,57 @@ function SettingsTab() {
             color: saveMsg.includes("succès") ? C.green : C.red,
           }}>
             {saveMsg}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+          Notifications
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+          Notifications push
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+          Vérifie que le push arrive bien sur un téléphone. « Aux admins » n&apos;alerte que les comptes admin abonnés (nécessite d&apos;avoir cliqué « Activer » sur la bannière en haut de page) ; « À tous les utilisateurs » envoie une vraie notification, marquée comme test, à chaque visiteur/client abonné.
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={() => handleTestPush("admins")}
+            disabled={testPushSending !== null}
+            style={{
+              background: testPushSending === "admins" ? C.goldDark : C.gold, border: "none", color: C.dark,
+              borderRadius: 8, padding: "10px 20px", fontSize: 12, fontWeight: 700,
+              cursor: testPushSending !== null ? "not-allowed" : "pointer",
+              fontFamily: "inherit", letterSpacing: "0.5px", opacity: testPushSending !== null ? 0.7 : 1,
+            }}
+          >
+            {testPushSending === "admins" ? "Envoi…" : "🔔 Envoyer aux admins"}
+          </button>
+          <button
+            onClick={() => handleTestPush("all")}
+            disabled={testPushSending !== null}
+            title="Envoie une vraie notification, marquée comme test, à tous les visiteurs/clients abonnés"
+            style={{
+              background: "none", border: `1px solid ${C.red}80`, color: C.red,
+              borderRadius: 8, padding: "10px 20px", fontSize: 12, fontWeight: 700,
+              cursor: testPushSending !== null ? "not-allowed" : "pointer",
+              fontFamily: "inherit", letterSpacing: "0.5px", opacity: testPushSending !== null ? 0.6 : 1,
+            }}
+          >
+            {testPushSending === "all" ? "Envoi…" : "📣 Envoyer à tous les utilisateurs"}
+          </button>
+        </div>
+
+        {testPushMsg && (
+          <div style={{
+            fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
+            background: testPushOk ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${testPushOk ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+            color: testPushOk ? C.green : C.red,
+          }}>
+            {testPushMsg}
           </div>
         )}
       </div>
