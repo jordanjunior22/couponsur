@@ -9,6 +9,7 @@ import ChatWidget from "@/components/ChatWidget";
 import AnnouncementBanner from "@/components/AnnouncementBanner";
 import AnnouncementPopup from "@/components/AnnouncementPopup";
 import ActivityPing from "@/components/ActivityPing";
+import PWAInstallTracker from "@/components/PWAInstallTracker";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 import AdminPushNotificationPrompt from "@/components/AdminPushNotificationPrompt";
 
@@ -103,6 +104,7 @@ export default function RootLayout({
             <AnnouncementBanner />
             <AnnouncementPopup />
             <ActivityPing />
+            <PWAInstallTracker />
             {children}
             <PWAInstallButton />
             <ChatWidget />

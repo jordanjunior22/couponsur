@@ -1711,6 +1711,11 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
   const [page, setPage] = useState(1);
   const USERS_PAGE_SIZE = 25;
 
+  // Best-effort PWA install count (see models/PWAInstall.ts for why it's
+  // an estimate, not exact) — reported by every device that runs the site
+  // in standalone display mode, via components/PWAInstallTracker.tsx.
+  const [pwaInstalls, setPwaInstalls] = useState<{ total: number; linkedToUser: number } | null>(null);
+
   useEffect(() => {
     (async () => {
       try {
@@ -1718,6 +1723,13 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
         const data = await res.json();
         if (data?.success) setSubPrice(data.data.subscriptionMonthlyPrice);
       } catch { /* falls back to pick-only revenue below */ }
+    })();
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/pwa-installs", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) setPwaInstalls(data.data);
+      } catch { /* stat card just shows a dash below */ }
     })();
   }, []);
 
@@ -1761,6 +1773,15 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
 
   return (
     <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+        <StatCard label="Utilisateurs" value={users.length} sub={`${users.filter((u) => u.role === "ADMIN").length} admin(s)`} accent />
+        <StatCard
+          label="PWA Installée"
+          value={pwaInstalls ? pwaInstalls.total : "—"}
+          sub={pwaInstalls ? `${pwaInstalls.linkedToUser} liée(s) à un compte · estimation` : "Chargement…"}
+        />
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         {([["list", "Liste"], ["activity", "Activité"]] as const).map(([id, label]) => (
           <button
