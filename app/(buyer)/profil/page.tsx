@@ -12,6 +12,7 @@ import { SubscribePayment } from "@/components/PremiumPicksPage";
 import { validateCameroonPhone, formatCameroonPhone } from "@/utils/cameroonPhone";
 import { usePWAInstall, isIOS } from "@/hooks/usePWAInstall";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
+import PushNotificationToggle from "@/components/PushNotificationToggle";
 
 // Replaces the old Navbar avatar dropdown (UserMenu): login/signup when
 // signed out, account + subscription + password/logout when signed in.
@@ -29,6 +30,7 @@ export default function ProfilPage() {
 
         {authLoading ? null : user ? <AccountPanel /> : <AuthPanel />}
 
+        <PushNotificationToggle />
         <InstallAppCard />
         <LegalLinks />
       </div>
