@@ -41,10 +41,28 @@ export interface PushSendResult {
   removed: number;
 }
 
+// A subscription the push service will NEVER accept again, no matter how
+// many times we retry: gone (404/410 — the browser unsubscribed or the
+// subscription expired) or created under VAPID credentials that no longer
+// match what we're signing with now (400 "VapidPkHashMismatch", or a 403
+// whose message says the credentials don't correspond to/authorize this
+// subscription). That last case is exactly what happens after a VAPID key
+// rotation — see the comment above NEXT_PUBLIC_VAPID_PUBLIC_KEY in .env —
+// and without pruning it here, every future send retries it forever and
+// logs the same error on every single call.
+function isPermanentlyDead(statusCode: number | undefined, body: unknown): boolean {
+  if (statusCode === 404 || statusCode === 410) return true;
+  if (statusCode === 400 || statusCode === 403) {
+    const text = typeof body === "string" ? body : JSON.stringify(body ?? {});
+    return /vapidpkhashmismatch|do not correspond|invalid jwt|badjwttoken/i.test(text);
+  }
+  return false;
+}
+
 // Shared delivery loop used by every "send to this set of subscriptions"
 // helper below — fans out with allSettled (one dead/slow endpoint can't
 // block the rest) and sweeps subscriptions the push service reports as
-// gone (404/410 = the browser unsubscribed or the subscription expired).
+// permanently unusable (see isPermanentlyDead above).
 async function deliverPush(
   subscriptions: IPushSubscription[],
   payload: PushPayload
@@ -63,10 +81,11 @@ async function deliverPush(
         sent++;
       } catch (error) {
         const statusCode = (error as { statusCode?: number })?.statusCode;
-        if (statusCode === 404 || statusCode === 410) {
+        const errorBody = (error as { body?: unknown })?.body;
+        if (isPermanentlyDead(statusCode, errorBody)) {
           toRemove.push(sub.endpoint);
         } else {
-          console.error("Push send failed:", statusCode, (error as { body?: string })?.body || error);
+          console.error("Push send failed:", statusCode, errorBody || error);
         }
       }
     })

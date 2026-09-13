@@ -2,20 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { urlBase64ToUint8Array, ensurePushSubscriptionFresh, rememberSubscribedKey } from "@/utils/pushSubscription";
 
 const DISMISSED_KEY = "push_prompt_dismissed";
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-
-// Push subscription keys arrive base64url-encoded; the Push API wants
-// them as a raw Uint8Array.
-function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = atob(base64);
-  const output = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; i++) output[i] = rawData.charCodeAt(i);
-  return output;
-}
 
 const C = {
   dark2: "#111418", dark3: "#1A1F26", dark4: "#222830",
@@ -55,6 +45,19 @@ export default function PushNotificationPrompt() {
     navigator.serviceWorker.register("/sw.js").catch((e) => console.error("SW registration failed:", e));
   }, [supported, hidden]);
 
+  // Self-healing: if this device already granted permission and has a
+  // subscription from a previous visit, make sure it's still under the
+  // CURRENT VAPID public key. A key rotation (see the comment above
+  // NEXT_PUBLIC_VAPID_PUBLIC_KEY in .env) otherwise leaves an already-opted-in
+  // visitor silently un-notified forever — this banner never reappears
+  // once permission is granted, so nothing would ever prompt them to fix it
+  // themselves. Runs regardless of `dismissed`/`hidden`-for-the-banner state:
+  // healing an existing subscription isn't the same as showing the prompt.
+  useEffect(() => {
+    if (!supported || permission !== "granted" || !VAPID_PUBLIC_KEY) return;
+    ensurePushSubscriptionFresh(VAPID_PUBLIC_KEY).catch((e) => console.error("Push resync failed:", e));
+  }, [supported, permission]);
+
   const handleEnable = async () => {
     if (!VAPID_PUBLIC_KEY) {
       setError("Notifications non configurées côté serveur.");
@@ -82,6 +85,7 @@ export default function PushNotificationPrompt() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(subscription.toJSON()),
       });
+      rememberSubscribedKey(VAPID_PUBLIC_KEY);
     } catch (e) {
       console.error("Push subscribe failed:", e);
       setError("Échec de l'activation des notifications. Réessaie plus tard.");

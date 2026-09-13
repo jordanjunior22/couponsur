@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { urlBase64ToUint8Array, ensurePushSubscriptionFresh, rememberSubscribedKey } from "@/utils/pushSubscription";
 
 // Admin-side counterpart to PushNotificationPrompt (which is deliberately
 // hidden on /dashboard — see its own comment). This one is the mirror
@@ -14,15 +15,6 @@ import { useAuth } from "@/context/AuthContext";
 // browses the site as a buyer isn't cross-affected either way.
 const DISMISSED_KEY = "admin_push_prompt_dismissed";
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = atob(base64);
-  const output = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; i++) output[i] = rawData.charCodeAt(i);
-  return output;
-}
 
 const C = {
   dark2: "#111418", dark3: "#1A1F26", dark4: "#222830",
