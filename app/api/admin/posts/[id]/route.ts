@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 import { toClientPost } from "@/utils/postSerializer";
+import { sendPushToAll } from "@/lib/webpush";
 
 async function requireAdmin() {
   const cookieStore = await cookies();
@@ -43,6 +44,7 @@ export async function PATCH(
     }
 
     const body = await req.json().catch(() => ({}));
+    const wasPublished = post.isPublished;
 
     if (body.isPublished !== undefined) {
       if (typeof body.isPublished !== "boolean") {
@@ -99,6 +101,17 @@ export async function PATCH(
     }
 
     await post.save();
+
+    // Only notify on the actual publish transition — not on every edit to
+    // an already-published post (would spam subscribers on every typo fix)
+    // — same reasoning as the pick publish hook (app/api/picks/[id]/route.ts).
+    if (!wasPublished && post.isPublished) {
+      sendPushToAll({
+        title: `📰 ${post.authorName || "Coupon Sûr"}`,
+        body: post.text ? post.text.slice(0, 120) : "Nouvelle publication",
+        url: "/actus",
+      }).catch((e) => console.error("Push on post publish failed:", e));
+    }
 
     return NextResponse.json({ success: true, data: toClientPost(post.toObject(), null) });
   } catch (error) {

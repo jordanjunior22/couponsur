@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import GroupMessageModel, { GroupRoom, GroupSender, IGroupReplyPreview } from "@/models/GroupMessage";
+import GroupPresenceModel from "@/models/GroupPresence";
 import { connectDB } from "@/utils/ConnectDb";
 import { requireGroupChatAccess } from "@/utils/groupChatAccess";
 import { maskPhone } from "@/utils/maskPhone";
@@ -15,6 +16,12 @@ import { sendPushToAdmins } from "@/lib/webpush";
 const HISTORY_LIMIT = 200;
 // How much of the original message shows in a reply's quoted preview.
 const REPLY_PREVIEW_LENGTH = 140;
+// A viewer counts as "online" in a room as long as their client polled
+// within this window (see GroupChatRoom's POLL_MS = 3000ms) — wide enough
+// to absorb normal request latency/jitter, narrow enough that closing the
+// tab or backgrounding it (which pauses polling) drops them out of the
+// count within a few seconds, not minutes.
+const ONLINE_WINDOW_MS = 15_000;
 
 // A request's room param defaults to "premium" — the room that existed
 // before this concept did, so any caller that forgets to pass it keeps
@@ -93,7 +100,21 @@ export async function GET(req: NextRequest) {
     // One batched lookup for every distinct sender in this window, rather
     // than a query per message, to know who's currently blocked.
     const senderIds = Array.from(new Set(messages.map((m) => m.user.toString())));
-    const blockedUsers = await UserModel.find({ _id: { $in: senderIds }, groupChatBlocked: true }).select("_id");
+
+    const now = new Date();
+    // This viewer's own heartbeat — every poll of this room counts as
+    // "still here" (see ONLINE_WINDOW_MS above). Awaited before the count
+    // below so a just-arrived viewer is reflected in their own first
+    // response instead of only from the next poll onward.
+    await GroupPresenceModel.findOneAndUpdate(
+      { room, user: access.user.userId },
+      { $set: { lastSeenAt: now } },
+      { upsert: true }
+    );
+    const [blockedUsers, onlineCount] = await Promise.all([
+      UserModel.find({ _id: { $in: senderIds }, groupChatBlocked: true }).select("_id"),
+      GroupPresenceModel.countDocuments({ room, lastSeenAt: { $gte: new Date(now.getTime() - ONLINE_WINDOW_MS) } }),
+    ]);
     const blockedSet = new Set(blockedUsers.map((u) => u._id.toString()));
 
     return NextResponse.json({
@@ -101,6 +122,7 @@ export async function GET(req: NextRequest) {
       data: messages.reverse().map((m) => toClientMessage(m, blockedSet.has(m.user.toString()))),
       me: access.user.userId,
       amIBlocked: access.user.blocked,
+      onlineCount,
     });
   } catch (error) {
     console.error("GET GROUP CHAT ERROR:", error);

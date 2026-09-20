@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 import { toClientPost } from "@/utils/postSerializer";
+import { sendPushToAll } from "@/lib/webpush";
 
 async function requireAdmin() {
   const cookieStore = await cookies();
@@ -94,6 +95,14 @@ export async function POST(req: NextRequest) {
       poll: pollOptionA && pollOptionB ? { optionALabel: pollOptionA, optionBLabel: pollOptionB } : null,
       isPublished: true,
     });
+
+    // Fire-and-forget, same pattern as pick publish (see app/api/picks/route.ts)
+    // — a push failure (or no subscribers yet) must never fail the post itself.
+    sendPushToAll({
+      title: `📰 ${authorName}`,
+      body: text ? text.slice(0, 120) : "Nouvelle publication",
+      url: "/actus",
+    }).catch((e) => console.error("Push on post create failed:", e));
 
     return NextResponse.json({ success: true, data: toClientPost(post.toObject(), null) }, { status: 201 });
   } catch (error) {
