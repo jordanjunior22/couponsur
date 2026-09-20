@@ -12,6 +12,7 @@ import ActivityPing from "@/components/ActivityPing";
 import PWAInstallTracker from "@/components/PWAInstallTracker";
 import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 import AdminPushNotificationPrompt from "@/components/AdminPushNotificationPrompt";
+import AppBadgeSync from "@/components/AppBadgeSync";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -99,6 +100,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <AuthProvider>
           <LoadWrapper>
+            <AppBadgeSync />
             <PushNotificationPrompt />
             <AdminPushNotificationPrompt />
             <AnnouncementBanner />
