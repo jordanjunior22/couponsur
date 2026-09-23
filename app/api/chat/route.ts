@@ -42,9 +42,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, data: null });
     }
 
+    // .lean() — polled every 4s while the widget is open; no mutation
+    // happens off this read, so there's no reason to pay for a hydrated
+    // Mongoose Document (getters, change-tracking) on every tick.
     const conversation = identity.userId
-      ? await ConversationModel.findOne({ user: identity.userId })
-      : await ConversationModel.findOne({ phone: identity.phone, user: null });
+      ? await ConversationModel.findOne({ user: identity.userId }).lean()
+      : await ConversationModel.findOne({ phone: identity.phone, user: null }).lean();
 
     return NextResponse.json({ success: true, data: conversation });
   } catch (error) {

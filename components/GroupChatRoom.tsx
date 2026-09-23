@@ -55,6 +55,12 @@ const C = {
 // tab is already open and in the foreground. Sending your own message
 // feels instant regardless, via the optimistic append in handleSend.
 const POLL_MS = 3000;
+// Slow reconcile tier — catches remote edits/deletes/pins/block-status
+// changes, which the fast POLL_MS tier's `since` query can't see (see
+// fetchMessages/fetchNewMessages below). 10x less frequent than the old
+// single-tier poll, but a tab left open and foregrounded still self-heals
+// within half a minute instead of only on refocus.
+const FULL_RECONCILE_MS = 30000;
 
 const MAX_IMAGE_DIMENSION = 1280; // longest side, in px, after downscaling
 const MAX_IMAGE_BYTES = 1_500_000; // must match utils/groupChatImage.ts on the server
@@ -211,6 +217,11 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const msgRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // Newest confirmed (non-pending/failed) message's createdAt this client
+  // has — what the fast poll tier sends as `since` so the server can
+  // answer "anything new?" instead of re-sending the whole window every
+  // 3s. Null until the first fetch lands (or forever, for an empty room).
+  const latestCreatedAtRef = useRef<string | null>(null);
   // Guards setState calls in fetchMessages against firing after unmount.
   // Reset to true on every effect run (not just declared once via useRef's
   // initializer) because React 18 Strict Mode (on by default for the App
@@ -232,6 +243,17 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   const isEligible = !!user && (room === "global" || isAdmin || hasActiveSubscription());
 
   // ─── Fetch / poll ───────────────────────────────────────────────────────
+  // Two-tier poll, not one: a plain "re-fetch the last 200 every 3s" was
+  // re-masking and re-serializing the whole window — inline images
+  // included — on every tick even when nothing had changed. Now:
+  //   - fetchMessages (full reconcile) — unchanged behavior, replaces
+  //     state wholesale. Runs on initial load, tab refocus, and a slow
+  //     background tier, so remote edits/deletes/pins/block-status
+  //     changes (invisible to a `since` query — see the API route's own
+  //     comment) still show up within a bounded time.
+  //   - fetchNewMessages (fast tier) — cheap "anything new?" poll every
+  //     POLL_MS, only ever appends. Can't clobber an in-progress local
+  //     edit or race the full reconcile, since it never replaces state.
   const fetchMessages = useCallback(async () => {
     try {
       const res = await fetch(`/api/group-chat?room=${room}`, { credentials: "include" });
@@ -253,6 +275,8 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         // bar / room picker's unread badges key off of (see
         // hooks/useUnreadChat.ts).
         if (data.me) markRoomRead(data.me, room);
+        const confirmed: GroupMessage[] = data.data;
+        if (confirmed.length > 0) latestCreatedAtRef.current = confirmed[confirmed.length - 1].createdAt;
       } else if (res.status === 401 || res.status === 403) {
         setAccessError(data?.message || "Accès refusé");
       }
@@ -263,6 +287,35 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     }
   }, [room]);
 
+  const fetchNewMessages = useCallback(async () => {
+    // Nothing to diff against yet (very first tick, or a room that's had
+    // zero messages ever) — fall back to a full fetch instead of sending
+    // a meaningless `since`.
+    if (!latestCreatedAtRef.current) return fetchMessages();
+    try {
+      const params = new URLSearchParams({ room, since: latestCreatedAtRef.current });
+      const res = await fetch(`/api/group-chat?${params.toString()}`, { credentials: "include" });
+      const data = await res.json();
+      if (!mountedRef.current || !data?.success) return;
+      setAmIBlocked(!!data.amIBlocked);
+      if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
+      if (data.me) markRoomRead(data.me, room);
+      const fresh: GroupMessage[] = data.data;
+      if (fresh.length === 0) return;
+      setMessages((prev) => {
+        const known = new Set(prev.map((m) => m._id));
+        const toAppend = fresh.filter((m) => !known.has(m._id));
+        if (toAppend.length === 0) return prev;
+        const inFlight = prev.filter((m) => m.pending || m.failed);
+        const confirmed = prev.filter((m) => !m.pending && !m.failed);
+        return [...confirmed, ...toAppend, ...inFlight];
+      });
+      latestCreatedAtRef.current = fresh[fresh.length - 1].createdAt;
+    } catch {
+      // Silent — the next poll tick tries again.
+    }
+  }, [room, fetchMessages]);
+
   useEffect(() => {
     if (authLoading || !isEligible) {
       if (!authLoading) setLoadingMessages(false);
@@ -270,18 +323,22 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     }
 
     fetchMessages();
-    const interval = setInterval(() => {
-      if (document.visibilityState === "visible") fetchMessages();
+    const fastInterval = setInterval(() => {
+      if (document.visibilityState === "visible") fetchNewMessages();
     }, POLL_MS);
+    const reconcileInterval = setInterval(() => {
+      if (document.visibilityState === "visible") fetchMessages();
+    }, FULL_RECONCILE_MS);
     const onVisible = () => { if (document.visibilityState === "visible") fetchMessages(); };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
     return () => {
-      clearInterval(interval);
+      clearInterval(fastInterval);
+      clearInterval(reconcileInterval);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
     };
-  }, [authLoading, isEligible, fetchMessages]);
+  }, [authLoading, isEligible, fetchMessages, fetchNewMessages]);
 
   // ─── Starred (personal, per-device — no server round-trip needed) ──────
   useEffect(() => {

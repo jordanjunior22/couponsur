@@ -79,11 +79,27 @@ function toClientMessage(msg: LeanGroupMessage, senderBlocked: boolean) {
 }
 
 // ─── GET: fetch (and poll) a group chat room's history ─────────────────────
+// `since` (optional): an ISO timestamp the client already has the full
+// history up through. When present, this returns only messages strictly
+// newer than it instead of the usual last-HISTORY_LIMIT window — the
+// "fast tier" of GroupChatRoom's two-tier poll (see its own comment).
+// A 3-second poll against a room with no new activity used to still
+// re-fetch, re-mask and re-serialize up to 200 messages — including any
+// inline images in that window — every single tick; `since` turns that
+// into "0 rows, tiny payload" for the overwhelmingly common case. Edits,
+// deletes, pins and block-status changes are NOT reflected in a `since`
+// response (a delete has no "newer than X" row to return) — those are
+// caught by the client's slower, `since`-less full-reconcile poll instead.
 export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
-    const room = parseRoom(new URL(req.url).searchParams.get("room"));
+    const { searchParams } = new URL(req.url);
+    const room = parseRoom(searchParams.get("room"));
+    const sinceParam = searchParams.get("since");
+    const sinceDate = sinceParam ? new Date(sinceParam) : null;
+    const since = sinceDate && !Number.isNaN(sinceDate.getTime()) ? sinceDate : null;
+
     const access = await requireGroupChatAccess(room);
     if ("error" in access) {
       return NextResponse.json({ success: false, message: access.error }, { status: access.status });
@@ -95,10 +111,16 @@ export async function GET(req: NextRequest) {
     // with the field set from day one.
     const roomFilter = room === "premium" ? { $or: [{ room: "premium" }, { room: { $exists: false } }] } : { room: "global" };
 
-    const messages = await GroupMessageModel.find(roomFilter)
-      .sort({ createdAt: -1 })
-      .limit(HISTORY_LIMIT)
-      .lean<LeanGroupMessage[]>();
+    const messages =
+      since
+        ? await GroupMessageModel.find({ ...roomFilter, createdAt: { $gt: since } })
+            .sort({ createdAt: 1 })
+            .limit(HISTORY_LIMIT)
+            .lean<LeanGroupMessage[]>()
+        : await GroupMessageModel.find(roomFilter)
+            .sort({ createdAt: -1 })
+            .limit(HISTORY_LIMIT)
+            .lean<LeanGroupMessage[]>();
 
     // One batched lookup for every distinct sender in this window, rather
     // than a query per message, to know who's currently blocked.
@@ -120,9 +142,14 @@ export async function GET(req: NextRequest) {
     ]);
     const blockedSet = new Set(blockedUsers.map((u) => u._id.toString()));
 
+    // The `since` branch already queried in ascending (chronological) order
+    // — only the full-window branch (descending, newest-first) needs
+    // flipping back to chronological here.
+    const chronological = since ? messages : messages.reverse();
+
     return NextResponse.json({
       success: true,
-      data: messages.reverse().map((m) => toClientMessage(m, blockedSet.has(m.user.toString()))),
+      data: chronological.map((m) => toClientMessage(m, blockedSet.has(m.user.toString()))),
       me: access.user.userId,
       amIBlocked: access.user.blocked,
       onlineCount,
