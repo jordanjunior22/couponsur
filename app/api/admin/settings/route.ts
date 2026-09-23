@@ -45,6 +45,8 @@ export async function PUT(req: NextRequest) {
       groupChatEnabled,
       globalChatEnabled,
       newsFeedEnabled,
+      dbStorageLimitMb,
+      vercelSyncEnabled,
     } = body;
 
     const update: Record<string, unknown> = {};
@@ -174,6 +176,26 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.newsFeedEnabled = newsFeedEnabled;
+    }
+
+    if (dbStorageLimitMb !== undefined) {
+      if (typeof dbStorageLimitMb !== "number" || !Number.isFinite(dbStorageLimitMb) || dbStorageLimitMb <= 0) {
+        return NextResponse.json(
+          { success: false, message: "dbStorageLimitMb must be a positive number" },
+          { status: 400 }
+        );
+      }
+      update.dbStorageLimitMb = dbStorageLimitMb;
+    }
+
+    if (vercelSyncEnabled !== undefined) {
+      if (typeof vercelSyncEnabled !== "boolean") {
+        return NextResponse.json(
+          { success: false, message: "vercelSyncEnabled must be a boolean" },
+          { status: 400 }
+        );
+      }
+      update.vercelSyncEnabled = vercelSyncEnabled;
     }
 
     if (Object.keys(update).length === 0) {

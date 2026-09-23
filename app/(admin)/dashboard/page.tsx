@@ -240,6 +240,14 @@ const Icons = {
       <path d="M5 2.5L10 7l-5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  system: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <rect x="1.5" y="1.5" width="13" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="1.5" y="10" width="13" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="4.3" cy="3.75" r="0.7" fill="currentColor" />
+      <circle cx="4.3" cy="12.25" r="0.7" fill="currentColor" />
+    </svg>
+  ),
 };
 
 // ─── Colors ────────────────────────────────────────────────────────────────────
@@ -3348,6 +3356,428 @@ function GroupChatAdminCard({
   );
 }
 
+// ─── System tab ─────────────────────────────────────────────────────────────
+// Two independent cards: MongoDB storage (works right away, real numbers
+// from db.stats()) and Vercel (dormant until an admin turns it on — see
+// VercelUsageCard). Neither polls; both fetch once on mount plus a manual
+// "Actualiser" button, since this is a diagnostics screen an admin checks
+// in on, not something that needs to be live.
+function SystemTab() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 760 }}>
+      <DbUsageCard />
+      <VercelUsageCard />
+    </div>
+  );
+}
+
+interface CollectionStat {
+  name: string;
+  count: number;
+  dataBytes: number;
+  avgObjBytes: number;
+  storageBytes: number;
+  indexBytes: number;
+}
+
+interface DbStats {
+  dataBytes: number;
+  storageBytes: number;
+  indexBytes: number;
+  totalBytes: number;
+  objects: number;
+  collectionCount: number;
+  limitMb: number;
+  collections: CollectionStat[];
+}
+
+// Storage bar color thresholds — green below 70%, gold (a "watch this")
+// between 70–90%, red past 90%. Same three-tier idea as the pick outcome
+// accents, just for a percentage instead of a win/loss.
+function usageColor(pct: number): string {
+  if (pct >= 90) return C.red;
+  if (pct >= 70) return C.gold;
+  return C.green;
+}
+
+function DbUsageCard() {
+  const [stats, setStats] = useState<DbStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [limitInput, setLimitInput] = useState("");
+  const [savingLimit, setSavingLimit] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  const fetchStats = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/system/db-stats", { credentials: "include" });
+      const data = await res.json();
+      if (data?.success) {
+        setStats(data.data);
+        setLimitInput(String(data.data.limitMb));
+      } else {
+        setError(data?.message || "Erreur inconnue");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchStats(); }, []);
+
+  const saveLimit = async () => {
+    const num = Number(limitInput);
+    if (!num || num <= 0) return;
+    setSavingLimit(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dbStorageLimitMb: num }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setStats((s) => (s ? { ...s, limitMb: data.data.dbStorageLimitMb } : s));
+        setSaveMsg("Enregistré avec succès.");
+      } else {
+        setSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setSavingLimit(false);
+      setTimeout(() => setSaveMsg(null), 3000);
+    }
+  };
+
+  const pct = stats ? Math.min(100, (stats.totalBytes / (stats.limitMb * 1024 * 1024)) * 100) : 0;
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600 }}>
+          Base de données
+        </div>
+        <button onClick={fetchStats} disabled={loading} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 11, cursor: loading ? "not-allowed" : "pointer", fontFamily: "inherit", textDecoration: "underline" }}>
+          {loading ? "Actualisation…" : "Actualiser"}
+        </button>
+      </div>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+        MongoDB
+      </div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+        Stockage réel (données + index), lu en direct depuis Mongo à chaque ouverture de cet onglet. Atlas n&apos;expose pas votre palier/limite par requête — la limite ci-dessous est à ajuster vous-même si vous changez de palier.
+      </div>
+
+      {loading && !stats ? (
+        <div style={{ fontSize: 12, color: C.muted }}>Chargement…</div>
+      ) : error ? (
+        <div style={{ fontSize: 12, color: C.red }}>{error}</div>
+      ) : stats ? (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginBottom: 14 }}>
+            <StatCard label="Utilisé" value={formatBytes(stats.totalBytes)} accent />
+            <StatCard label="% de la limite" value={`${pct.toFixed(1)}%`} />
+            <StatCard label="Documents" value={stats.objects.toLocaleString("fr-FR")} />
+            <StatCard label="Collections" value={stats.collectionCount} />
+          </div>
+
+          <div style={{ height: 8, borderRadius: 4, background: C.dark4, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 6 }}>
+            <div style={{ width: `${pct}%`, height: "100%", background: usageColor(pct), transition: "width 0.3s" }} />
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 18 }}>
+            {formatBytes(stats.totalBytes)} / {stats.limitMb.toLocaleString("fr-FR")} Mo
+          </div>
+
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+            <div>
+              <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+                Limite (Mo)
+              </label>
+              <input
+                type="number" min={1} value={limitInput} onChange={(e) => setLimitInput(e.target.value)}
+                style={{ width: 120, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", color: C.text, fontSize: 13, fontFamily: "inherit" }}
+              />
+            </div>
+            <button
+              onClick={saveLimit}
+              disabled={savingLimit || !limitInput || Number(limitInput) === stats.limitMb}
+              style={{
+                background: C.gold, color: C.dark, border: "none", borderRadius: 8, padding: "9px 16px",
+                fontSize: 12, fontWeight: 700, fontFamily: "inherit", cursor: "pointer",
+                opacity: (savingLimit || !limitInput || Number(limitInput) === stats.limitMb) ? 0.5 : 1,
+              }}
+            >
+              {savingLimit ? "Enregistrement…" : "Enregistrer"}
+            </button>
+          </div>
+
+          <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 10 }}>
+            Par collection
+          </label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {stats.collections.map((c) => (
+              <div key={c.name} style={{ display: "flex", alignItems: "center", gap: 10, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{c.name}</div>
+                  <div style={{ fontSize: 10, color: C.muted }}>
+                    {c.count.toLocaleString("fr-FR")} doc{c.count > 1 ? "s" : ""} · {formatBytes(c.avgObjBytes)}/doc en moyenne
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div style={{ fontSize: 12, color: C.gold, fontWeight: 700 }}>{formatBytes(c.dataBytes)}</div>
+                  <div style={{ fontSize: 10, color: C.muted }}>+{formatBytes(c.indexBytes)} idx</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {saveMsg && (
+            <div style={{
+              fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 14,
+              background: saveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+              border: `1px solid ${saveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+              color: saveMsg.includes("succès") ? C.green : C.red,
+            }}>
+              {saveMsg}
+            </div>
+          )}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+interface VercelStatsData {
+  syncEnabled: boolean;
+  configured?: boolean;
+  missingEnvVars?: string[];
+  project?: {
+    name: string;
+    framework: string | null;
+    nodeVersion: string | null;
+    region: string | null;
+    cronCount: number;
+    domains: string[];
+  } | null;
+  deployments?: { createdAt: number; state: string; target: string; buildSeconds: number | null }[];
+  usage?: unknown;
+  usageErrorCode?: string | null;
+  usageErrorMessage?: string | null;
+}
+
+// Spelled out once here rather than assumed — where to get each value and
+// where it goes, so an admin can wire this up without leaving the
+// dashboard. `href` only for the one page that's the same URL for every
+// Vercel account (the personal tokens page); the team/project-specific
+// pages are described by navigation instead of guessing at a slug.
+const VERCEL_ENV_STEPS: { name: string; where: string; href?: string }[] = [
+  { name: "VERCEL_API_TOKEN", where: "vercel.com → cliquez sur votre avatar → Settings → Tokens → Create Token. Portée en lecture seule suffit.", href: "https://vercel.com/account/tokens" },
+  { name: "VERCEL_PROJECT_ID", where: "Sur ce projet Vercel : Settings → General → champ « Project ID »." },
+  { name: "VERCEL_TEAM_ID", where: "Optionnel — nécessaire si le projet appartient à une équipe (le cas depuis la migration « Northstar » de Vercel, même pour un compte personnel). Team Settings → General → « Team ID »." },
+];
+
+function VercelEnvSetupGuide() {
+  return (
+    <div style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px" }}>
+      <div style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
+        Comment les configurer
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+        {VERCEL_ENV_STEPS.map((s) => (
+          <div key={s.name}>
+            <code style={{ fontSize: 11, color: C.gold, fontWeight: 700 }}>{s.name}</code>
+            <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, marginTop: 2 }}>
+              {s.where}
+              {s.href && (
+                <> — <a href={s.href} target="_blank" rel="noopener noreferrer" style={{ color: C.gold }}>ouvrir la page</a></>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+        Une fois les valeurs en main, ajoutez-les dans <strong style={{ color: C.text }}>Vercel → ce projet → Settings → Environment Variables</strong> (Production), puis redéployez. Pour tester en local, ajoutez-les aussi à <code>.env.local</code>. Puis revenez ici et activez la synchronisation ci-dessus.
+      </div>
+    </div>
+  );
+}
+
+// Dormant by default — see the route's own comment for why. This card's
+// job is mostly to explain *why* nothing's showing yet (no env vars set,
+// or sync switched off) until an admin has actually upgraded to Pro and
+// turned it on, at which point it starts rendering whatever Vercel's
+// usage API actually returns.
+function VercelUsageCard() {
+  const [data, setData] = useState<VercelStatsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [toggling, setToggling] = useState(false);
+
+  const fetchStats = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/system/vercel-stats", { credentials: "include" });
+      const json = await res.json();
+      if (json?.success) setData(json.data);
+      else setError(json?.message || "Erreur inconnue");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchStats(); }, []);
+
+  const toggleSync = async () => {
+    if (!data) return;
+    const next = !data.syncEnabled;
+    setToggling(true);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vercelSyncEnabled: next }),
+      });
+      const json = await res.json();
+      if (json?.success) await fetchStats();
+    } catch {
+      /* toggle just stays as-is — the button reflects whatever fetchStats last confirmed */
+    } finally {
+      setToggling(false);
+    }
+  };
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600 }}>
+          Hébergement
+        </div>
+        {data?.syncEnabled && (
+          <button onClick={fetchStats} disabled={loading} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 11, cursor: loading ? "not-allowed" : "pointer", fontFamily: "inherit", textDecoration: "underline" }}>
+            {loading ? "Actualisation…" : "Actualiser"}
+          </button>
+        )}
+      </div>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+        Vercel
+      </div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+        Bande passante et exécution des fonctions ne sont exposées par l&apos;API Vercel que sur un plan Pro ou Enterprise — sur Hobby, cet appel échoue avec &quot;plan_upgrade_required&quot;. Infos de projet/déploiement fonctionnent sur tous les plans.
+      </div>
+
+      {loading && !data ? (
+        <div style={{ fontSize: 12, color: C.muted }}>Chargement…</div>
+      ) : error ? (
+        <div style={{ fontSize: 12, color: C.red }}>{error}</div>
+      ) : !data ? null : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: data.syncEnabled ? 18 : 0 }}>
+            <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+              Activer la synchronisation
+            </label>
+            <button
+              onClick={toggleSync}
+              disabled={toggling}
+              style={{
+                width: 44, height: 24, borderRadius: 12, position: "relative", cursor: toggling ? "not-allowed" : "pointer",
+                background: data.syncEnabled ? C.gold : C.dark4, border: `1px solid ${data.syncEnabled ? C.gold : C.border}`,
+                transition: "background 0.15s", flexShrink: 0, padding: 0,
+              }}
+            >
+              <span style={{
+                position: "absolute", top: 2, left: data.syncEnabled ? 22 : 2, width: 18, height: 18, borderRadius: "50%",
+                background: data.syncEnabled ? C.dark : C.muted, transition: "left 0.15s",
+              }} />
+            </button>
+          </div>
+
+          {!data.syncEnabled ? (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+                Désactivée — activez-la une fois les variables ci-dessous configurées.
+              </div>
+              <VercelEnvSetupGuide />
+            </div>
+          ) : data.configured === false ? (
+            <>
+              <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>
+                Variable(s) manquante(s) : {(data.missingEnvVars || []).map((v) => <code key={v} style={{ marginRight: 6 }}>{v}</code>)}
+              </div>
+              <VercelEnvSetupGuide />
+            </>
+          ) : (
+            <>
+              {data.project && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginBottom: 14 }}>
+                  <StatCard label="Projet" value={data.project.name} />
+                  <StatCard label="Région" value={data.project.region || "—"} />
+                  <StatCard label="Node" value={data.project.nodeVersion || "—"} />
+                  <StatCard label="Crons actifs" value={data.project.cronCount} />
+                </div>
+              )}
+
+              {!!data.project?.domains.length && (
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 18 }}>
+                  Domaines : {data.project.domains.join(", ")}
+                </div>
+              )}
+
+              {!!data.deployments?.length && (
+                <>
+                  <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 10 }}>
+                    Déploiements récents
+                  </label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 18 }}>
+                    {data.deployments.map((d, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px" }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, letterSpacing: "1px", padding: "3px 7px", borderRadius: 4, textTransform: "uppercase",
+                          color: d.state === "READY" ? C.green : d.state === "ERROR" ? C.red : C.muted,
+                          background: d.state === "READY" ? "rgba(34,197,94,0.1)" : d.state === "ERROR" ? "rgba(239,68,68,0.1)" : "rgba(122,131,153,0.1)",
+                        }}>
+                          {d.state}
+                        </span>
+                        <span style={{ fontSize: 11, color: C.muted, flex: 1 }}>{new Date(d.createdAt).toLocaleString("fr-FR")}</span>
+                        <span style={{ fontSize: 11, color: C.text }}>{d.buildSeconds != null ? `${d.buildSeconds}s` : "—"}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 10 }}>
+                Utilisation (bande passante, fonctions…)
+              </label>
+              {data.usage ? (
+                <pre style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12, fontSize: 11, color: C.text, overflowX: "auto", margin: 0 }}>
+                  {JSON.stringify(data.usage, null, 2)}
+                </pre>
+              ) : data.usageErrorCode === "plan_upgrade_required" ? (
+                <div style={{ fontSize: 12, color: C.gold, background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.25)", borderRadius: 8, padding: "10px 12px" }}>
+                  Nécessite le plan Pro ou Enterprise — passez le compte Vercel en Pro pour voir ces chiffres ici.
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: C.red }}>{data.usageErrorMessage || "Indisponible."}</div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Conversation Thread Modal ─────────────────────────────────────────────────
 // How long a typing ping stays "fresh" before the indicator hides itself
 // again, and the minimum gap between pings the reply box sends — mirrors
@@ -4337,7 +4767,7 @@ const adminSmallBtnStyle: React.CSSProperties = {
 };
 
 // ─── Main Admin Dashboard ───────────────────────────────────────────────────────
-type Tab = "overview" | "picks" | "users" | "revenue" | "transactions" | "messages" | "announcements" | "posts" | "settings";
+type Tab = "overview" | "picks" | "users" | "revenue" | "transactions" | "messages" | "announcements" | "posts" | "settings" | "system";
 
 export default function AdminDashboard() {
   const { user, loading: authLoading, logout } = useAuth();
@@ -4488,6 +4918,7 @@ export default function AdminDashboard() {
     { id: "announcements", label: "Annonces", icon: Icons.announcements },
     { id: "posts", label: "Actualités", icon: Icons.posts },
     { id: "settings", label: "Paramètres", icon: Icons.settings },
+    { id: "system", label: "Système", icon: Icons.system },
   ];
 
   const NavItems = () => (
@@ -4632,6 +5063,7 @@ export default function AdminDashboard() {
                 {tab === "announcements" && <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} loading={announcementsLoading} />}
                 {tab === "posts" && <PostsTab />}
                 {tab === "settings" && <SettingsTab />}
+                {tab === "system" && <SystemTab />}
               </>
             )}
           </main>

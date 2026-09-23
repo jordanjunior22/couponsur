@@ -60,6 +60,21 @@ export interface ISettings extends Document {
   globalChatEnabled: boolean;
   /** Master switch for the "Actus" news feed tab — same shape again. */
   newsFeedEnabled: boolean;
+  /** Admin-editable ceiling (in MB) used only to draw the System tab's
+   *  storage progress bar — MongoDB Atlas doesn't expose "which tier/limit
+   *  am I on" over a normal driver connection (`db.stats()` reports usage,
+   *  not the plan's cap), so this is a number an admin sets by hand and
+   *  updates if they ever change Atlas tier. Defaults to the M0 free
+   *  tier's 512 MB. */
+  dbStorageLimitMb: number;
+  /** Off by default. Vercel's real usage-vs-limit API (`/v1/usage`) only
+   *  works on a Pro/Enterprise team — on Hobby it 400s with
+   *  `plan_upgrade_required` — so this stays off until an admin
+   *  deliberately flips it on from the System tab once VERCEL_API_TOKEN +
+   *  VERCEL_PROJECT_ID are set and the team's been upgraded (see
+   *  app/api/admin/system/vercel-stats/route.ts). Project/deployment info
+   *  works on Hobby already and isn't gated by this flag. */
+  vercelSyncEnabled: boolean;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -76,6 +91,8 @@ const SettingsSchema = new Schema<ISettings>(
     groupChatEnabled: { type: Boolean, default: true },
     globalChatEnabled: { type: Boolean, default: true },
     newsFeedEnabled: { type: Boolean, default: true },
+    dbStorageLimitMb: { type: Number, default: 512, min: 1 },
+    vercelSyncEnabled: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
