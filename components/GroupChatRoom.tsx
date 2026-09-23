@@ -12,6 +12,7 @@ interface ReplyPreview {
   user: string;
   role: "USER" | "ADMIN";
   phone: string;
+  nickname: string | null;
   text: string;
   // Set only on a locally-built (optimistic) message, where the label
   // ("Vous" / "Admin" / masked phone) was already resolved client-side
@@ -24,6 +25,7 @@ interface GroupMessage {
   user: string;
   phone: string; // already masked ("696****10") by the API — never the real number
   role: "USER" | "ADMIN";
+  nickname: string | null; // admin-only display name, see senderLabel below
   senderBlocked: boolean; // muted by an admin — looked up live, not stored per-message
   text: string;
   image: string | null;
@@ -67,7 +69,7 @@ const starredKey = (userId: string) => `groupchat_starred:${userId}`;
 
 function senderLabel(m: GroupMessage, currentUserId?: string) {
   if (currentUserId && m.user === currentUserId) return "Vous";
-  if (m.role === "ADMIN") return "Admin";
+  if (m.role === "ADMIN") return m.nickname || "Admin";
   return m.phone;
 }
 
@@ -428,11 +430,12 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
       user: user._id,
       phone: "",
       role: isAdmin ? "ADMIN" : "USER",
+      nickname: isAdmin ? (user.nickname || null) : null,
       senderBlocked: false,
       text,
       image: imageToSend,
       replyTo: replySnapshot
-        ? { messageId: replySnapshot.id, user: "", role: "USER", phone: "", text: replySnapshot.text, label: replySnapshot.label }
+        ? { messageId: replySnapshot.id, user: "", role: "USER", phone: "", nickname: null, text: replySnapshot.text, label: replySnapshot.label }
         : null,
       pinned: false,
       createdAt: new Date().toISOString(),
@@ -757,7 +760,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                   {m.replyTo && (() => {
                     const quotedIsOwn = m.replyTo.user === user._id;
                     const quotedAccent = accentColorFor(m.replyTo.role, m.replyTo.user, quotedIsOwn);
-                    const quotedLabel = m.replyTo.label ?? (quotedIsOwn ? "Vous" : m.replyTo.role === "ADMIN" ? "Admin" : m.replyTo.phone);
+                    const quotedLabel = m.replyTo.label ?? (quotedIsOwn ? "Vous" : m.replyTo.role === "ADMIN" ? (m.replyTo.nickname || "Admin") : m.replyTo.phone);
                     return (
                       <button
                         onClick={() => scrollToMessage(m.replyTo!.messageId)}

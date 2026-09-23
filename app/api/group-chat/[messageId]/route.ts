@@ -21,6 +21,7 @@ function toClientMessage(msg: HydratedDocument<IGroupMessage>, senderBlocked: bo
     user: msg.user.toString(),
     phone: maskPhone(msg.phone),
     role: msg.role,
+    nickname: msg.nickname || null,
     senderBlocked,
     text: msg.text,
     image: msg.image,
@@ -30,6 +31,7 @@ function toClientMessage(msg: HydratedDocument<IGroupMessage>, senderBlocked: bo
           user: msg.replyTo.user.toString(),
           role: msg.replyTo.role,
           phone: maskPhone(msg.replyTo.phone),
+          nickname: msg.replyTo.nickname || null,
           text: msg.replyTo.text,
         }
       : null,

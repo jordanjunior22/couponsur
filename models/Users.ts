@@ -24,6 +24,12 @@ export interface IUser extends Document {
   // it (subscription/admin status is what gates that), just not post.
   // Scoped to this one feature, not a site-wide ban.
   groupChatBlocked: boolean;
+  // Admin-only display name for group chat — lets buyers tell one admin
+  // apart from another instead of every admin message reading as the same
+  // generic "Admin". Meaningless for a USER account (never surfaced there),
+  // and null/unset falls back to the plain "Admin" label (see
+  // GroupChatRoom's senderLabel).
+  nickname?: string | null;
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -63,6 +69,7 @@ const UserSchema = new Schema<IUser>(
     ],
     subscription: { type: SubscriptionSchema, default: () => ({}) },
     groupChatBlocked: { type: Boolean, default: false },
+    nickname: { type: String, trim: true, maxlength: 40, default: null },
     lastLoginAt: { type: Date, default: null },
   },
   {

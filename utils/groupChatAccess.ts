@@ -21,6 +21,10 @@ export interface GroupChatUser {
   // per-room) — callers that create/edit messages must check this
   // themselves; it's not enforced here since reading isn't affected.
   blocked: boolean;
+  // Only meaningful for an ADMIN — the display name their messages should
+  // carry instead of the generic "Admin" (see models/Users.ts). Always
+  // null for a USER.
+  nickname: string | null;
 }
 
 export type GroupChatAccessResult =
@@ -35,7 +39,7 @@ export async function requireGroupChatAccess(room: GroupRoom = "premium"): Promi
   const decoded = verifyToken(token);
   if (!decoded) return { error: "Invalid token", status: 401 };
 
-  const dbUser = await UserModel.findById(decoded.userId).select("phone role subscription groupChatBlocked");
+  const dbUser = await UserModel.findById(decoded.userId).select("phone role subscription groupChatBlocked nickname");
   if (!dbUser) return { error: "Invalid token", status: 401 };
 
   const isAdmin = dbUser.role === "ADMIN";
@@ -75,6 +79,7 @@ export async function requireGroupChatAccess(room: GroupRoom = "premium"): Promi
       phone: dbUser.phone,
       role: dbUser.role,
       blocked: !isAdmin && dbUser.groupChatBlocked === true,
+      nickname: isAdmin ? (dbUser.nickname || null) : null,
     },
   };
 }

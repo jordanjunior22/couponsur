@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
       phone: user.phone,
       role: user.role,
       unlockedPickIds: user.unlockedPickIds,
+      nickname: user.nickname ?? null,
       subscription: user.subscription,
       lastLoginAt: user.lastLoginAt,
     };

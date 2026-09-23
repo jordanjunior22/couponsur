@@ -36,6 +36,7 @@ interface LeanGroupMessage {
   user: Types.ObjectId;
   phone: string;
   role: GroupSender;
+  nickname: string | null;
   text: string;
   image: string | null;
   imageBytes: number;
@@ -57,6 +58,7 @@ function toClientMessage(msg: LeanGroupMessage, senderBlocked: boolean) {
     user: msg.user.toString(),
     phone: maskPhone(msg.phone),
     role: msg.role,
+    nickname: msg.nickname || null,
     senderBlocked,
     text: msg.text,
     image: msg.image,
@@ -66,6 +68,7 @@ function toClientMessage(msg: LeanGroupMessage, senderBlocked: boolean) {
           user: msg.replyTo.user.toString(),
           role: msg.replyTo.role,
           phone: maskPhone(msg.replyTo.phone),
+          nickname: msg.replyTo.nickname || null,
           text: msg.replyTo.text,
         }
       : null,
@@ -198,13 +201,14 @@ export async function POST(req: NextRequest) {
 
     let replyTo: IGroupReplyPreview | null = null;
     if (replyToId) {
-      const original = await GroupMessageModel.findById(replyToId).select("room user role phone text image");
+      const original = await GroupMessageModel.findById(replyToId).select("room user role phone nickname text image");
       if (original && (original.room ?? "premium") === room) {
         replyTo = {
           messageId: original._id,
           user: original.user,
           role: original.role,
           phone: original.phone,
+          nickname: original.nickname ?? null,
           text: original.text
             ? original.text.slice(0, REPLY_PREVIEW_LENGTH)
             : (original.image ? "📷 Image" : ""),
@@ -221,6 +225,7 @@ export async function POST(req: NextRequest) {
       user: access.user.userId,
       phone: access.user.phone,
       role: access.user.role,
+      nickname: access.user.nickname,
       text,
       image,
       imageBytes,

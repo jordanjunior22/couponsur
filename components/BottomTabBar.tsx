@@ -14,6 +14,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { useUnreadChatCounts, formatBadgeCount } from "@/hooks/useUnreadChat";
+import { useUnreadPostsCount } from "@/hooks/useUnreadPosts";
 
 // Same localStorage key the old ToolsHub FAB used for its "Nouveau" pill —
 // kept so a visitor who already dismissed it doesn't see it resurface here.
@@ -76,19 +77,20 @@ export function BottomTabBar() {
   const premiumEligible = !!user && (user.role === "ADMIN" || hasActiveSubscription()) && !!settings?.groupChatEnabled;
   const globalEligible = !!user && !!settings?.globalChatEnabled;
   const { total: unreadChatTotal, refresh: refreshUnread } = useUnreadChatCounts(premiumEligible, globalEligible);
+  const { count: unreadPostsCount, refresh: refreshUnreadPosts } = useUnreadPostsCount(showActus);
 
   // Re-check the moment the viewer navigates anywhere — in particular,
-  // leaving a chat room should clear its badge without waiting out the
-  // hook's own poll interval.
-  useEffect(() => { refreshUnread(); }, [pathname, refreshUnread]);
+  // leaving a chat room (or the Actus feed) should clear its badge without
+  // waiting out the hook's own poll interval.
+  useEffect(() => { refreshUnread(); refreshUnreadPosts(); }, [pathname, refreshUnread, refreshUnreadPosts]);
 
   // Order is deliberate, not alphabetical or "as features shipped" — it's
   // built around one goal: keep people coming back.
   //   1. Accueil — the anchor. Every tab bar needs a fixed "home", non-negotiable.
   //   2. Actus    — freshest content (new posts, shifting poll %, comments)
   //                 right after home, so "what's new" is the very next thing
-  //                 a visitor sees. No badge mechanism of its own, so it
-  //                 leans on early position instead to get noticed.
+  //                 a visitor sees. Carries a numbered badge (like Chat) for
+  //                 unseen posts, on top of its early position.
   //   3. Chat     — the single strongest return-visit driver an app can have
   //                 (real-time, unread badge) gets the bar's most reachable,
   //                 most-glanced-at slot: dead center.
@@ -103,7 +105,7 @@ export function BottomTabBar() {
   // so this bar can spend its five slots on things worth returning for.
   const tabs: Tab[] = [
     { href: "/", label: "Accueil", icon: PiHouseSimple, iconActive: PiHouseSimpleFill, exact: true },
-    ...(showActus ? [{ href: "/actus", label: "Actus", icon: PiMegaphone, iconActive: PiMegaphoneFill }] : []),
+    ...(showActus ? [{ href: "/actus", label: "Actus", icon: PiMegaphone, iconActive: PiMegaphoneFill, badgeCount: formatBadgeCount(unreadPostsCount) }] : []),
     ...(showChat ? [{ href: "/groupe", label: "Chat", icon: PiChatCircleDots, iconActive: PiChatCircleDotsFill, badgeCount: formatBadgeCount(unreadChatTotal) }] : []),
     // "Pronostic IA" — our branded name for the AI match-generation engine,
     // not a generic "Outils"/"AI Tools" label.

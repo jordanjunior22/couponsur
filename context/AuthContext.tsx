@@ -7,6 +7,9 @@ interface AuthUser {
   phone: string;
   role: "USER" | "ADMIN";
   unlockedPickIds: string[];
+  // Admin-only group chat display name — see AccountPanel's nickname
+  // editor and GroupChatRoom's senderLabel.
+  nickname?: string | null;
   subscription?: {
     status: "NONE" | "ACTIVE" | "EXPIRED";
     plan: "MONTHLY";
@@ -22,6 +25,7 @@ interface AuthContextType {
   signup: (phone: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  updateNickname: (nickname: string) => Promise<void>;
   unlockPick: (pickId: string) => Promise<void>;
   refreshUser: () => Promise<void>;
   hasActiveSubscription: () => boolean;
@@ -110,6 +114,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  const updateNickname = async (nickname: string) => {
+    const res = await fetch("/api/auth/nickname", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nickname }),
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+      throw new Error(data.message);
+    }
+
+    setUser(data.user);
+  };
+
   const unlockPick = async (pickId: string) => {
     if (!user) return;
 
@@ -139,7 +160,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signup, login, logout, changePassword, unlockPick, refreshUser, hasActiveSubscription }}>
+    <AuthContext.Provider value={{ user, loading, signup, login, logout, changePassword, updateNickname, unlockPick, refreshUser, hasActiveSubscription }}>
       {children}
     </AuthContext.Provider>
   );

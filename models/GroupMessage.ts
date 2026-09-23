@@ -10,6 +10,10 @@ export interface IGroupReplyPreview {
   user: Types.ObjectId; // lets the client color the quote the same as that sender's other messages
   role: GroupSender;
   phone: string; // full, unmasked — masked the same way as the parent message on the way out
+  // Snapshot of the original sender's admin nickname at reply time (see
+  // IGroupMessage.nickname below) — null for a USER sender or an admin
+  // with no nickname set, in which case the quote falls back to "Admin".
+  nickname: string | null;
   text: string; // truncated preview, see REPLY_PREVIEW_LENGTH below
 }
 
@@ -36,6 +40,11 @@ export interface IGroupMessage extends Document {
   // Snapshot of the sender's role at send time, so the UI can label a
   // message "Admin" even if that admin's role changes later.
   role: GroupSender;
+  // Snapshot of the sender's admin nickname at send time (see
+  // models/Users.ts) — same "denormalized so it survives later changes"
+  // reasoning as `role`/`phone`. Always null for a USER sender, or for an
+  // admin who hadn't set one yet when this was sent.
+  nickname: string | null;
   text: string;
   // A single attached image, stored inline as a data URI ("data:image/...")
   // — compressed/downscaled client-side before upload. This is a deliberate
@@ -61,6 +70,7 @@ const GroupReplyPreviewSchema = new Schema<IGroupReplyPreview>(
     user: { type: Schema.Types.ObjectId, required: true },
     role: { type: String, enum: ["USER", "ADMIN"], required: true },
     phone: { type: String, required: true },
+    nickname: { type: String, default: null },
     text: { type: String, required: true },
   },
   { _id: false }
@@ -75,6 +85,7 @@ const GroupMessageSchema = new Schema<IGroupMessage>(
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
     phone: { type: String, required: true },
     role: { type: String, enum: ["USER", "ADMIN"], required: true },
+    nickname: { type: String, default: null },
     // Not `required` — an image-only message (no caption) is valid; the
     // pre-validate hook below is what actually enforces "text or image".
     text: { type: String, default: "", trim: true, maxlength: 2000 },

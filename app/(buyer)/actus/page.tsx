@@ -5,6 +5,7 @@ import { PiMegaphoneFill } from "react-icons/pi";
 import { PostCard, type ClientPost } from "@/components/PostCard";
 import { InlineLoader } from "@/components/LoadingSpinner";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
+import { markActusRead } from "@/hooks/useUnreadPosts";
 
 // The "Actus" feed — admin-authored news + team-vs-team polls. Same
 // polling shape PremiumPicksPage already uses for /api/picks: fetch on
@@ -24,7 +25,7 @@ export default function ActusPage() {
       const res = await fetch("/api/posts");
       const data = await res.json();
       if (!isMountedRef.current) return;
-      if (data?.success) setPosts(data.data);
+      if (data?.success) { setPosts(data.data); markActusRead(); }
       else if (showSpinner) setError(data?.message || "Erreur inconnue");
     } catch (err) {
       if (showSpinner) setError(err instanceof Error ? err.message : "Erreur inconnue");

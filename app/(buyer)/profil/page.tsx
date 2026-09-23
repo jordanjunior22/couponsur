@@ -6,6 +6,7 @@ import {
   PiUserCircleFill, PiDeviceMobileFill, PiStarFill,
   PiWrenchFill, PiKeyFill, PiSignOutBold,
   PiDownloadSimpleBold, PiCheckCircleFill, PiShareFatBold,
+  PiTagFill,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { SubscribePayment } from "@/components/PremiumPicksPage";
@@ -180,6 +181,7 @@ function AccountPanel() {
   const isSubscribed = !!user && hasActiveSubscription();
   const [showSubscribe, setShowSubscribe] = useState(false);
   const [changePwOpen, setChangePwOpen] = useState(false);
+  const [nicknameOpen, setNicknameOpen] = useState(false);
 
   if (!user) return null;
 
@@ -208,6 +210,13 @@ function AccountPanel() {
           <Link href="/dashboard" style={menuItemStyle}>
             <span style={menuIconStyle}><PiWrenchFill size={15} /></span> Dashboard
           </Link>
+        )}
+
+        {user.role === "ADMIN" && (
+          <button style={menuItemStyle} onClick={() => setNicknameOpen(true)}>
+            <span style={menuIconStyle}><PiTagFill size={15} /></span>
+            Pseudo dans le chat{user.nickname ? ` — ${user.nickname}` : ""}
+          </button>
         )}
 
         <button style={menuItemStyle} onClick={() => setShowSubscribe(true)}>
@@ -239,7 +248,72 @@ function AccountPanel() {
           changePassword={changePassword}
         />
       )}
+
+      {nicknameOpen && (
+        <NicknameSheet onClose={() => setNicknameOpen(false)} />
+      )}
     </>
+  );
+}
+
+// ─── SIGNED-IN, ADMIN ONLY: GROUP CHAT NICKNAME ────────────────────────────
+// Lets an admin pick the name their group chat messages show instead of the
+// generic "Admin" — see GroupChatRoom's senderLabel, which falls back to
+// "Admin" whenever this is left blank.
+function NicknameSheet({ onClose }: { onClose: () => void }) {
+  const { user, updateNickname } = useAuth();
+  const [value, setValue] = useState(user?.nickname || "");
+  const [loading, setLoading] = useState(false);
+  const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const handleSubmit = async () => {
+    try {
+      setLoading(true);
+      setFeedback(null);
+      await updateNickname(value.trim());
+      setFeedback({ text: "Pseudo mis à jour !", ok: true });
+      setTimeout(onClose, 900);
+    } catch (error: any) {
+      setFeedback({ text: error.message, ok: false });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div onClick={(e) => e.target === e.currentTarget && onClose()} style={sheetOverlayStyle}>
+      <div style={sheetStyle}>
+        <div style={sheetHandleStyle} />
+        <button onClick={onClose} style={sheetCloseStyle}>✕</button>
+
+        <div style={{ ...headingStyle, display: "flex", alignItems: "center", gap: 8 }}>Pseudo dans le chat <PiTagFill size={16} /></div>
+        <div style={subheadingStyle}>
+          Affiché à la place de &quot;Admin&quot; sur vos messages dans les groupes de chat. Laissez vide pour revenir à &quot;Admin&quot;.
+        </div>
+
+        <label style={labelStyle}>Pseudo</label>
+        <div style={inputWrapStyle}>
+          <input
+            type="text"
+            placeholder="Ex : Admin Junior"
+            value={value}
+            maxLength={40}
+            onChange={(e) => { setValue(e.target.value); setFeedback(null); }}
+            style={fieldStyle}
+          />
+        </div>
+
+        {feedback && (
+          <div style={{ ...feedbackStyle, background: feedback.ok ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", borderColor: feedback.ok ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)", color: feedback.ok ? "#4ade80" : "#f87171" }}>
+            {feedback.ok ? "✅" : "⚠️"} {feedback.text}
+          </div>
+        )}
+
+        <button disabled={loading} onClick={handleSubmit} style={{ ...submitBtnStyle, opacity: loading ? 0.65 : 1, cursor: loading ? "not-allowed" : "pointer" }}>
+          {loading ? "Chargement..." : "Enregistrer"}
+        </button>
+      </div>
+    </div>
   );
 }
 
