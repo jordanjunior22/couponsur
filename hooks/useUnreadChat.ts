@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import type { GroupRoom } from "@/models/GroupMessage";
 
@@ -21,7 +21,15 @@ function getLastRead(userId: string, room: GroupRoom): string | null {
   try { return localStorage.getItem(lastReadKey(userId, room)); } catch { return null; }
 }
 
-const POLL_MS = 45000;
+const POLL_MS = 90000;
+// Below this gap since the last fetch, a refresh() call is a no-op — this
+// is what keeps BottomTabBar's own per-navigation refresh (it calls
+// refresh() on every pathname change, so the badge clears promptly after
+// leaving a room) from stacking with the interval poll above and doubling
+// request volume for anyone clicking through pages quickly. Short enough
+// that a genuine "just left the chat" refresh still goes through almost
+// every time.
+const MIN_REFRESH_GAP_MS = 15000;
 
 // Unread counts for the two chat rooms — used by BottomTabBar (one summed
 // badge on the Chat tab) and the /groupe room picker (one badge per
@@ -32,9 +40,13 @@ export function useUnreadChatCounts(premiumEligible: boolean, globalEligible: bo
   const { user } = useAuth();
   const [premium, setPremium] = useState(0);
   const [global, setGlobal] = useState(0);
+  const lastFetchRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!user) { setPremium(0); setGlobal(0); return; }
+    const now = Date.now();
+    if (now - lastFetchRef.current < MIN_REFRESH_GAP_MS) return;
+    lastFetchRef.current = now;
 
     const fetchOne = async (room: GroupRoom): Promise<number> => {
       try {

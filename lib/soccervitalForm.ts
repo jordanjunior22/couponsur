@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as cheerio from "cheerio";
+import { getCached, setCached } from "@/utils/scrapeCache";
 
 export interface TeamForm {
   played: number;
@@ -51,7 +52,17 @@ interface LeagueCacheEntry {
    *  page (not just the last-5-per-team window) — the normalization base
    *  for the goals model's attack/defense strength ratios. */
   avgGoalsPerMatch: number;
-  ts: number;
+}
+
+// Storage-layer shape of LeagueCacheEntry — `form` has to be a plain
+// object here (not a Map) since that's what actually round-trips through
+// JSON/BSON in utils/scrapeCache.ts's Mongo-backed cache. Converted at
+// the getLeagueData boundary; every in-process consumer still deals in
+// the real Map (LeagueCacheEntry above).
+interface StoredLeagueCache {
+  results: RawResult[];
+  form: Record<string, TeamForm>;
+  avgGoalsPerMatch: number;
 }
 
 // Fallback when a league has no scraped results yet (empty page, blocked
@@ -59,7 +70,6 @@ interface LeagueCacheEntry {
 // "roughly average" instead of dividing by zero or producing garbage.
 const DEFAULT_AVG_GOALS_PER_MATCH = 2.6;
 
-const _cache: Map<string, LeagueCacheEntry> = new Map();
 const CACHE_TTL = 3 * 60 * 60 * 1000; // 3 hours
 
 // Tolerance window (in days) when matching a stored match date against a
@@ -146,7 +156,6 @@ async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry
     results: [],
     form: new Map(),
     avgGoalsPerMatch: DEFAULT_AVG_GOALS_PER_MATCH,
-    ts: Date.now(),
   };
 
   try {
@@ -248,7 +257,7 @@ async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry
       ? results.reduce((sum, r) => sum + r.homeGoals + r.awayGoals, 0) / results.length
       : DEFAULT_AVG_GOALS_PER_MATCH;
 
-    return { results, form, avgGoalsPerMatch, ts: Date.now() };
+    return { results, form, avgGoalsPerMatch };
   } catch (e) {
     console.warn(`SoccerVital league scrape failed for "${leagueName}":`, e);
     return empty;
@@ -257,11 +266,15 @@ async function fetchAndParseLeague(leagueName: string): Promise<LeagueCacheEntry
 
 async function getLeagueData(leagueName: string): Promise<LeagueCacheEntry> {
   const slug = slugifyLeague(leagueName);
-  const cached = _cache.get(slug);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached;
+  const cacheKey = `svleague:${slug}`;
+
+  const cached = await getCached<StoredLeagueCache>(cacheKey);
+  if (cached) {
+    return { results: cached.results, form: new Map(Object.entries(cached.form)), avgGoalsPerMatch: cached.avgGoalsPerMatch };
+  }
 
   const fresh = await fetchAndParseLeague(leagueName);
-  _cache.set(slug, fresh);
+  await setCached(cacheKey, { results: fresh.results, form: Object.fromEntries(fresh.form), avgGoalsPerMatch: fresh.avgGoalsPerMatch }, CACHE_TTL);
   return fresh;
 }
 

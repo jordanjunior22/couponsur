@@ -21,7 +21,12 @@ export async function GET(req: NextRequest) {
         if (outcome) query.outcome = outcome;
         if (published) query.is_published = published === "true";
 
-        const picks = await Pick.find(query).sort({ match_date: -1 });
+        // .lean() — this is polled every 60s by the buyer homepage
+        // (PremiumPicksPage) for every visitor; without it, Mongoose
+        // hydrates a full Document (getters, casters, change-tracking) per
+        // pick on every single call instead of a plain JS object, which is
+        // pure CPU-bound overhead this route (a read-only list) never needs.
+        const picks = await Pick.find(query).sort({ match_date: -1 }).lean();
 
         return NextResponse.json(
             { success: true, data: picks },

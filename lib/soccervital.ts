@@ -27,6 +27,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as cheerio from "cheerio";
+import { getCached, setCached } from "@/utils/scrapeCache";
 
 export interface SoccerVitalPrediction {
   home:   string;
@@ -40,16 +41,12 @@ export interface SoccerVitalPrediction {
   time:   string;        // raw kickoff time as scraped, e.g. "15:00"
 }
 
-interface CacheEntry {
-  data: SoccerVitalPrediction[];
-  ts: number;
-}
-
-// Cache is now keyed per requested date string, since we can (and do, via
-// the admin import modal vs. the cron) request different days in the same
+// Cache is keyed per requested date string, since we can (and do, via the
+// admin import modal vs. the cron) request different days in the same
 // process lifetime. A single shared cache keyed by nothing would silently
-// return one day's data for a request meant for another.
-const _cache: Map<string, CacheEntry> = new Map();
+// return one day's data for a request meant for another. Backed by
+// utils/scrapeCache.ts (shared across serverless instances) rather than a
+// plain in-memory Map — see that file for why.
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 /** Formats a Date as SoccerVital's expected DD-MM-YYYY query param. */
@@ -82,10 +79,10 @@ export async function getSoccerVitalPredictions(
   targetDate: Date = getTodayWAT()
 ): Promise<SoccerVitalPrediction[]> {
   const dateParam = formatDateParam(targetDate);
-  const cacheKey = dateParam;
+  const cacheKey = `svpredictions:${dateParam}`;
 
-  const cached = _cache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+  const cached = await getCached<SoccerVitalPrediction[]>(cacheKey);
+  if (cached) return cached;
 
   try {
     const url = `https://www.soccervital.com/soccer-games/?date=${dateParam}`;
@@ -137,7 +134,7 @@ export async function getSoccerVitalPredictions(
       predictions.push({ home, away, tip, goals, league: currentLeague, odd1, oddX, odd2, time });
     });
 
-    _cache.set(cacheKey, { data: predictions, ts: Date.now() });
+    await setCached(cacheKey, predictions, CACHE_TTL);
     return predictions;
   } catch (e) {
     console.warn(`SoccerVital scrape failed for date ${dateParam}:`, e);

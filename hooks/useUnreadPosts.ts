@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // Same per-device "last read" convention as hooks/useUnreadChat.ts, but not
 // scoped to a userId — the Actus feed is public (no login required to view
@@ -18,16 +18,25 @@ function getLastRead(): string | null {
   try { return localStorage.getItem(LAST_READ_KEY); } catch { return null; }
 }
 
-const POLL_MS = 60000;
+const POLL_MS = 90000;
+// See hooks/useUnreadChat.ts's identical constant — same reasoning: caps
+// how often BottomTabBar's per-navigation refresh() call (fired on every
+// pathname change, on top of the interval below) can actually hit the
+// network.
+const MIN_REFRESH_GAP_MS = 15000;
 
 // Unread count for the Actus tab's badge — enabled is passed in so a
 // viewer whose admin has the news feed switched off never fires a request
 // that would just come back empty.
 export function useUnreadPostsCount(enabled: boolean) {
   const [count, setCount] = useState(0);
+  const lastFetchRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!enabled) { setCount(0); return; }
+    const now = Date.now();
+    if (now - lastFetchRef.current < MIN_REFRESH_GAP_MS) return;
+    lastFetchRef.current = now;
     try {
       const since = getLastRead();
       const params = new URLSearchParams();
