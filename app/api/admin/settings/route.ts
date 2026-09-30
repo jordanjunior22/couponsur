@@ -47,6 +47,9 @@ export async function PUT(req: NextRequest) {
       newsFeedEnabled,
       dbStorageLimitMb,
       vercelSyncEnabled,
+      defaultSubscriptionSharePercent,
+      defaultPickSharePercent,
+      payoutOperatorFeePercent,
     } = body;
 
     const update: Record<string, unknown> = {};
@@ -196,6 +199,36 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.vercelSyncEnabled = vercelSyncEnabled;
+    }
+
+    if (defaultSubscriptionSharePercent !== undefined) {
+      if (typeof defaultSubscriptionSharePercent !== "number" || defaultSubscriptionSharePercent < 0 || defaultSubscriptionSharePercent > 100) {
+        return NextResponse.json(
+          { success: false, message: "defaultSubscriptionSharePercent must be a number between 0 and 100" },
+          { status: 400 }
+        );
+      }
+      update.defaultSubscriptionSharePercent = defaultSubscriptionSharePercent;
+    }
+
+    if (defaultPickSharePercent !== undefined) {
+      if (typeof defaultPickSharePercent !== "number" || defaultPickSharePercent < 0 || defaultPickSharePercent > 100) {
+        return NextResponse.json(
+          { success: false, message: "defaultPickSharePercent must be a number between 0 and 100" },
+          { status: 400 }
+        );
+      }
+      update.defaultPickSharePercent = defaultPickSharePercent;
+    }
+
+    if (payoutOperatorFeePercent !== undefined) {
+      if (typeof payoutOperatorFeePercent !== "number" || payoutOperatorFeePercent < 0 || payoutOperatorFeePercent > 100) {
+        return NextResponse.json(
+          { success: false, message: "payoutOperatorFeePercent must be a number between 0 and 100" },
+          { status: 400 }
+        );
+      }
+      update.payoutOperatorFeePercent = payoutOperatorFeePercent;
     }
 
     if (Object.keys(update).length === 0) {

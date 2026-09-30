@@ -23,6 +23,23 @@ interface FapshiWebhookBody {
 }
 
 export async function POST(req: NextRequest) {
+  // ── x-wh-secret verification ─────────────────────────────────────────────
+  // Graceful for now: if FAPSHI_WEBHOOK_SECRET isn't configured yet, warn
+  // and proceed rather than breaking every buyer payment the moment this
+  // ships — tighten to a hard requirement once the secret's confirmed set
+  // on the Fapshi dashboard for this service. A set-but-wrong secret is
+  // always rejected outright, same as the payout webhook.
+  const expectedSecret = process.env.FAPSHI_WEBHOOK_SECRET;
+  if (expectedSecret) {
+    const secret = req.headers.get("x-wh-secret");
+    if (secret !== expectedSecret) {
+      console.warn("Webhook: x-wh-secret mismatch — rejecting");
+      return NextResponse.json({ received: true }, { status: 401 });
+    }
+  } else {
+    console.warn("Webhook: FAPSHI_WEBHOOK_SECRET not configured — accepting unverified");
+  }
+
   let body: FapshiWebhookBody;
   try {
     body = await req.json();

@@ -248,6 +248,20 @@ const Icons = {
       <circle cx="4.3" cy="12.25" r="0.7" fill="currentColor" />
     </svg>
   ),
+  wallet: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <rect x="1.5" y="3.5" width="13" height="9.5" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M1.5 6.5h13" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="11.3" cy="9.5" r="1" fill="currentColor" />
+    </svg>
+  ),
+  admins: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="M8 1.5L2.5 4v4c0 3.3 2.35 6.4 5.5 7.2 3.15-.8 5.5-3.9 5.5-7.2V4L8 1.5z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="8" cy="7" r="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.3 10.8c.6-1.1 1.6-1.7 2.7-1.7s2.1.6 2.7 1.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 // ─── Colors ────────────────────────────────────────────────────────────────────
@@ -2419,6 +2433,671 @@ function TransactionsTab() {
   );
 }
 
+// ─── Shares Tab (any admin — their own earnings + payout requests) ─────────────
+interface AdminEarningsData {
+  subscriptionEarnings: number;
+  pickEarnings: number;
+  totalEarned: number;
+  reserved: number;
+  availableBalance: number;
+  effectiveFrom: string | null;
+}
+interface ApiPayout {
+  _id: string;
+  amount: number;
+  status: "REQUESTED" | "PROCESSING" | "PAID" | "REJECTED" | "FAILED";
+  note?: string | null;
+  // Only set once PAID — the operator's cut, only known after Fapshi
+  // confirms the transfer (see models/Payout.ts).
+  operatorFee?: number | null;
+  netAmount?: number | null;
+  createdAt: string;
+  decidedAt?: string | null;
+}
+
+const PAYOUT_STATUS_LABEL: Record<ApiPayout["status"], { label: string; color: string }> = {
+  REQUESTED: { label: "En attente", color: C.gold },
+  PROCESSING: { label: "En cours", color: C.blue },
+  PAID: { label: "Payé", color: C.green },
+  REJECTED: { label: "Refusé", color: C.red },
+  FAILED: { label: "Échoué", color: C.red },
+};
+
+function PayoutStatusBadge({ status }: { status: ApiPayout["status"] }) {
+  const { label, color } = PAYOUT_STATUS_LABEL[status];
+  return (
+    <span style={{ background: `${color}1F`, color, border: `1px solid ${color}40`, fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, letterSpacing: "1px", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+      {label}
+    </span>
+  );
+}
+
+interface EarningsDayPoint {
+  date: string;
+  subscriptionEarnings: number;
+  pickEarnings: number;
+  total: number;
+}
+interface AdminEarningsReport {
+  subscriptionEarnings: number;
+  pickEarnings: number;
+  totalEarned: number;
+  trend: EarningsDayPoint[];
+}
+
+function SharesTab() {
+  const [earnings, setEarnings] = useState<AdminEarningsData | null>(null);
+  const [payouts, setPayouts] = useState<ApiPayout[]>([]);
+  const [report, setReport] = useState<AdminEarningsReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [requestOpen, setRequestOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [requesting, setRequesting] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+
+  // Period filter for the trend chart below — never affects the balance
+  // cards/payout eligibility above, those always stay all-time (see
+  // lib/adminEarnings.ts's getAdminEarnings vs getAdminEarningsReport).
+  const today = new Date().toISOString().split("T")[0];
+  const thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+  const [dateFrom, setDateFrom] = useState(thirtyAgo);
+  const [dateTo, setDateTo] = useState(today);
+
+  const hasLoadedOnce = useRef(false);
+
+  const load = async () => {
+    const isFirstLoad = !hasLoadedOnce.current;
+    try {
+      if (isFirstLoad) setLoading(true); else setReportLoading(true);
+      setError(null);
+      const params = new URLSearchParams({ dateFrom, dateTo });
+      const res = await fetch(`/api/admin/shares/me?${params.toString()}`, { credentials: "include" });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec du chargement");
+      setEarnings(data.data.earnings);
+      setPayouts(data.data.payouts || []);
+      setReport(data.data.report || null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      hasLoadedOnce.current = true;
+      if (isFirstLoad) setLoading(false); else setReportLoading(false);
+    }
+  };
+
+  // Fires on mount, then again on every date-range change — the server
+  // ignores dateFrom/dateTo for `earnings`/`payouts` (always all-time), so
+  // this only ever actually changes `report`.
+  useEffect(() => { load(); }, [dateFrom, dateTo]);
+
+  const openRequestForm = () => {
+    setAmount(earnings ? String(earnings.availableBalance) : "");
+    setRequestError(null);
+    setRequestOpen(true);
+  };
+
+  const handleRequest = async () => {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) {
+      setRequestError("Montant invalide");
+      return;
+    }
+    setRequesting(true);
+    setRequestError(null);
+    try {
+      const res = await fetch("/api/admin/payouts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: n }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec de la demande");
+      setRequestOpen(false);
+      setAmount("");
+      await load();
+    } catch (e) {
+      setRequestError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setRequesting(false);
+    }
+  };
+
+  const formatDateTime = (d: string) =>
+    new Date(d).toLocaleString("fr-FR", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  if (loading) {
+    return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ fontSize: 12, padding: "10px 12px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.red }}>
+        {error}
+      </div>
+    );
+  }
+
+  if (!earnings) return null;
+
+  const noSharesYet = !earnings.effectiveFrom;
+
+  return (
+    <div>
+      {noSharesYet ? (
+        <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, fontSize: 13, color: C.muted, marginBottom: 20 }}>
+          Aucune répartition de revenus n&apos;a encore été configurée pour ton compte — contacte le super administrateur.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10, color: C.muted, letterSpacing: "1.5px", textTransform: "uppercase", fontWeight: 600 }}>Période</span>
+            <input type="date" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 12, padding: "8px 12px", fontFamily: "inherit", outline: "none" }} value={dateFrom} max={dateTo} onChange={(e) => setDateFrom(e.target.value)} />
+            <span style={{ color: C.muted, fontSize: 12 }}>→</span>
+            <input type="date" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 12, padding: "8px 12px", fontFamily: "inherit", outline: "none" }} value={dateTo} min={dateFrom} max={today} onChange={(e) => setDateTo(e.target.value)} />
+            {[{ label: "7J", days: 7 }, { label: "30J", days: 30 }, { label: "90J", days: 90 }].map(({ label, days }) => (
+              <button key={label} onClick={() => { setDateTo(today); setDateFrom(new Date(Date.now() - days * 86400000).toISOString().split("T")[0]); }}
+                style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, fontSize: 10, letterSpacing: "1px", fontWeight: 600, padding: "6px 10px", cursor: "pointer", fontFamily: "inherit" }}>
+                {label}
+              </button>
+            ))}
+            {reportLoading && <Spinner size={16} />}
+          </div>
+
+          {/* First 3 cards move with the period filter above; "Disponible"
+              deliberately doesn't — it's the real withdrawable balance
+              (lib/adminEarnings.ts's getAdminEarnings, always all-time
+              since the share was set up), never the period total, so it
+              can't be mistaken for "what I can request this week". */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 8, opacity: reportLoading ? 0.6 : 1 }}>
+            <StatCard label="Abonnements" value={formatCFA(report?.subscriptionEarnings ?? 0)} />
+            <StatCard label="Picks créés" value={formatCFA(report?.pickEarnings ?? 0)} />
+            <StatCard label="Total gagné" value={formatCFA(report?.totalEarned ?? 0)} />
+            <StatCard label="Disponible" value={formatCFA(earnings.availableBalance)} accent />
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 20 }}>
+            Les 3 premiers chiffres suivent la période sélectionnée ci-dessus — &quot;Disponible&quot; reste toujours le solde total, quelle que soit la période.
+          </div>
+
+          <div style={{ marginBottom: 24 }}>
+            {requestOpen ? (
+              <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", maxWidth: 360 }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
+                  Solde disponible : <span style={{ color: C.gold }}>{formatCFA(earnings.availableBalance)}</span>
+                </div>
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="Montant (XAF)"
+                  style={{ width: "100%", background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 12, padding: "8px 10px", fontFamily: "inherit", outline: "none", marginBottom: 8, boxSizing: "border-box" }}
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => setRequestOpen(false)} style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+                    Annuler
+                  </button>
+                  <button onClick={handleRequest} disabled={requesting} style={{ flex: 1, background: C.gold, border: "none", color: C.dark, borderRadius: 6, padding: "8px", fontSize: 11, fontWeight: 700, cursor: requesting ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: requesting ? 0.6 : 1 }}>
+                    {requesting ? "…" : "Demander"}
+                  </button>
+                </div>
+                {requestError && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{requestError}</div>}
+              </div>
+            ) : (
+              <button
+                onClick={openRequestForm}
+                disabled={earnings.availableBalance <= 0}
+                style={{ background: earnings.availableBalance > 0 ? C.gold : C.dark4, border: "none", color: earnings.availableBalance > 0 ? C.dark : C.muted, borderRadius: 8, padding: "11px 20px", fontSize: 12, fontWeight: 700, cursor: earnings.availableBalance > 0 ? "pointer" : "not-allowed", fontFamily: "inherit", letterSpacing: "0.5px" }}
+              >
+                Demander un paiement
+              </button>
+            )}
+          </div>
+
+          {report && (
+            <>
+              <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", marginBottom: 24, opacity: reportLoading ? 0.6 : 1 }}>
+                <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+                  Tendance des revenus
+                </div>
+                {report.trend.length === 0 ? (
+                  <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun revenu sur cette période.</div>
+                ) : (
+                  <LineChart
+                    data={report.trend.map((d) => ({
+                      label: new Date(d.date + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" }),
+                      value: d.total,
+                    }))}
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
+        Historique des paiements
+      </div>
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+        {payouts.length === 0 && <div style={{ padding: "32px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucune demande pour l&apos;instant.</div>}
+        {payouts.map((p, i) => (
+          <div key={p._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderBottom: i < payouts.length - 1 ? `1px solid ${C.border}` : "none", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{formatCFA(p.amount)}</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{formatDateTime(p.createdAt)}{p.note ? ` — ${p.note}` : ""}</div>
+              {(p.status === "PROCESSING" || p.status === "PAID") && !!p.operatorFee && (
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                  Frais de transaction opérateur : <span style={{ color: C.red }}>-{formatCFA(p.operatorFee)}</span>
+                  {" "}— {p.status === "PAID" ? "net reçu" : "net envoyé"} : <span style={{ color: C.green }}>{formatCFA(p.netAmount ?? p.amount)}</span>
+                </div>
+              )}
+            </div>
+            <PayoutStatusBadge status={p.status} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Admins Tab (super admin only) ──────────────────────────────────────────────
+interface ApiAdminUser {
+  _id: string;
+  phone: string;
+  nickname?: string | null;
+  role: "USER" | "ADMIN";
+  isSuperAdmin?: boolean;
+  revenueShare: { subscriptionPercent: number; pickPercent: number; effectiveFrom: string | null };
+}
+interface ApiPendingPayout extends ApiPayout {
+  adminId: { _id: string; phone: string; nickname?: string | null } | string;
+}
+
+function CreateAdminModal({ onSave, onClose, defaultShares }: { onSave: () => void; onClose: () => void; defaultShares: { sub: number; pick: number } }) {
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [subPercent, setSubPercent] = useState(String(defaultShares.sub));
+  const [pickPercent, setPickPercent] = useState(String(defaultShares.pick));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/admins", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone,
+          password,
+          subscriptionSharePercent: Number(subPercent),
+          pickSharePercent: Number(pickPercent),
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec de la création");
+      onSave();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Échec de la création");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const iStyle: React.CSSProperties = {
+    background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8,
+    color: C.text, fontSize: 13, padding: "10px 12px", width: "100%",
+    fontFamily: "inherit", outline: "none",
+  };
+  const lStyle: React.CSSProperties = {
+    fontSize: 10, letterSpacing: "1.5px", color: C.muted,
+    textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6,
+  };
+
+  const valid = phone.trim().length > 0 && password.length >= 4;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, backdropFilter: "blur(4px)" }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: 16, width: "100%", maxWidth: 420, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1 }}>
+            Créer un administrateur
+          </div>
+          <button onClick={onClose} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted }}>
+            <Icons.close />
+          </button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={lStyle}>Téléphone</label>
+            <input style={iStyle} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="6XX XXX XXX" />
+          </div>
+          <div>
+            <label style={lStyle}>Mot de passe</label>
+            <input style={iStyle} type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min. 4 caractères" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={lStyle}>% Abonnements</label>
+              <input style={iStyle} type="number" min={0} max={100} value={subPercent} onChange={(e) => setSubPercent(e.target.value)} />
+            </div>
+            <div>
+              <label style={lStyle}>% Picks créés</label>
+              <input style={iStyle} type="number" min={0} max={100} value={pickPercent} onChange={(e) => setPickPercent(e.target.value)} />
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
+            L&apos;administrateur touchera ce pourcentage sur les abonnements vendus, et ce pourcentage sur les picks qu&apos;il crée lui-même. Modifiable à tout moment ensuite.
+          </div>
+
+          {error && (
+            <div style={{ fontSize: 12, padding: "8px 12px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.red }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, paddingTop: 6 }}>
+            <button onClick={onClose} style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: "12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              Annuler
+            </button>
+            <button onClick={handleSave} disabled={saving || !valid} style={{ flex: 2, background: saving ? C.goldDark : C.gold, border: "none", color: C.dark, borderRadius: 8, padding: "12px", fontSize: 12, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", letterSpacing: "1px", opacity: !valid ? 0.5 : 1 }}>
+              {saving ? "Création…" : "Créer"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminShareRow({ admin, earnings, onSaved }: { admin: ApiAdminUser; earnings: AdminEarningsData | null; onSaved: (u: ApiAdminUser) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [subPercent, setSubPercent] = useState(String(admin.revenueShare?.subscriptionPercent ?? 0));
+  const [pickPercent, setPickPercent] = useState(String(admin.revenueShare?.pickPercent ?? 0));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${admin._id}/set-revenue-share`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscriptionSharePercent: Number(subPercent), pickSharePercent: Number(pickPercent) }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec de la mise à jour");
+      onSaved(data.data);
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Échec de la mise à jour");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{admin.nickname || admin.phone}</div>
+          <div style={{ fontSize: 11, color: C.muted }}>{admin.phone}</div>
+        </div>
+        {earnings && (
+          <div style={{ display: "flex", gap: 16 }}>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 9, letterSpacing: "1px", color: C.muted, textTransform: "uppercase" }}>Total gagné</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{formatCFA(earnings.totalEarned)}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 9, letterSpacing: "1px", color: C.muted, textTransform: "uppercase" }}>Disponible</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.gold }}>{formatCFA(earnings.availableBalance)}</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {editing ? (
+        <div style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 }}>
+            <div>
+              <label style={{ fontSize: 10, color: C.muted, display: "block", marginBottom: 4 }}>% Abonnements</label>
+              <input type="number" min={0} max={100} value={subPercent} onChange={(e) => setSubPercent(e.target.value)}
+                style={{ width: "100%", background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 12, padding: "6px 10px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: C.muted, display: "block", marginBottom: 4 }}>% Picks créés</label>
+              <input type="number" min={0} max={100} value={pickPercent} onChange={(e) => setPickPercent(e.target.value)}
+                style={{ width: "100%", background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 12, padding: "6px 10px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setEditing(false)} style={{ flex: 1, background: C.dark3, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+              Annuler
+            </button>
+            <button onClick={handleSave} disabled={saving} style={{ flex: 1, background: C.gold, border: "none", color: C.dark, borderRadius: 6, padding: "8px", fontSize: 11, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.6 : 1 }}>
+              {saving ? "…" : "Confirmer"}
+            </button>
+          </div>
+          {error && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{error}</div>}
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 12, color: C.muted }}>
+            <span style={{ color: C.text, fontWeight: 600 }}>{admin.revenueShare?.subscriptionPercent ?? 0}%</span> abonnements · <span style={{ color: C.text, fontWeight: 600 }}>{admin.revenueShare?.pickPercent ?? 0}%</span> picks créés
+          </div>
+          <button onClick={() => setEditing(true)} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+            Modifier
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PendingPayoutRow({ payout, onUpdated }: { payout: ApiPendingPayout; onUpdated: (p: ApiPendingPayout) => void }) {
+  const [deciding, setDeciding] = useState<"DISBURSE" | "REJECTED" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const adminPhone = typeof payout.adminId === "object" ? (payout.adminId.nickname || payout.adminId.phone) : payout.adminId;
+
+  const decide = async (action: "DISBURSE" | "REJECTED") => {
+    setDeciding(action);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/payouts/${payout._id}/decide`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec");
+      // REJECTED and PROCESSING both come back as the updated payout doc —
+      // the parent decides whether that's still "pending" or drops out.
+      onUpdated({ ...payout, ...data.data, adminId: payout.adminId });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Échec");
+    } finally {
+      setDeciding(null);
+    }
+  };
+
+  const formatDateTime = (d: string) =>
+    new Date(d).toLocaleString("fr-FR", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const retriable = payout.status === "REQUESTED" || payout.status === "FAILED";
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{adminPhone} — {formatCFA(payout.amount)}</div>
+            <PayoutStatusBadge status={payout.status} />
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+            Demandé le {formatDateTime(payout.createdAt)}
+            {payout.status === "FAILED" && " — le transfert Fapshi a échoué, tu peux réessayer"}
+          </div>
+          {payout.status === "PROCESSING" && !!payout.operatorFee && (
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+              Frais opérateur : <span style={{ color: C.red }}>-{formatCFA(payout.operatorFee)}</span>
+              {" "}— net envoyé : <span style={{ color: C.gold }}>{formatCFA(payout.netAmount ?? payout.amount)}</span>
+            </div>
+          )}
+        </div>
+        {payout.status === "PROCESSING" ? (
+          <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>Transfert en cours via Fapshi…</div>
+        ) : retriable ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => decide("REJECTED")} disabled={!!deciding} style={{ background: "none", border: `1px solid ${C.red}66`, color: C.red, borderRadius: 6, padding: "7px 14px", fontSize: 11, fontWeight: 600, cursor: deciding ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deciding ? 0.5 : 1 }}>
+              {deciding === "REJECTED" ? "…" : "Refuser"}
+            </button>
+            <button onClick={() => decide("DISBURSE")} disabled={!!deciding} style={{ background: C.green, border: "none", color: C.dark, borderRadius: 6, padding: "7px 14px", fontSize: 11, fontWeight: 700, cursor: deciding ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deciding ? 0.5 : 1 }}>
+              {deciding === "DISBURSE" ? "…" : "Payer via Fapshi"}
+            </button>
+          </div>
+        ) : null}
+      </div>
+      {error && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
+function AdminsTab() {
+  const [admins, setAdmins] = useState<{ admin: ApiAdminUser; earnings: AdminEarningsData | null }[]>([]);
+  const [pendingPayouts, setPendingPayouts] = useState<ApiPendingPayout[]>([]);
+  const [fapshiBalance, setFapshiBalance] = useState<{ balance: number; currency: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [defaultShares, setDefaultShares] = useState({ sub: 30, pick: 100 });
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await fetch("/api/admin/shares", { credentials: "include" });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec du chargement");
+      setAdmins(data.data.admins || []);
+      setPendingPayouts(data.data.pendingPayouts || []);
+      setFapshiBalance(data.data.fapshiBalance ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) {
+          setDefaultShares({
+            sub: data.data.defaultSubscriptionSharePercent ?? 30,
+            pick: data.data.defaultPickSharePercent ?? 100,
+          });
+        }
+      } catch { /* fall back to hardcoded defaults */ }
+    })();
+  }, []);
+
+  if (loading) {
+    return <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}><Spinner /></div>;
+  }
+
+  return (
+    <div>
+      {error && (
+        <div style={{ fontSize: 12, padding: "10px 12px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.red, marginBottom: 16 }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+        <div style={{ fontSize: 12, color: C.muted }}>
+          Solde Fapshi (paiements) :{" "}
+          {fapshiBalance ? (
+            <span style={{ color: C.gold, fontWeight: 700 }}>{formatCFA(fapshiBalance.balance)}</span>
+          ) : (
+            <span style={{ color: C.muted }}>indisponible</span>
+          )}
+        </div>
+        <button onClick={load} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+          Actualiser
+        </button>
+      </div>
+
+      {pendingPayouts.length > 0 && (
+        <div style={{ marginBottom: 28 }}>
+          <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
+            Demandes de paiement ({pendingPayouts.length})
+          </div>
+          {pendingPayouts.map((p) => (
+            <PendingPayoutRow
+              key={p._id}
+              payout={p}
+              onUpdated={(updated) =>
+                setPendingPayouts((cur) =>
+                  updated.status === "REJECTED"
+                    ? cur.filter((x) => x._id !== updated._id)
+                    : cur.map((x) => (x._id === updated._id ? updated : x))
+                )
+              }
+            />
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+          Administrateurs ({admins.length})
+        </div>
+        <button onClick={() => setShowCreate(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: C.gold, border: "none", color: C.dark, borderRadius: 8, padding: "9px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+          <Icons.plus />Créer un administrateur
+        </button>
+      </div>
+
+      {admins.length === 0 && (
+        <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>
+          Aucun autre administrateur pour l&apos;instant.
+        </div>
+      )}
+      {admins.map(({ admin, earnings }) => (
+        <AdminShareRow
+          key={admin._id}
+          admin={admin}
+          earnings={earnings}
+          onSaved={(updated) => setAdmins((cur) => cur.map((a) => (a.admin._id === updated._id ? { ...a, admin: updated } : a)))}
+        />
+      ))}
+
+      {showCreate && (
+        <CreateAdminModal
+          defaultShares={defaultShares}
+          onClose={() => setShowCreate(false)}
+          onSave={() => { setShowCreate(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Overview Tab ───────────────────────────────────────────────────────────────
 function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   // Win rate is computed over decided (WIN/LOSS) picks only — a REFUNDED
@@ -2552,6 +3231,13 @@ function SettingsTab() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
+  // ── Payout operator fee — withheld from admin payouts before they're
+  //    sent via Fapshi (see app/api/admin/payouts/[id]/decide) ────────────
+  const [feePercent, setFeePercent] = useState<number | null>(null);
+  const [feeInputValue, setFeeInputValue] = useState("");
+  const [feeSaving, setFeeSaving] = useState(false);
+  const [feeSaveMsg, setFeeSaveMsg] = useState<string | null>(null);
+
   // ── Tips manager (admin-editable list of selectable tip/market labels) ──
   const [tipOptions, setTipOptions] = useState<string[]>(DEFAULT_TIPS);
   const [newTip, setNewTip] = useState("");
@@ -2585,6 +3271,10 @@ function SettingsTab() {
         if (data?.success) {
           setPrice(data.data.subscriptionMonthlyPrice);
           setInputValue(String(data.data.subscriptionMonthlyPrice));
+          if (typeof data.data.payoutOperatorFeePercent === "number") {
+            setFeePercent(data.data.payoutOperatorFeePercent);
+            setFeeInputValue(String(data.data.payoutOperatorFeePercent));
+          }
           if (Array.isArray(data.data.tipOptions) && data.data.tipOptions.length > 0) {
             setTipOptions(data.data.tipOptions);
           }
@@ -2633,6 +3323,33 @@ function SettingsTab() {
     } finally {
       setSaving(false);
       setTimeout(() => setSaveMsg(null), 3000);
+    }
+  };
+
+  const handleSaveFee = async () => {
+    const num = Number(feeInputValue);
+    if (!Number.isFinite(num) || num < 0 || num > 100) return;
+    setFeeSaving(true);
+    setFeeSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payoutOperatorFeePercent: num }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setFeePercent(data.data.payoutOperatorFeePercent);
+        setFeeSaveMsg("Enregistré avec succès.");
+      } else {
+        setFeeSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setFeeSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setFeeSaving(false);
+      setTimeout(() => setFeeSaveMsg(null), 3000);
     }
   };
 
@@ -2842,6 +3559,59 @@ function SettingsTab() {
             color: saveMsg.includes("succès") ? C.green : C.red,
           }}>
             {saveMsg}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+          Paiements admins
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 16 }}>
+          Frais de transaction opérateur
+        </div>
+
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6 }}>
+          Pourcentage retenu (%)
+        </label>
+        <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step={0.5}
+            style={iStyle}
+            value={feeInputValue}
+            onChange={(e) => setFeeInputValue(e.target.value)}
+          />
+          <button
+            onClick={handleSaveFee}
+            disabled={feeSaving || feeInputValue === "" || Number(feeInputValue) < 0 || Number(feeInputValue) > 100 || Number(feeInputValue) === feePercent}
+            style={{
+              background: feeSaving ? C.goldDark : C.gold, border: "none", color: C.dark,
+              borderRadius: 8, padding: "0 20px", fontSize: 12, fontWeight: 700,
+              cursor: (feeSaving || feeInputValue === "") ? "not-allowed" : "pointer",
+              fontFamily: "inherit", letterSpacing: "0.5px", whiteSpace: "nowrap",
+              opacity: (feeSaving || feeInputValue === "" || Number(feeInputValue) === feePercent) ? 0.5 : 1,
+            }}
+          >
+            {feeSaving ? "Enregistrement…" : "Enregistrer"}
+          </button>
+        </div>
+
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: feeSaveMsg ? 10 : 0, lineHeight: 1.5 }}>
+          Retenu automatiquement sur chaque paiement avant l&apos;envoi via Fapshi — un paiement de 2 500 FCFA
+          {feePercent != null && ` à ${feePercent}%`} envoie en réalité {feePercent != null ? formatCFA(Math.round(2500 * (1 - feePercent / 100))) : "…"} à l&apos;administrateur.
+        </div>
+
+        {feeSaveMsg && (
+          <div style={{
+            fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 4,
+            background: feeSaveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+            border: `1px solid ${feeSaveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+            color: feeSaveMsg.includes("succès") ? C.green : C.red,
+          }}>
+            {feeSaveMsg}
           </div>
         )}
       </div>
@@ -4767,7 +5537,7 @@ const adminSmallBtnStyle: React.CSSProperties = {
 };
 
 // ─── Main Admin Dashboard ───────────────────────────────────────────────────────
-type Tab = "overview" | "picks" | "users" | "revenue" | "transactions" | "messages" | "announcements" | "posts" | "settings" | "system";
+type Tab = "overview" | "picks" | "users" | "revenue" | "transactions" | "shares" | "admins" | "messages" | "announcements" | "posts" | "settings" | "system";
 
 export default function AdminDashboard() {
   const { user, loading: authLoading, logout } = useAuth();
@@ -4914,6 +5684,8 @@ export default function AdminDashboard() {
     { id: "users", label: "Utilisateurs", icon: Icons.users },
     { id: "revenue", label: "Revenus", icon: Icons.revenue },
     { id: "transactions", label: "Transactions", icon: Icons.transactions },
+    { id: "shares", label: "Mes revenus", icon: Icons.wallet },
+    ...(user?.isSuperAdmin ? [{ id: "admins" as Tab, label: "Administrateurs", icon: Icons.admins }] : []),
     { id: "messages", label: "Messages", icon: Icons.messages, badge: awaitingReplyCount || undefined },
     { id: "announcements", label: "Annonces", icon: Icons.announcements },
     { id: "posts", label: "Actualités", icon: Icons.posts },
@@ -5059,6 +5831,8 @@ export default function AdminDashboard() {
                 {tab === "users" && <UsersTab users={users} setUsers={setUsers} usersLoading={usersLoading} picks={picks} />}
                 {tab === "revenue" && <RevenueTab picks={picks} users={users} />}
                 {tab === "transactions" && <TransactionsTab />}
+                {tab === "shares" && <SharesTab />}
+                {tab === "admins" && user?.isSuperAdmin && <AdminsTab />}
                 {tab === "messages" && <MessagesTab conversations={conversations} setConversations={setConversations} loading={conversationsLoading} users={users} />}
                 {tab === "announcements" && <AnnouncementsTab announcements={announcements} setAnnouncements={setAnnouncements} loading={announcementsLoading} />}
                 {tab === "posts" && <PostsTab />}

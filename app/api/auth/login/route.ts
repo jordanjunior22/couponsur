@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
       {
         userId: user._id,
         role: user.role,
+        isSuperAdmin: user.isSuperAdmin ?? false,
       },
       JWT_SECRET,
       { expiresIn: "7d" }
@@ -66,6 +67,8 @@ export async function POST(req: NextRequest) {
       _id: user._id,
       phone: user.phone,
       role: user.role,
+      isSuperAdmin: user.isSuperAdmin ?? false,
+      revenueShare: user.revenueShare,
       unlockedPickIds: user.unlockedPickIds,
       nickname: user.nickname ?? null,
       subscription: user.subscription,

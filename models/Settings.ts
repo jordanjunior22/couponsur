@@ -75,6 +75,18 @@ export interface ISettings extends Document {
    *  app/api/admin/system/vercel-stats/route.ts). Project/deployment info
    *  works on Hobby already and isn't gated by this flag. */
   vercelSyncEnabled: boolean;
+  /** Pre-fills the "Créer un administrateur" form's share fields — purely a
+   *  UI default, not enforced anywhere. The super admin can still type any
+   *  value per admin (see models/Users.ts revenueShare). */
+  defaultSubscriptionSharePercent: number;
+  defaultPickSharePercent: number;
+  /** Withheld from an admin payout BEFORE it's sent via Fapshi — e.g. 3
+   *  means a 2,500 XAF payout actually transfers 2,425 XAF, and the 75 XAF
+   *  difference is recorded/shown as the "operator transaction fee" (see
+   *  app/api/admin/payouts/[id]/decide/route.ts). A flat, admin-set rate —
+   *  Fapshi doesn't publish one, so this isn't derived from anything they
+   *  report. */
+  payoutOperatorFeePercent: number;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -93,6 +105,9 @@ const SettingsSchema = new Schema<ISettings>(
     newsFeedEnabled: { type: Boolean, default: true },
     dbStorageLimitMb: { type: Number, default: 512, min: 1 },
     vercelSyncEnabled: { type: Boolean, default: false },
+    defaultSubscriptionSharePercent: { type: Number, default: 30, min: 0, max: 100 },
+    defaultPickSharePercent: { type: Number, default: 100, min: 0, max: 100 },
+    payoutOperatorFeePercent: { type: Number, default: 3, min: 0, max: 100 },
   },
   { timestamps: true }
 );

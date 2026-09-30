@@ -6,6 +6,17 @@ interface AuthUser {
   _id: string;
   phone: string;
   role: "USER" | "ADMIN";
+  // The one owner account — gates the "Administrateurs" dashboard tab. See
+  // models/Users.ts IUser.isSuperAdmin.
+  isSuperAdmin?: boolean;
+  // This admin's cut of revenue, set by the super admin. Meaningless for
+  // role: "USER" or for the super admin themselves. See models/Users.ts
+  // IRevenueShare / lib/adminEarnings.ts.
+  revenueShare?: {
+    subscriptionPercent: number;
+    pickPercent: number;
+    effectiveFrom: string | null;
+  };
   unlockedPickIds: string[];
   // Admin-only group chat display name — see AccountPanel's nickname
   // editor and GroupChatRoom's senderLabel.

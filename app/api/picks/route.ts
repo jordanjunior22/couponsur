@@ -105,6 +105,7 @@ export async function POST(req: NextRequest) {
             matches,
             is_published: is_published ?? false,
             is_estimated_odds: is_estimated_odds ?? false,
+            createdBy: decoded.userId,
         });
 
         // Fire-and-forget — a push failure (or no subscribers yet) must

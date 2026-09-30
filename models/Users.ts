@@ -14,10 +14,28 @@ export interface ISubscription {
   expiresAt: Date | null;
 }
 
+// An admin's cut of revenue — only meaningful for role: ADMIN accounts that
+// aren't the super admin. subscriptionPercent/pickPercent are set (and
+// changed) by the super admin from the "Administrateurs" dashboard tab.
+// effectiveFrom is stamped the FIRST time shares are configured for this
+// admin and never moves after that — it's what makes earnings "count from
+// the day their share was set up" rather than retroactively, even when the
+// percentage itself is edited later (see lib/adminEarnings.ts).
+export interface IRevenueShare {
+  subscriptionPercent: number;
+  pickPercent: number;
+  effectiveFrom: Date | null;
+}
+
 export interface IUser extends Document {
   phone: string;
   password: string;
   role: UserRole;
+  // The one owner account — distinct from a regular ADMIN. Grants access to
+  // the "Administrateurs" tab (create admins, set shares, settle payouts).
+  // Never set through the app itself; see scripts/bootstrap-super-admin.ts.
+  isSuperAdmin: boolean;
+  revenueShare: IRevenueShare;
   unlockedPickIds: mongoose.Types.ObjectId[];
   subscription: ISubscription;
   // Muted from the premium group chat by an admin — they can still read
@@ -45,6 +63,15 @@ const SubscriptionSchema = new Schema<ISubscription>(
   { _id: false }
 );
 
+const RevenueShareSchema = new Schema<IRevenueShare>(
+  {
+    subscriptionPercent: { type: Number, default: 0, min: 0, max: 100 },
+    pickPercent:         { type: Number, default: 100, min: 0, max: 100 },
+    effectiveFrom:       { type: Date, default: null },
+  },
+  { _id: false }
+);
+
 const UserSchema = new Schema<IUser>(
   {
     phone: {
@@ -61,6 +88,8 @@ const UserSchema = new Schema<IUser>(
       enum: Object.values(UserRole),
       default: UserRole.USER,
     },
+    isSuperAdmin: { type: Boolean, default: false },
+    revenueShare: { type: RevenueShareSchema, default: () => ({}) },
     unlockedPickIds: [
       {
         type: Schema.Types.ObjectId,

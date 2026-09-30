@@ -52,6 +52,14 @@ export interface IPick extends Document {
   avg_confidence?: number | null;
   is_manually_graded?: boolean;
   graded_at?: Date | null;
+  /** The admin who hand-created this pick — stamped only when a logged-in
+   *  admin submits it through POST /api/picks. Left null for anything the
+   *  cron jobs or scrape/generate flows create with no human at the wheel
+   *  (see app/api/cron/morning-picks, scrape-predictions, generate-matches)
+   *  — those count as house revenue, never an admin's payout share (see
+   *  lib/adminEarnings.ts). Existing picks created before this field
+   *  existed simply have no author on record. */
+  createdBy?: mongoose.Types.ObjectId | null;
   matches: IMatch[];
   createdAt: Date;
   updatedAt: Date;
@@ -104,6 +112,12 @@ const PickSchema = new Schema<IPick>(
     avg_confidence: { type: Number, default: null },
     is_manually_graded: { type: Boolean, default: false },
     graded_at: { type: Date, default: null },
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
     matches: {
       type:     [MatchSchema],
       required: true,

@@ -7,6 +7,7 @@ export function verifyToken(token: string) {
     return jwt.verify(token, JWT_SECRET) as {
       userId: string;
       role: string;
+      isSuperAdmin?: boolean;
     };
   } catch (error) {
     return null;
