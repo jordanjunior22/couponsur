@@ -10,6 +10,7 @@ import { SubscribeBanner } from "./SubscribeBanner";
 import { Spinner, PageLoader } from "./LoadingSpinner";
 import { trackEvent, generateEventId, getFbCookies } from "@/lib/pixelClient";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
+import { pickKickoffMs } from "@/utils/pickKickoff";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Match {
@@ -21,6 +22,7 @@ export interface Match {
   confidence?: number;
   sources?: string[];
   kickoff?: string | null;
+  date?: string | null;
   outcome: "PENDING" | "WIN" | "LOSS" | "REFUNDED";
 }
 
@@ -115,25 +117,63 @@ function computeRecord(picks: Pick[]): Tally {
   return { wins, losses, refunds, graded, winRate: graded > 0 ? Math.round((wins / graded) * 100) : null };
 }
 
-// ─── Countdown hook ───────────────────────────────────────────────────────────
-function useCountdown(targetDate: string | null) {
-  const [label, setLabel] = useState<string | null>(null);
+// ─── Kickoff countdown hook ───────────────────────────────────────────────────
+// Counts down to the pick's FIRST kickoff (see utils/pickKickoff). Ticks once
+// a minute while it's far off, every second inside the final 24h (a live
+// HH:MM:SS clock). `kickoffMs === null` (no kickoff time on any leg) means
+// there's nothing to show and sales are never closed on time grounds.
+type KickoffStatus =
+  | { state: "none" }
+  | { state: "upcoming"; label: string; urgent: boolean; timeLabel: string; dayLabel: string }
+  | { state: "started" };
+
+function formatKickoffLabel(ms: number): { timeLabel: string; dayLabel: string } {
+  // Rendered in WAT (UTC+1) regardless of the viewer's device timezone, so it
+  // matches the "HH:mm" the admin / source entered.
+  const wat = new Date(ms + 60 * 60 * 1000);
+  const hh = String(wat.getUTCHours()).padStart(2, "0");
+  const mm = String(wat.getUTCMinutes()).padStart(2, "0");
+  const today = new Date(Date.now() + 60 * 60 * 1000);
+  const sameDay = (a: Date, b: Date) => a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
+  const tomorrow = new Date(today.getTime() + 86400000);
+  const dayLabel = sameDay(wat, today)
+    ? "Aujourd'hui"
+    : sameDay(wat, tomorrow)
+      ? "Demain"
+      : wat.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  return { timeLabel: `${hh}:${mm}`, dayLabel };
+}
+
+function useKickoffStatus(kickoffMs: number | null): KickoffStatus {
+  const compute = useCallback((): KickoffStatus => {
+    if (kickoffMs === null) return { state: "none" };
+    const diff = kickoffMs - Date.now();
+    if (diff <= 0) return { state: "started" };
+    const { timeLabel, dayLabel } = formatKickoffLabel(kickoffMs);
+    const totalSec = Math.floor(diff / 1000);
+    const days = Math.floor(totalSec / 86400);
+    const hrs = Math.floor((totalSec % 86400) / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    // Further than a day out, seconds are just noise — "2j 5h". Inside the
+    // last 24h it becomes a full HH:MM:SS clock.
+    const two = (n: number) => String(n).padStart(2, "0");
+    const label = days >= 1 ? `${days}j ${hrs}h` : `${two(hrs)}:${two(mins)}:${two(secs)}`;
+    return { state: "upcoming", label, urgent: diff < 3600000, timeLabel, dayLabel };
+  }, [kickoffMs]);
+
+  const [status, setStatus] = useState<KickoffStatus>(() => ({ state: "none" }));
   useEffect(() => {
-    if (!targetDate) { setLabel(null); return; }
-    const target = new Date(targetDate).getTime();
-    const tick = () => {
-      const diff = target - Date.now();
-      if (diff <= 0) { setLabel(null); return; }
-      const hrs = Math.floor(diff / 3600000);
-      const mins = Math.floor((diff % 3600000) / 60000);
-      if (hrs >= 24) { setLabel(null); return; }
-      setLabel(`${hrs}h ${mins.toString().padStart(2, "00")}m`);
-    };
-    tick();
-    const interval = setInterval(tick, 60000);
-    return () => clearInterval(interval);
-  }, [targetDate]);
-  return label;
+    setStatus(compute());
+    if (kickoffMs === null) return;
+    const id = setInterval(() => {
+      const next = compute();
+      setStatus(next);
+      if (next.state === "started") clearInterval(id);
+    }, kickoffMs - Date.now() < 86400000 ? 1000 : 30000);
+    return () => clearInterval(id);
+  }, [compute, kickoffMs]);
+  return status;
 }
 
 // ─── Shared Styles ────────────────────────────────────────────────────────────
@@ -167,6 +207,10 @@ const GlobalStyles = () => (
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes kickoffBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+    .kickoff-blink { animation: kickoffBlink 1.6s ease-in-out infinite; }
+    .kickoff-blink-fast { animation-duration: 0.9s; }
+    @media (prefers-reduced-motion: reduce) { .kickoff-blink { animation: none; } }
     @keyframes scaleIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   `}</style>
 );
@@ -1105,60 +1149,90 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
   const isSubscribed = hasActiveSubscription();
   const isUnlocked = isSubscribed || user?.unlockedPickIds?.includes(pick._id);
   const tierMeta = pick.tier ? TIER_META[pick.tier] : null;
-  const countdown = useCountdown(isPending ? pick.match_date : null);
+  const kickoffMs = useMemo(() => (isPending ? pickKickoffMs(pick) : null), [isPending, pick]);
+  const kickoff = useKickoffStatus(kickoffMs);
+  // Sales close once the first leg kicks off (also enforced in /api/pay).
+  const salesClosed = isPending && !isUnlocked && kickoff.state === "started";
   // Only meaningful when the combo itself isn't already REFUNDED (every
   // leg voided) — that case is already fully conveyed by OutcomeBadge.
   const refundedLegs = pick.outcome !== "REFUNDED" ? refundedLegCount(pick) : 0;
 
+  const urgent = kickoff.state === "upcoming" && kickoff.urgent;
+  
   return (
     <div
       onClick={() => onSelect(pick)}
-      style={{ background: "#1A1F26", border: "1px solid #2A3140", borderLeft: `3px solid ${borderColors[pick.outcome]}`, borderRadius: 12, marginBottom: 10, overflow: "hidden", cursor: "pointer", transition: "border-color 0.2s" }}
+      style={{ background: "#1A1F26", border: "1px solid #2A3140", borderLeft: `3px solid ${borderColors[pick.outcome]}`, borderRadius: 10, marginBottom: 8, overflow: "hidden", cursor: "pointer", transition: "border-color 0.2s", minWidth: 0 }}
       onMouseEnter={(e) => ((e.currentTarget as HTMLDivElement).style.borderColor = "#3A4455")}
       onMouseLeave={(e) => { const el = e.currentTarget as HTMLDivElement; el.style.border = "1px solid #2A3140"; el.style.borderLeft = `3px solid ${borderColors[pick.outcome]}`; }}
     >
       {tierMeta && (
-        <div style={{ background: "rgba(201,168,76,0.06)", borderBottom: "1px solid #2A3140", padding: "6px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#C9A84C", fontWeight: 700 }}>Combo {tierMeta.label}</span>
-          <span style={{ fontSize: 9, color: "#7A8399" }}>{tierMeta.desc}</span>
+        <div style={{ background: "rgba(201,168,76,0.06)", borderBottom: "1px solid #2A3140", padding: "6px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: 9, letterSpacing: "2px", textTransform: "uppercase", color: "#C9A84C", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>Combo {tierMeta.label}</span>
+          <span style={{ fontSize: 10, color: "#7A8399", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{tierMeta.desc}</span>
         </div>
       )}
-      <div style={{ padding: 16 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 9, letterSpacing: "1.5px", textTransform: "uppercase", fontWeight: 600, background: "#222830", border: "1px solid #2A3140", color: "#7A8399", padding: "3px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>
+
+      <div style={{ padding: "11px 14px 12px" }}>
+        {/* Row 1: league (shrinks with an ellipsis) + result badges (never shrink) */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7, minWidth: 0 }}>
+          <span style={{ flex: "1 1 0", minWidth: 0, fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontWeight: 600, background: "#222830", border: "1px solid #2A3140", color: "#7A8399", padding: "3px 8px", borderRadius: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", alignSelf: "flex-start", maxWidth: "fit-content" }}>
             {pick.league}
           </span>
-          {countdown && isPending && !isUnlocked && (
-            <span style={{ fontSize: 9, letterSpacing: "1px", fontWeight: 700, color: "#EF4444", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", padding: "3px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>
-              Coup d&apos;envoi dans {countdown}
-            </span>
-          )}
-          {refundedLegs > 0 && <PartialRefundChip count={refundedLegs} />}
-          <OutcomeBadge outcome={pick.outcome} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: "auto" }}>
+            {isPending && kickoff.state === "upcoming" && (
+              <span
+                role="timer"
+                title={`Coup d'envoi · ${kickoff.dayLabel} ${kickoff.timeLabel}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: "tabular-nums", fontSize: 10, fontWeight: 600, color: urgent ? "#EF4444" : "#7A8399", whiteSpace: "nowrap" }}
+              >
+                <span aria-hidden className={urgent ? "kickoff-blink kickoff-blink-fast" : "kickoff-blink"} style={{ width: 6, height: 6, borderRadius: "50%", background: urgent ? "#EF4444" : "#C9A84C", flexShrink: 0 }} />
+                {kickoff.label}
+              </span>
+            )}
+            {isPending && kickoff.state === "started" && (
+              <span style={{ fontSize: 10, fontWeight: 600, color: "#EF4444", whiteSpace: "nowrap" }}>Commencé</span>
+            )}
+            {refundedLegs > 0 && <PartialRefundChip count={refundedLegs} />}
+            <OutcomeBadge outcome={pick.outcome} />
+          </div>
         </div>
-        <div style={{ fontSize: "clamp(13px, 3.5vw, 15px)", fontWeight: 600, color: "#E8EAF0", lineHeight: 1.4, marginBottom: 10, wordBreak: "break-word" }}>
+
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#E8EAF0", lineHeight: 1.35, marginBottom: 9, overflowWrap: "anywhere" }}>
           {pick.title}
         </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #2A3140", paddingTop: 12, gap: 8, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: "clamp(20px, 6vw, 26px)", color: "#C9A84C", letterSpacing: 1 }}>x{pick.total_odds}</span>
-            <span style={{ fontSize: 9, color: "#7A8399", textTransform: "uppercase", letterSpacing: "1px" }}>cotes</span>
+
+        {/* Footer wraps instead of squeezing: odds + count on one line, the
+            button takes the rest of the row (or a full row on narrow screens). */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, borderTop: "1px solid #2A3140", paddingTop: 9, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+            <span style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, lineHeight: 1, color: "#C9A84C", letterSpacing: 1 }}>x{pick.total_odds}</span>
+              <span style={{ fontSize: 10, color: "#7A8399", textTransform: "uppercase", letterSpacing: "1px" }}>cotes</span>
+            </span>
+            <span style={{ fontSize: 12, color: "#7A8399", whiteSpace: "nowrap" }}>
+              {pick.matches.length} match{pick.matches.length > 1 ? "es" : ""}
+            </span>
           </div>
-          <span style={{ fontSize: 11, color: "#7A8399", whiteSpace: "nowrap" }}>
-            {pick.matches.length} match{pick.matches.length > 1 ? "es" : ""}
-          </span>
           <button
             onClick={(e) => { e.stopPropagation(); onSelect(pick); }}
             style={{
-              fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontWeight: 700,
-              padding: "8px 12px", borderRadius: 6, border: "none", cursor: "pointer",
-              fontFamily: "inherit", transition: "all 0.15s", whiteSpace: "nowrap", flexShrink: 0,
-              ...(isPending && !isUnlocked
-                ? { background: "#C9A84C", color: "#0A0C0F" }
-                : { background: "#222830", color: "#E8EAF0", border: "1px solid #2A3140" }),
+              flex: "1 1 150px", minWidth: 0, textAlign: "center",
+              fontSize: 10.5, letterSpacing: "0.8px", textTransform: "uppercase", fontWeight: 700,
+              padding: "8px 12px", borderRadius: 7, cursor: "pointer",
+              fontFamily: "inherit", transition: "all 0.15s", lineHeight: 1.3,
+              ...(salesClosed
+                ? { background: "#222830", color: "#7A8399", border: "1px solid #2A3140" }
+                : isPending && !isUnlocked
+                  ? { background: "#C9A84C", color: "#0A0C0F", border: "none" }
+                  : { background: "#222830", color: "#E8EAF0", border: "1px solid #2A3140" }),
             }}
           >
-            {isPending && !isUnlocked ? `Débloquer — ${pick.price.toLocaleString("fr-FR")} FCFA` : "Voir détails"}
+            {salesClosed
+              ? "Ventes fermées"
+              : isPending && !isUnlocked
+                ? `Débloquer — ${pick.price.toLocaleString("fr-FR")} FCFA`
+                : "Voir détails"}
           </button>
         </div>
       </div>
@@ -1416,6 +1490,9 @@ const loadMoreWeeksStyle: React.CSSProperties = {
 
 // ─── Locked Predictions ───────────────────────────────────────────────────────
 function LockedPredictions({ pick, onUnlock }: { pick: Pick; onUnlock: () => void }) {
+  const kickoffMs = useMemo(() => pickKickoffMs(pick), [pick]);
+  const kickoff = useKickoffStatus(kickoffMs);
+  const salesClosed = kickoff.state === "started";
   return (
     <div style={{ position: "relative" }}>
       {pick.matches.map((m, i) => (
@@ -1434,12 +1511,23 @@ function LockedPredictions({ pick, onUnlock }: { pick: Pick; onUnlock: () => voi
           <IconLock />
         </div>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: "#C9A84C", letterSpacing: 2, textAlign: "center" }}>Pronostics verrouillés</div>
-        <div style={{ fontSize: 12, color: "#7A8399", textAlign: "center", lineHeight: 1.5, maxWidth: 240 }}>
-          Vous voyez déjà les {pick.matches.length} match{pick.matches.length > 1 ? "s" : ""} — débloquez pour révéler les pronostics et cotes.
-        </div>
-        <button onClick={onUnlock} style={{ ...S.btnGold, width: "auto", padding: "12px 28px", fontSize: 14, marginBottom: 0, letterSpacing: 1.5 }}>
-          Débloquer — {pick.price.toLocaleString("fr-FR")} FCFA
-        </button>
+        {salesClosed ? (
+          <div style={{ fontSize: 12, color: "#EF4444", textAlign: "center", lineHeight: 1.5, maxWidth: 260, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "10px 14px" }}>
+            Ventes fermées — le premier match de ce pick a déjà commencé.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, color: "#7A8399", textAlign: "center", lineHeight: 1.5, maxWidth: 240 }}>
+              Vous voyez déjà les {pick.matches.length} match{pick.matches.length > 1 ? "s" : ""} — débloquez pour révéler les pronostics et cotes.
+              {kickoff.state === "upcoming" && (
+                <> Coup d&apos;envoi dans <strong style={{ color: kickoff.urgent ? "#EF4444" : "#E8EAF0" }}>{kickoff.label}</strong>.</>
+              )}
+            </div>
+            <button onClick={onUnlock} style={{ ...S.btnGold, width: "auto", maxWidth: "100%", padding: "12px 24px", fontSize: 14, marginBottom: 0, letterSpacing: 1.5 }}>
+              Débloquer — {pick.price.toLocaleString("fr-FR")} FCFA
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

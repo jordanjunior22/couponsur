@@ -55,6 +55,10 @@ export interface PredictionPick {
    *  the stronger side. Negative = tip backs the weaker side (red flag).
    *  Null when form data is missing for either side. */
   formGap: number | null;
+  /** Scraped kickoff time, "HH:mm" (site/WAT local time). Null if the source
+   *  didn't publish one. Carried onto saved combos so buyers get a countdown
+   *  and sales close once the first leg kicks off. */
+  kickoff?: string | null;
   breakdown: ConfidenceBreakdown;
 }
 
@@ -215,6 +219,7 @@ function scoreMatch(
       isEstimatedOdd: false,
       sources: ["Vital"],
       formGap,
+      kickoff: p.time || null,
       breakdown: {
         specificityScore: spec,
         consistencyScore: cons,
@@ -244,6 +249,7 @@ function scoreMatch(
       isEstimatedOdd: true,
       sources: ["Vital"],
       formGap,
+      kickoff: p.time || null,
       // Not a points breakdown for goal markets (confidence here is a
       // genuine Poisson-derived probability, not tip-specificity +
       // consistency + form points) — kept populated only so every

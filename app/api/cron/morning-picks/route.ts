@@ -190,6 +190,7 @@ export async function GET(req: NextRequest) {
         league: s.league,
         confidence: s.confidence,
         sources: s.sources,
+        kickoff: s.kickoff ?? null,
         date: new Date(dateStr + "T12:00:00"),
       }));
 

@@ -6,6 +6,7 @@ import UserModel from "@/models/Users";
 import { directPay, isFapshiError } from "@/utils/fapshi";
 import { getSessionUser } from "@/utils/session"; // your JWT/cookie helper
 import { captureRequestSignal } from "@/utils/requestSignal";
+import { hasPickStarted } from "@/utils/pickKickoff";
 
 
 export async function POST(req: NextRequest) {
@@ -47,6 +48,16 @@ export async function POST(req: NextRequest) {
     const pick = await PickModel.findById(pickId);
     if (!pick) {
       return NextResponse.json({ error: "Pick not found" }, { status: 404 });
+    }
+
+    // Sales close the moment the pick's first match kicks off — checked here
+    // (not only in the UI) so a stale open tab or a hand-made request can't
+    // buy a combo that has already started.
+    if (hasPickStarted(pick)) {
+      return NextResponse.json(
+        { error: "Les ventes de ce pick sont fermées : le premier match a déjà commencé." },
+        { status: 409 }
+      );
     }
 
     const existing = await PaymentModel.findOne({
