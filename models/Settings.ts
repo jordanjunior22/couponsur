@@ -87,6 +87,12 @@ export interface ISettings extends Document {
    *  Fapshi doesn't publish one, so this isn't derived from anything they
    *  report. */
   payoutOperatorFeePercent: number;
+  /** Master switch for the daily morning-picks cron (the 3 automated Safe /
+   *  Value / Bold tips — see app/api/cron/morning-picks/route.ts). On by
+   *  default so existing installs keep generating tips exactly as before;
+   *  existing settings docs without the field read as "on" too. Only stops
+   *  the automatic generation — picks created by hand are unaffected. */
+  dailyTipsCronEnabled: boolean;
   updatedAt: Date;
   createdAt: Date;
 }
@@ -108,6 +114,7 @@ const SettingsSchema = new Schema<ISettings>(
     defaultSubscriptionSharePercent: { type: Number, default: 30, min: 0, max: 100 },
     defaultPickSharePercent: { type: Number, default: 100, min: 0, max: 100 },
     payoutOperatorFeePercent: { type: Number, default: 3, min: 0, max: 100 },
+    dailyTipsCronEnabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

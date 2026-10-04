@@ -17,7 +17,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import UserModel from "@/models/Users";
 import { getSettings } from "@/models/Settings";
-import { getPredictions, buildComboForTargetOdds, type PredictionPick, type Market } from "@/lib/predictionengine";
+import { getPredictions, buildVariedComboForTargetOdds, comboSignature, type PredictionPick, type Market } from "@/lib/predictionengine";
 
 export const dynamic = "force-dynamic";
 
@@ -187,6 +187,10 @@ export async function GET(req: NextRequest) {
       targetOdds = parsed;
     }
 
+    // Signature of the combo the visitor just saw (see comboSignature), so a
+    // repeat click never returns the identical combination when another exists.
+    const avoid = searchParams.get("avoid");
+
     const allPicks = await getPredictions();
     const qualified = dedupeByMatch(
       allPicks.filter((p) => allowedMarkets.includes(p.market) && p.confidence >= MIN_CONFIDENCE)
@@ -208,7 +212,7 @@ export async function GET(req: NextRequest) {
     let targetMissed = false;
 
     if (targetOdds !== null) {
-      const combo = buildComboForTargetOdds(qualified, count, targetOdds);
+      const combo = buildVariedComboForTargetOdds(qualified, count, targetOdds, avoid);
       if (!combo) {
         return NextResponse.json({
           success: true,
@@ -230,6 +234,11 @@ export async function GET(req: NextRequest) {
       // copy of whatever the paid automated combos pick every single time.
       const pool = qualified.slice(0, Math.max(count * 3, count));
       selected = shuffle(pool).slice(0, Math.min(count, pool.length));
+      // Don't hand back the exact combo the visitor just saw if the pool
+      // allows any other draw (a few reshuffles is plenty).
+      for (let attempt = 0; attempt < 8 && avoid && comboSignature(selected) === avoid && pool.length > count; attempt++) {
+        selected = shuffle(pool).slice(0, Math.min(count, pool.length));
+      }
       totalOdds = parseFloat(selected.reduce((acc, s) => acc * s.odd, 1).toFixed(2));
     }
 
@@ -247,6 +256,7 @@ export async function GET(req: NextRequest) {
         isEstimatedOdd: s.isEstimatedOdd,
       })),
       totalOdds,
+      signature: comboSignature(selected),
       requestedOdds: targetOdds,
       targetMissed,
       restrictedMarkets,

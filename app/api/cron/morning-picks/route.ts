@@ -25,6 +25,7 @@ import { connectDB } from "@/utils/ConnectDb";
 import PickModel, { Outcome } from "@/models/Picks";
 import { getPredictions, pickCombo, type PredictionPick } from "@/lib/predictionengine";
 import { getTodayWAT } from "@/lib/soccervital";
+import { getSettings } from "@/models/Settings";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const MIN_CONFIDENCE = 45;
@@ -65,6 +66,14 @@ export async function GET(req: NextRequest) {
 
   try {
     await connectDB();
+
+    // Admin switch (Settings tab). `!== false` so an install whose settings
+    // doc predates this field keeps generating tips as before.
+    const settings = await getSettings();
+    if (settings.dailyTipsCronEnabled === false) {
+      info("Daily tips cron is switched off in settings — nothing generated");
+      return NextResponse.json({ ok: true, skipped: true, reason: "disabled_in_settings", log });
+    }
 
     const todayWAT = getTodayWAT();
     const dateStr = todayWAT.toISOString().split("T")[0];

@@ -353,6 +353,93 @@ export function buildComboForTargetOdds(
   return best;
 }
 
+/** Stable identity of a combo (order-independent), so callers can tell
+ *  "same combination as last time" apart from a genuinely different one. */
+export function comboSignature(picks: PredictionPick[]): string {
+  return picks.map((p) => `${p.home}|${p.away}|${p.market}|${p.tip}`).sort().join("~");
+}
+
+/**
+ * Like buildComboForTargetOdds, but NOT deterministic: instead of always
+ * returning the single strongest combo, it samples many random combinations
+ * of 1..maxSize matches from the candidate pool, keeps the ones whose total
+ * odds land within ±25% of the target, and draws one at random — weighted so
+ * higher average confidence and a total closer to the target are more
+ * likely, but never guaranteed. Clicking "generate" repeatedly therefore
+ * walks through different valid combinations rather than replaying the same
+ * one.
+ *
+ * `avoid`: signature (see comboSignature) of the combo the visitor just
+ * saw — it's excluded whenever any alternative exists.
+ *
+ * If no sampled combo lands in the band, falls back to the closest one
+ * found (same "honest closest match" contract as buildComboForTargetOdds).
+ * Returns null only if candidates is empty.
+ */
+export function buildVariedComboForTargetOdds(
+  candidates: PredictionPick[],
+  maxSize: number,
+  targetOdds: number,
+  avoid?: string | null
+): ComboResult | null {
+  if (candidates.length === 0) return null;
+
+  const minOdds = targetOdds * 0.75;
+  const maxOdds = targetOdds * 1.25;
+  const sizeCap = Math.min(maxSize, candidates.length);
+  const SAMPLES = 600;
+
+  type Scored = { combo: PredictionPick[]; total: number; sig: string; weight: number };
+  const inBand = new Map<string, Scored>();
+  let closest: Scored | null = null;
+
+  for (let i = 0; i < SAMPLES; i++) {
+    const size = 1 + Math.floor(Math.random() * sizeCap);
+    // Partial Fisher–Yates over indices: `size` distinct random candidates.
+    const idx = candidates.map((_, n) => n);
+    for (let k = 0; k < size; k++) {
+      const j = k + Math.floor(Math.random() * (idx.length - k));
+      [idx[k], idx[j]] = [idx[j], idx[k]];
+    }
+    const combo = idx.slice(0, size).map((n) => candidates[n]);
+    const total = parseFloat(combo.reduce((acc, s) => acc * s.odd, 1).toFixed(2));
+    const sig = comboSignature(combo);
+    const distance = Math.abs(total - targetOdds) / targetOdds; // 0 = exact
+
+    if (closest === null || distance < Math.abs(closest.total - targetOdds) / targetOdds) {
+      closest = { combo, total, sig, weight: 0 };
+    }
+    if (total >= minOdds && total <= maxOdds && !inBand.has(sig)) {
+      const avgConf = combo.reduce((acc, s) => acc + s.confidence, 0) / combo.length;
+      // Quality dominates, closeness to the target nudges. Cubed confidence
+      // keeps weak legs possible but unlikely; floor on closeness keeps the
+      // edge of the band reachable.
+      const closeness = Math.max(0.15, 1 - distance / 0.25);
+      inBand.set(sig, { combo, total, sig, weight: Math.pow(avgConf, 3) * closeness });
+    }
+  }
+
+  let options = [...inBand.values()];
+  if (options.length === 0) {
+    return closest ? { selected: closest.combo, totalOdds: closest.total } : null;
+  }
+
+  // Never replay the combo just shown when there's anything else to offer.
+  if (avoid) {
+    const others = options.filter((o) => o.sig !== avoid);
+    if (others.length > 0) options = others;
+  }
+
+  const sum = options.reduce((acc, o) => acc + o.weight, 0);
+  let roll = Math.random() * sum;
+  for (const o of options) {
+    roll -= o.weight;
+    if (roll <= 0) return { selected: o.combo, totalOdds: o.total };
+  }
+  const last = options[options.length - 1];
+  return { selected: last.combo, totalOdds: last.total };
+}
+
 // ─── Public entrypoint ────────────────────────────────────────────────────────
 
 export async function getPredictions(targetDate?: Date): Promise<PredictionPick[]> {

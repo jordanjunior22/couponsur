@@ -50,6 +50,7 @@ export async function PUT(req: NextRequest) {
       defaultSubscriptionSharePercent,
       defaultPickSharePercent,
       payoutOperatorFeePercent,
+      dailyTipsCronEnabled,
     } = body;
 
     // Money-affecting settings (payout fee, default revenue shares) are
@@ -203,6 +204,16 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.dbStorageLimitMb = dbStorageLimitMb;
+    }
+
+    if (dailyTipsCronEnabled !== undefined) {
+      if (typeof dailyTipsCronEnabled !== "boolean") {
+        return NextResponse.json(
+          { success: false, message: "dailyTipsCronEnabled must be a boolean" },
+          { status: 400 }
+        );
+      }
+      update.dailyTipsCronEnabled = dailyTipsCronEnabled;
     }
 
     if (vercelSyncEnabled !== undefined) {

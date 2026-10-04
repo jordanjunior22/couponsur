@@ -4105,6 +4105,103 @@ function SettingsTab() {
       />
 
       <NewsFeedToggleCard />
+
+      <DailyTipsToggleCard />
+    </div>
+  );
+}
+
+// ─── Daily tips (cron) toggle ───────────────────────────────────────────────
+// Switches the morning cron's automatic generation of the 3 daily tips
+// (Safe / Value / Bold) on or off. Picks created by hand are unaffected.
+function DailyTipsToggleCard() {
+  const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success) setEnabled(data.data.dailyTipsCronEnabled !== false);
+      } catch (e) {
+        console.error("Settings fetch:", e);
+      }
+    })();
+  }, []);
+
+  const saveEnabled = async (next: boolean) => {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyTipsCronEnabled: next }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setEnabled(data.data.dailyTipsCronEnabled !== false);
+        setSaveMsg("Enregistré avec succès.");
+      } else {
+        setEnabled(!next);
+        setSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setEnabled(!next);
+      setSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setSaving(false);
+      setTimeout(() => setSaveMsg(null), 3000);
+    }
+  };
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginTop: 16 }}>
+      <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+        Automatisation
+      </div>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+        Pronostics du jour (cron)
+      </div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+        Génère automatiquement chaque matin (à 8h) les 3 pronostics du jour : Safe, Value et Bold. Désactivé, plus aucun pronostic automatique n&apos;est créé — vos pronostics ajoutés à la main ne sont pas concernés. Si vous le réactivez après 8h, la génération reprend dès le lendemain matin.
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
+          {enabled ? "Génération automatique activée" : "Génération automatique désactivée"}
+        </label>
+        <button
+          onClick={() => { const next = !enabled; setEnabled(next); saveEnabled(next); }}
+          disabled={saving}
+          aria-label="Activer ou désactiver les pronostics automatiques"
+          aria-pressed={enabled}
+          style={{
+            width: 44, height: 24, borderRadius: 12, position: "relative", cursor: saving ? "not-allowed" : "pointer",
+            background: enabled ? C.gold : C.dark4, border: `1px solid ${enabled ? C.gold : C.border}`,
+            transition: "background 0.15s", flexShrink: 0, padding: 0,
+          }}
+        >
+          <span style={{
+            position: "absolute", top: 2, left: enabled ? 22 : 2, width: 18, height: 18, borderRadius: "50%",
+            background: enabled ? C.dark : C.muted, transition: "left 0.15s",
+          }} />
+        </button>
+      </div>
+
+      {saveMsg && (
+        <div style={{
+          fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
+          background: saveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+          border: `1px solid ${saveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+          color: saveMsg.includes("succès") ? C.green : C.red,
+        }}>
+          {saveMsg}
+        </div>
+      )}
     </div>
   );
 }

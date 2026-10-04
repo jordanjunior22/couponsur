@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   PiWarningFill, PiLockSimpleFill, PiRobotFill,
   PiArrowsClockwiseBold, PiSlidersHorizontalBold,
@@ -25,6 +25,9 @@ interface GenerateResponse {
   totalOdds?: number | null;
   requestedOdds?: number | null;
   targetMissed?: boolean;
+  // Identity of this combination — sent back as ?avoid= on the next
+  // generate so the visitor never gets the same one twice in a row.
+  signature?: string;
   message?: string;
   disclaimer?: string;
   requiresLogin?: boolean;
@@ -99,6 +102,8 @@ export function MatchGeneratorTool({
   const [requiresPremium, setRequiresPremium] = useState(false);
   const [restrictedMarkets, setRestrictedMarkets] = useState<string[]>([]);
 
+  const lastSignatureRef = useRef<string | null>(null);
+
   const isMarketLocked = (code: string) => (marketAccess[code] ?? "PREMIUM") === "PREMIUM" && !isPremium;
 
   // Optional — left blank, the generator just picks from the strongest
@@ -129,6 +134,7 @@ export function MatchGeneratorTool({
       const params = new URLSearchParams();
       params.set("markets", selectedMarkets.join(","));
       if (trimmed) params.set("targetOdds", trimmed);
+      if (lastSignatureRef.current) params.set("avoid", lastSignatureRef.current);
       const url = `/api/generate-matches?${params.toString()}`;
       const res = await fetch(url, { credentials: "include" });
       const data: GenerateResponse = await res.json();
@@ -141,6 +147,7 @@ export function MatchGeneratorTool({
         return;
       }
 
+      lastSignatureRef.current = data.signature ?? null;
       setMatches(data.matches || []);
       setTotalOdds(data.totalOdds ?? null);
       setRequestedOdds(data.requestedOdds ?? null);
