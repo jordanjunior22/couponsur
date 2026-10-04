@@ -176,6 +176,47 @@ function useKickoffStatus(kickoffMs: number | null): KickoffStatus {
   return status;
 }
 
+// Cheap "has the first match started?" flag for the parent card: no ticking,
+// just one timer that fires at kickoff. (Timer delays are capped well under
+// the browser's ~24.8-day limit and simply re-armed.)
+function useHasStarted(kickoffMs: number | null): boolean {
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    if (kickoffMs === null) { setStarted(false); return; }
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = () => {
+      const diff = kickoffMs - Date.now();
+      if (diff <= 0) { setStarted(true); return; }
+      setStarted(false);
+      timer = setTimeout(arm, Math.min(diff, 6 * 3600000));
+    };
+    arm();
+    return () => clearTimeout(timer);
+  }, [kickoffMs]);
+  return started;
+}
+
+// The ticking part, isolated in its own tiny component so the once-a-second
+// update re-renders only this chip — not the whole pick card around it.
+function KickoffChip({ kickoffMs }: { kickoffMs: number | null }) {
+  const kickoff = useKickoffStatus(kickoffMs);
+  if (kickoff.state === "none") return null;
+  if (kickoff.state === "started") {
+    return <span style={{ fontSize: 10, fontWeight: 600, color: "#EF4444", whiteSpace: "nowrap" }}>Commencé</span>;
+  }
+  const urgent = kickoff.urgent;
+  return (
+    <span
+      role="timer"
+      title={`Coup d'envoi · ${kickoff.dayLabel} ${kickoff.timeLabel}`}
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: "tabular-nums", fontSize: 10, fontWeight: 600, color: urgent ? "#EF4444" : "#7A8399", whiteSpace: "nowrap" }}
+    >
+      <span aria-hidden className={urgent ? "kickoff-blink kickoff-blink-fast" : "kickoff-blink"} style={{ width: 6, height: 6, borderRadius: "50%", background: urgent ? "#EF4444" : "#C9A84C", flexShrink: 0 }} />
+      {kickoff.label}
+    </span>
+  );
+}
+
 // ─── Shared Styles ────────────────────────────────────────────────────────────
 const S = {
   input: {
@@ -1150,14 +1191,13 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
   const isUnlocked = isSubscribed || user?.unlockedPickIds?.includes(pick._id);
   const tierMeta = pick.tier ? TIER_META[pick.tier] : null;
   const kickoffMs = useMemo(() => (isPending ? pickKickoffMs(pick) : null), [isPending, pick]);
-  const kickoff = useKickoffStatus(kickoffMs);
+  const started = useHasStarted(kickoffMs);
   // Sales close once the first leg kicks off (also enforced in /api/pay).
-  const salesClosed = isPending && !isUnlocked && kickoff.state === "started";
+  const salesClosed = isPending && !isUnlocked && started;
   // Only meaningful when the combo itself isn't already REFUNDED (every
   // leg voided) — that case is already fully conveyed by OutcomeBadge.
   const refundedLegs = pick.outcome !== "REFUNDED" ? refundedLegCount(pick) : 0;
 
-  const urgent = kickoff.state === "upcoming" && kickoff.urgent;
   
   return (
     <div
@@ -1180,19 +1220,7 @@ function PickCard({ pick, onSelect }: { pick: Pick; onSelect: (p: Pick) => void 
             {pick.league}
           </span>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: "auto" }}>
-            {isPending && kickoff.state === "upcoming" && (
-              <span
-                role="timer"
-                title={`Coup d'envoi · ${kickoff.dayLabel} ${kickoff.timeLabel}`}
-                style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: "tabular-nums", fontSize: 10, fontWeight: 600, color: urgent ? "#EF4444" : "#7A8399", whiteSpace: "nowrap" }}
-              >
-                <span aria-hidden className={urgent ? "kickoff-blink kickoff-blink-fast" : "kickoff-blink"} style={{ width: 6, height: 6, borderRadius: "50%", background: urgent ? "#EF4444" : "#C9A84C", flexShrink: 0 }} />
-                {kickoff.label}
-              </span>
-            )}
-            {isPending && kickoff.state === "started" && (
-              <span style={{ fontSize: 10, fontWeight: 600, color: "#EF4444", whiteSpace: "nowrap" }}>Commencé</span>
-            )}
+            {isPending && <KickoffChip kickoffMs={kickoffMs} />}
             {refundedLegs > 0 && <PartialRefundChip count={refundedLegs} />}
             <OutcomeBadge outcome={pick.outcome} />
           </div>
