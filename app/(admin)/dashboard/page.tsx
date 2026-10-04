@@ -66,6 +66,8 @@ interface ChatMessage {
   _id?: string;
   sender: "USER" | "ADMIN";
   text: string;
+  // URL of the picture (never the raw data) - see utils/chatSerializer.ts.
+  image?: string | null;
   createdAt: string;
   editedAt?: string | null;
 }
@@ -2232,10 +2234,10 @@ function RevenueTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
   useEffect(() => { setPickPage(1); }, [pickSearch, pickSort, dateFrom, dateTo]);
 
   const maxRev = byLeague[0]?.[1] || 1;
-  // Win rate excludes REFUNDED picks — a void isn't a loss, so it shouldn't
-  // count against the rate (matches the same fix in OverviewTab).
-  const decided = filteredPicks.filter((p) => p.outcome === "WIN" || p.outcome === "LOSS");
-  const winRate = decided.length > 0 ? Math.round((decided.filter((p) => p.outcome === "WIN").length / decided.length) * 100) : 0;
+  // A REFUNDED pick counts as a win in the rate (the stake came back) —
+  // same rule as the buyer home page and OverviewTab.
+  const decided = filteredPicks.filter((p) => p.outcome === "WIN" || p.outcome === "LOSS" || p.outcome === "REFUNDED");
+  const winRate = decided.length > 0 ? Math.round((decided.filter((p) => p.outcome !== "LOSS").length / decided.length) * 100) : 0;
 
   const dailyRevenue = useMemo(() => {
     const map = new Map<string, number>();
@@ -3357,14 +3359,14 @@ function AdminsTab() {
 
 // ─── Overview Tab ───────────────────────────────────────────────────────────────
 function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
-  // Win rate is computed over decided (WIN/LOSS) picks only — a REFUNDED
-  // pick was voided, not lost, so it shouldn't drag the rate down.
-  const decided = picks.filter((p) => p.outcome === "WIN" || p.outcome === "LOSS");
-  const wins = decided.filter((p) => p.outcome === "WIN").length;
-  const losses = decided.filter((p) => p.outcome === "LOSS").length;
+  // A REFUNDED pick counts as a win in the rate (the stake came back):
+  // (wins + refunded) / (wins + refunded + losses). Pending picks are left out.
+  const wins = picks.filter((p) => p.outcome === "WIN").length;
+  const losses = picks.filter((p) => p.outcome === "LOSS").length;
   const pendingCount = picks.filter((p) => p.outcome === "PENDING").length;
   const refundedCount = picks.filter((p) => p.outcome === "REFUNDED").length;
-  const winRate = decided.length > 0 ? Math.round((wins / decided.length) * 100) : 0;
+  const decidedCount = wins + losses + refundedCount;
+  const winRate = decidedCount > 0 ? Math.round(((wins + refundedCount) / decidedCount) * 100) : 0;
 
   const pickRevenue = users.reduce((sum, u) =>
     sum + u.unlockedPickIds.reduce((s, pid) => { const p = picks.find((pk) => pk._id === pid); return s + (p ? p.price : 0); }, 0), 0
@@ -3417,7 +3419,7 @@ function OverviewTab({ picks, users }: { picks: Pick[]; users: ApiUser[] }) {
         <StatCard label="Revenu Total" value={`${Math.round(totalRevenue / 1000)}K`} sub={`${formatCFA(pickRevenue)} picks + ${formatCFA(subscriptionRevenue)} abonnements`} accent />
         <StatCard label="Utilisateurs" value={users.length} sub={`${activeUsers} actifs`} />
         <StatCard label="Picks Totaux" value={picks.length} sub={`${picks.filter((p) => p.is_published).length} publiés`} />
-        <StatCard label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${losses}L`} />
+        <StatCard label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${losses}L / ${refundedCount}R`} />
         <StatCard label="Abonnés Actifs" value={activeSubscribers.length} sub={`sur ${users.length} utilisateurs`} />
       </div>
 
@@ -3505,6 +3507,7 @@ function SettingsTab() {
   const [genEnabled, setGenEnabled] = useState(false);
   const [genAccess, setGenAccess] = useState<"EVERYONE" | "PREMIUM">("PREMIUM");
   const [genCount, setGenCount] = useState(3);
+  const [genFreeLimit, setGenFreeLimit] = useState(5);
   const [genSaving, setGenSaving] = useState(false);
   const [genSaveMsg, setGenSaveMsg] = useState<string | null>(null);
   // Per-market override on top of genAccess — a market missing here falls
@@ -3540,6 +3543,9 @@ function SettingsTab() {
           }
           if (data.data.matchGeneratorAccess === "EVERYONE" || data.data.matchGeneratorAccess === "PREMIUM") {
             setGenAccess(data.data.matchGeneratorAccess);
+          }
+          if (typeof data.data.generatorFreeDailyLimit === "number") {
+            setGenFreeLimit(data.data.generatorFreeDailyLimit);
           }
           if (typeof data.data.matchGeneratorMatchCount === "number") {
             setGenCount(data.data.matchGeneratorMatchCount);
@@ -3647,7 +3653,7 @@ function SettingsTab() {
     saveTipOptions(tipOptions.filter((x) => x !== t));
   };
 
-  const saveGeneratorSettings = async (next: { enabled?: boolean; access?: "EVERYONE" | "PREMIUM"; count?: number }) => {
+  const saveGeneratorSettings = async (next: { enabled?: boolean; access?: "EVERYONE" | "PREMIUM"; count?: number; freeLimit?: number }) => {
     setGenSaving(true);
     setGenSaveMsg(null);
     try {
@@ -3659,6 +3665,7 @@ function SettingsTab() {
           matchGeneratorEnabled: next.enabled ?? genEnabled,
           matchGeneratorAccess: next.access ?? genAccess,
           matchGeneratorMatchCount: next.count ?? genCount,
+          generatorFreeDailyLimit: next.freeLimit ?? genFreeLimit,
         }),
       });
       const data = await res.json();
@@ -3666,6 +3673,7 @@ function SettingsTab() {
         setGenEnabled(data.data.matchGeneratorEnabled);
         setGenAccess(data.data.matchGeneratorAccess);
         setGenCount(data.data.matchGeneratorMatchCount);
+        if (typeof data.data.generatorFreeDailyLimit === "number") setGenFreeLimit(data.data.generatorFreeDailyLimit);
         setGenSaveMsg("Enregistré avec succès.");
       } else {
         setGenSaveMsg(data.message || "Erreur lors de l'enregistrement.");
@@ -4078,6 +4086,23 @@ function SettingsTab() {
           ))}
         </select>
 
+        <label style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted, textTransform: "uppercase", fontWeight: 600, display: "block", marginBottom: 6, marginTop: 16 }}>
+          Générations gratuites par jour
+        </label>
+        <select
+          style={{ ...iStyle, cursor: genSaving ? "not-allowed" : "pointer" }}
+          value={genFreeLimit}
+          disabled={genSaving}
+          onChange={(e) => { const v = Number(e.target.value); setGenFreeLimit(v); saveGeneratorSettings({ freeLimit: v }); }}
+        >
+          {[0, 1, 2, 3, 5, 10, 20, 50].map((n) => (
+            <option key={n} value={n}>{n === 0 ? "0 — réservé aux abonnés" : `${n} par jour`}</option>
+          ))}
+        </select>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>
+          Les abonnés et les admins sont illimités. Le compteur se remet à zéro chaque jour à minuit (heure du Cameroun).
+        </div>
+
         {genSaveMsg && (
           <div style={{
             fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
@@ -4107,6 +4132,99 @@ function SettingsTab() {
       <NewsFeedToggleCard />
 
       <DailyTipsToggleCard />
+
+      <GroupChatCooldownCard />
+    </div>
+  );
+}
+
+// ─── Group chat: pause between messages ─────────────────────────────────────
+// How many seconds a (non-admin) member must wait between two messages in the
+// group rooms. A short pause stops flooding without anyone noticing it in
+// normal conversation; raise it for a calmer room, set 0 to remove it.
+const COOLDOWN_CHOICES = [0, 1, 2, 3, 5, 10, 20, 30, 60];
+
+function GroupChatCooldownCard() {
+  const [seconds, setSeconds] = useState(2);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/settings", { credentials: "include" });
+        const data = await res.json();
+        if (data?.success && typeof data.data.groupChatCooldownSeconds === "number") {
+          setSeconds(data.data.groupChatCooldownSeconds);
+        }
+      } catch (e) {
+        console.error("Settings fetch:", e);
+      }
+    })();
+  }, []);
+
+  const save = async (next: number) => {
+    const previous = seconds;
+    setSeconds(next);
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupChatCooldownSeconds: next }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setSeconds(data.data.groupChatCooldownSeconds);
+        setSaveMsg("Enregistré avec succès.");
+      } else {
+        setSeconds(previous);
+        setSaveMsg(data.message || "Erreur lors de l'enregistrement.");
+      }
+    } catch {
+      setSeconds(previous);
+      setSaveMsg("Erreur réseau lors de l'enregistrement.");
+    } finally {
+      setSaving(false);
+      setTimeout(() => setSaveMsg(null), 3000);
+    }
+  };
+
+  return (
+    <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, marginTop: 16 }}>
+      <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>
+        Modération
+      </div>
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: C.text, letterSpacing: 1, marginBottom: 4 }}>
+        Pause entre deux messages
+      </div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
+        Temps minimum qu&apos;un membre doit attendre entre deux messages dans les groupes (Premium et Global). Évite le spam et le flood. Les admins ne sont pas concernés.
+      </div>
+
+      <select
+        value={seconds}
+        disabled={saving}
+        onChange={(e) => save(Number(e.target.value))}
+        style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 13, padding: "10px 12px", fontFamily: "inherit", outline: "none", cursor: saving ? "not-allowed" : "pointer" }}
+      >
+        {COOLDOWN_CHOICES.map((n) => (
+          <option key={n} value={n}>{n === 0 ? "Aucune pause" : `${n} seconde${n > 1 ? "s" : ""}`}</option>
+        ))}
+      </select>
+
+      {saveMsg && (
+        <div style={{
+          fontSize: 12, padding: "8px 12px", borderRadius: 6, marginTop: 12,
+          background: saveMsg.includes("succès") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+          border: `1px solid ${saveMsg.includes("succès") ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+          color: saveMsg.includes("succès") ? C.green : C.red,
+        }}>
+          {saveMsg}
+        </div>
+      )}
     </div>
   );
 }
@@ -4919,10 +5037,24 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
   const [nowTick, setNowTick] = useState(Date.now());
   const lastTypingPingRef = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const replyRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [compressing, setCompressing] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<string | null>(null);
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [conversation.messages.length]);
+
+  // Auto-growing reply box (up to ~4 lines, then it scrolls).
+  useEffect(() => {
+    const el = replyRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 110)}px`;
+  }, [reply]);
 
   // Faster-than-the-list poll while a thread is open, so a new visitor
   // message and the typing indicator both show up promptly — the
@@ -4951,27 +5083,56 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
   const handleReply = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = reply.trim();
-    if (!text || sending) return;
+    if ((!text && !pendingImage) || sending || compressing) return;
     setSending(true);
+    setReplyError(null);
     try {
       const res = await fetch(`/api/admin/conversations/${conversation._id}`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, image: pendingImage }),
       });
       const data = await res.json();
       if (data?.success) {
         onUpdate(data.data);
         setReply("");
+        setPendingImage(null);
+      } else {
+        setReplyError(data?.message || "Échec de l'envoi");
       }
-    } catch { /* keep draft on failure */ }
+    } catch { setReplyError("Erreur réseau - réessayez"); /* keep draft on failure */ }
     finally { setSending(false); }
   };
 
-  const handleReplyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleReplyImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { setReplyError("Choisissez une image"); return; }
+    setCompressing(true);
+    setReplyError(null);
+    try {
+      setPendingImage(await compressImageToDataUri(file));
+    } catch (err) {
+      setReplyError(err instanceof Error ? err.message : "Impossible de traiter cette image");
+    } finally {
+      setCompressing(false);
+    }
+  };
+
+  // Enter sends, Shift+Enter makes a new line.
+  const handleReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleReply(e as unknown as React.FormEvent);
+    }
+  };
+
+  const handleReplyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setReply(value);
+    setReplyError(null);
     if (!value.trim()) return;
     const now = Date.now();
     if (now - lastTypingPingRef.current < TYPING_PING_THROTTLE_MS) return;
@@ -4989,7 +5150,8 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
 
   const saveEdit = async (id: string) => {
     const text = editText.trim();
-    if (!text) return;
+    const target = conversation.messages.find((m) => m._id === id);
+    if (!text && !target?.image) return;
     setBusyMessageId(id);
     try {
       const res = await fetch(`/api/admin/conversations/${conversation._id}/messages/${id}`, {
@@ -5081,10 +5243,11 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
                   borderRadius: 12,
                   borderBottomRightRadius: isOwn ? 3 : 12,
                   borderBottomLeftRadius: m.sender === "USER" ? 3 : 12,
-                  padding: "9px 12px",
+                  padding: m.image ? 4 : "9px 12px",
                   fontSize: 13,
                   lineHeight: 1.5,
                   opacity: isBusy ? 0.6 : 1,
+                  minWidth: 0,
                 }}>
                   {isEditing ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -5104,24 +5267,36 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
                         <button type="button" onClick={cancelEdit} style={{ background: "transparent", border: "none", color: C.dark, opacity: 0.7, fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: "2px 6px" }}>
                           Annuler
                         </button>
-                        <button type="button" onClick={() => saveEdit(m._id!)} disabled={!editText.trim() || isBusy} style={{ background: C.dark, color: C.gold, border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: "4px 10px", opacity: !editText.trim() || isBusy ? 0.5 : 1 }}>
+                        <button type="button" onClick={() => saveEdit(m._id!)} disabled={(!editText.trim() && !m.image) || isBusy} style={{ background: C.dark, color: C.gold, border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: "4px 10px", opacity: (!editText.trim() && !m.image) || isBusy ? 0.5 : 1 }}>
                           OK
                         </button>
                       </div>
                     </div>
                   ) : (
                     <>
-                      <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3 }}>
+                      {m.image && (
+                        // eslint-disable-next-line @next/next/no-img-element -- served from our own cached image route
+                        <img
+                          src={m.image}
+                          alt="Image envoyée"
+                          loading="lazy"
+                          onClick={() => setLightbox(m.image!)}
+                          style={{ display: "block", width: "100%", maxWidth: 260, maxHeight: 260, objectFit: "cover", borderRadius: 9, cursor: "zoom-in" }}
+                        />
+                      )}
+                      {m.text && <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", padding: m.image ? "6px 8px 0" : 0 }}>{m.text}</div>}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, padding: m.image ? "0 8px 4px" : 0 }}>
                         <span style={{ fontSize: 9, opacity: 0.6 }}>
                           {new Date(m.createdAt).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                           {m.editedAt ? " · modifié" : ""}
                         </span>
                         {isOwn && m._id && (
                           <span style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-                            <button type="button" onClick={() => startEdit(m)} disabled={isBusy} title="Modifier" style={{ background: "none", border: "none", padding: 0, cursor: isBusy ? "not-allowed" : "pointer", opacity: 0.65, color: C.dark, display: "flex" }}>
-                              <Icons.edit />
-                            </button>
+                            {(m.text || !m.image) && (
+                              <button type="button" onClick={() => startEdit(m)} disabled={isBusy} title="Modifier" style={{ background: "none", border: "none", padding: 0, cursor: isBusy ? "not-allowed" : "pointer", opacity: 0.65, color: C.dark, display: "flex" }}>
+                                <Icons.edit />
+                              </button>
+                            )}
                             <button type="button" onClick={() => deleteMessage(m._id!)} disabled={isBusy} title="Supprimer" style={{ background: "none", border: "none", padding: 0, cursor: isBusy ? "not-allowed" : "pointer", opacity: 0.65, color: C.dark, display: "flex" }}>
                               <Icons.trash />
                             </button>
@@ -5139,22 +5314,58 @@ function ConversationModal({ conversation, subscription, onClose, onUpdate }: { 
           )}
         </div>
 
-        <form onSubmit={handleReply} style={{ display: "flex", gap: 8, padding: 14, borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
-          <input
-            value={reply}
-            onChange={handleReplyChange}
-            placeholder="Répondre…"
-            maxLength={2000}
-            style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 20, color: C.text, fontSize: 13, padding: "10px 14px", outline: "none", fontFamily: "inherit", minWidth: 0 }}
-          />
-          <button
-            type="submit"
-            disabled={!reply.trim() || sending}
-            style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 20, padding: "0 18px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: (!reply.trim() || sending) ? 0.5 : 1, whiteSpace: "nowrap" }}
-          >
-            {sending ? "…" : "Envoyer"}
-          </button>
+        <form onSubmit={handleReply} style={{ display: "flex", flexDirection: "column", gap: 8, padding: 14, borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
+          {pendingImage && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- local preview of a data: URI */}
+              <img src={pendingImage} alt="Aperçu" style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}` }} />
+              <button type="button" onClick={() => setPendingImage(null)} style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, fontSize: 11, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
+                Retirer l&apos;image
+              </button>
+            </div>
+          )}
+          {replyError && <div style={{ fontSize: 11, color: C.red }}>{replyError}</div>}
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleReplyImage} style={{ display: "none" }} />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={compressing}
+              aria-label="Joindre une image"
+              title="Joindre une image"
+              style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 38, height: 38, display: "flex", alignItems: "center", justifyContent: "center", cursor: compressing ? "wait" : "pointer", color: C.muted, flexShrink: 0, fontSize: 15 }}
+            >
+              {compressing ? "…" : "📎"}
+            </button>
+            <textarea
+              ref={replyRef}
+              value={reply}
+              onChange={handleReplyChange}
+              onKeyDown={handleReplyKeyDown}
+              placeholder="Répondre…  (Entrée pour envoyer, Maj+Entrée pour un retour à la ligne)"
+              maxLength={2000}
+              rows={1}
+              style={{ flex: 1, background: C.dark4, border: `1px solid ${C.border}`, borderRadius: 18, color: C.text, fontSize: 13, padding: "10px 14px", outline: "none", fontFamily: "inherit", minWidth: 0, resize: "none", lineHeight: 1.4, maxHeight: 110, overflowY: "auto" }}
+            />
+            <button
+              type="submit"
+              disabled={(!reply.trim() && !pendingImage) || sending || compressing}
+              style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 20, height: 38, padding: "0 18px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: ((!reply.trim() && !pendingImage) || sending || compressing) ? 0.5 : 1, whiteSpace: "nowrap", flexShrink: 0 }}
+            >
+              {sending ? "…" : "Envoyer"}
+            </button>
+          </div>
         </form>
+
+        {lightbox && (
+          <div
+            onClick={() => setLightbox(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element -- served from our own cached image route */}
+            <img src={lightbox} alt="Image agrandie" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 8 }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5249,7 +5460,7 @@ function MessagesTab({ conversations, setConversations, loading, users }: { conv
                 </div>
                 {last && (
                   <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 10 }}>
-                    {last.sender === "ADMIN" ? "Vous: " : ""}{last.text}
+                    {last.sender === "ADMIN" ? "Vous: " : ""}{last.text || (last.image ? "📷 Image" : "")}
                   </p>
                 )}
                 <div style={{ display: "flex", gap: 8 }} onClick={(e) => e.stopPropagation()}>
@@ -5598,19 +5809,34 @@ function PostsTab() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const fetchPosts = async () => {
+  // Loaded 10 at a time ("Charger plus"), not the whole history at once.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const fetchPosts = async (cursor?: string | null) => {
     try {
-      const res = await fetch("/api/admin/posts", { credentials: "include" });
+      if (cursor) setLoadingMore(true);
+      const params = new URLSearchParams({ limit: "10" });
+      if (cursor) params.set("before", cursor);
+      const res = await fetch(`/api/admin/posts?${params.toString()}`, { credentials: "include" });
       const data = await res.json();
-      if (data?.success) setPosts(data.data);
+      if (data?.success) {
+        setPosts((prev) => {
+          if (!cursor) return data.data;
+          const known = new Set(prev.map((p) => p._id));
+          return [...prev, ...(data.data as AdminPost[]).filter((p) => !known.has(p._id))];
+        });
+        setNextCursor(data.nextCursor ?? null);
+      }
     } catch (e) {
       console.error("Admin posts fetch:", e);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
-  useEffect(() => { fetchPosts(); }, []);
+  useEffect(() => { fetchPosts(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -5669,7 +5895,10 @@ function PostsTab() {
         body: JSON.stringify({
           authorName: authorName.trim(),
           text: textDraft.trim(),
-          image: imageDataUri,
+          // An existing picture comes back from the list as a URL, not data —
+          // leave `image` out entirely then so the server keeps it unchanged.
+          // A fresh upload is a data URI; removing it is an explicit null.
+          image: imageDataUri === null ? null : imageDataUri.startsWith("data:") ? imageDataUri : undefined,
           pollOptionA: pollEnabled ? pollA.trim() : "",
           pollOptionB: pollEnabled ? pollB.trim() : "",
         }),
@@ -5812,7 +6041,7 @@ function PostsTab() {
 
       <div>
         <div style={{ fontSize: 10, letterSpacing: "2px", color: C.gold, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
-          Publications ({posts.length})
+          Publications ({posts.length}{nextCursor ? "+" : ""})
         </div>
 
         {loading ? (
@@ -5858,6 +6087,15 @@ function PostsTab() {
                 </div>
               </div>
             ))}
+            {nextCursor && (
+              <button
+                onClick={() => fetchPosts(nextCursor)}
+                disabled={loadingMore}
+                style={{ ...adminSmallBtnStyle, alignSelf: "center", padding: "9px 22px", opacity: loadingMore ? 0.6 : 1 }}
+              >
+                {loadingMore ? "Chargement…" : "Charger plus"}
+              </button>
+            )}
           </div>
         )}
       </div>

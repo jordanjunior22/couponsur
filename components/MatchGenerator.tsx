@@ -1,5 +1,6 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   PiWarningFill, PiLockSimpleFill, PiRobotFill,
   PiArrowsClockwiseBold, PiSlidersHorizontalBold,
@@ -19,6 +20,13 @@ interface GeneratedMatch {
   isEstimatedOdd: boolean;
 }
 
+interface GeneratorUsageInfo {
+  unlimited: boolean;
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+}
+
 interface GenerateResponse {
   success: boolean;
   matches?: GeneratedMatch[];
@@ -28,6 +36,9 @@ interface GenerateResponse {
   // Identity of this combination — sent back as ?avoid= on the next
   // generate so the visitor never gets the same one twice in a row.
   signature?: string;
+  // Set when a FREE user has spent today's generations (HTTP 403).
+  dailyLimitReached?: boolean;
+  usage?: GeneratorUsageInfo;
   message?: string;
   disclaimer?: string;
   requiresLogin?: boolean;
@@ -104,6 +115,25 @@ export function MatchGeneratorTool({
 
   const lastSignatureRef = useRef<string | null>(null);
 
+  // How many generations are left today (free users) — null until loaded.
+  const [usage, setUsage] = useState<GeneratorUsageInfo | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
+  useEffect(() => {
+    if (!user) { setUsage(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/generate-matches/usage", { credentials: "include" });
+        const data = await res.json();
+        if (!cancelled && data?.success) {
+          setUsage(data.usage);
+          setLimitReached(!data.usage.unlimited && data.usage.remaining === 0);
+        }
+      } catch { /* the counter just stays hidden */ }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
   const isMarketLocked = (code: string) => (marketAccess[code] ?? "PREMIUM") === "PREMIUM" && !isPremium;
 
   // Optional — left blank, the generator just picks from the strongest
@@ -139,7 +169,13 @@ export function MatchGeneratorTool({
       const res = await fetch(url, { credentials: "include" });
       const data: GenerateResponse = await res.json();
 
+      if (data.usage) {
+        setUsage(data.usage);
+        setLimitReached(!data.usage.unlimited && data.usage.remaining === 0);
+      }
+
       if (!data.success) {
+        if (data.dailyLimitReached) setLimitReached(true);
         setErrorMsg(data.message || "Impossible de générer des matchs pour le moment.");
         setRequiresPremium(!!data.requiresPremium);
         setRestrictedMarkets(data.restrictedMarkets || []);
@@ -228,7 +264,27 @@ export function MatchGeneratorTool({
             }}
           />
 
-          <button onClick={generate} disabled={state === "loading"} style={generateBtnStyle(state === "loading")}>
+          {usage && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", fontSize: 11, color: "#7A8399", marginBottom: 12 }}>
+              {usage.unlimited ? (
+                <span style={{ color: "#C9A84C", fontWeight: 600 }}>✦ Générations illimitées</span>
+              ) : (
+                <span>
+                  <strong style={{ color: usage.remaining === 0 ? "#f87171" : "#E8EAF0" }}>{usage.remaining}</strong>
+                  {" "}/ {usage.limit} génération{(usage.limit ?? 0) > 1 ? "s" : ""} gratuite{(usage.limit ?? 0) > 1 ? "s" : ""} restante{(usage.remaining ?? 0) > 1 ? "s" : ""} aujourd&apos;hui
+                </span>
+              )}
+            </div>
+          )}
+
+          {limitReached && !hasActiveSubscription() && (
+            <div style={{ fontSize: 12, color: "#E8C97A", lineHeight: 1.5, background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.25)", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+              Tu as utilisé tes générations gratuites du jour. <strong>Abonne-toi pour générer sans limite</strong>, ou reviens demain.{" "}
+              <Link href="/profil" style={{ color: "#C9A84C", fontWeight: 700, textDecoration: "underline" }}>S&apos;abonner</Link>
+            </div>
+          )}
+
+          <button onClick={generate} disabled={state === "loading" || (limitReached && !hasActiveSubscription())} style={generateBtnStyle(state === "loading" || (limitReached && !hasActiveSubscription()))}>
             {state === "loading" ? (
               <>
                 <Spinner size={14} variant="dark" glow={false} /> Analyse en cours…
@@ -312,9 +368,21 @@ export function MatchGeneratorTool({
             </div>
           )}
 
-          <button onClick={generate} style={regenerateBtnStyle}>
-            <PiArrowsClockwiseBold size={14} /> Générer à nouveau
-          </button>
+          {usage && !usage.unlimited && (
+            <div style={{ fontSize: 11, color: "#7A8399", textAlign: "center", marginBottom: 8 }}>
+              <strong style={{ color: usage.remaining === 0 ? "#f87171" : "#E8EAF0" }}>{usage.remaining}</strong> / {usage.limit} gratuite{(usage.limit ?? 0) > 1 ? "s" : ""} restante{(usage.remaining ?? 0) > 1 ? "s" : ""} aujourd&apos;hui
+            </div>
+          )}
+          {limitReached && !hasActiveSubscription() ? (
+            <div style={{ fontSize: 12, color: "#E8C97A", lineHeight: 1.5, background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.25)", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
+              Limite du jour atteinte. <strong>Abonne-toi pour générer sans limite</strong>, ou reviens demain.{" "}
+              <Link href="/profil" style={{ color: "#C9A84C", fontWeight: 700, textDecoration: "underline" }}>S&apos;abonner</Link>
+            </div>
+          ) : (
+            <button onClick={generate} style={regenerateBtnStyle}>
+              <PiArrowsClockwiseBold size={14} /> Générer à nouveau
+            </button>
+          )}
         </div>
       )}
 

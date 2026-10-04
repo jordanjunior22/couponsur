@@ -53,6 +53,12 @@ export interface IUser extends Document {
   // lists and other bulk reads don't drag every picture along — the routes
   // that serve the signed-in user's own profile opt in with "+avatar".
   avatar?: string | null;
+  // AI match generator usage (see lib/generatorQuota.ts): `day` is the WAT
+  // calendar day `count` belongs to, `lastAt` backs the short anti-spam pause.
+  generator?: { day: string | null; count: number; lastAt: Date | null };
+  // When this account last posted in a group chat room - backs the
+  // configurable pause between messages (Settings.groupChatCooldownSeconds).
+  groupChatLastAt?: Date | null;
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -105,6 +111,18 @@ const UserSchema = new Schema<IUser>(
     groupChatBlocked: { type: Boolean, default: false },
     nickname: { type: String, trim: true, maxlength: 40, default: null },
     avatar: { type: String, default: null, select: false },
+    generator: {
+      type: new Schema(
+        {
+          day: { type: String, default: null },
+          count: { type: Number, default: 0 },
+          lastAt: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: () => ({}),
+    },
+    groupChatLastAt: { type: Date, default: null },
     lastLoginAt: { type: Date, default: null },
   },
   {

@@ -42,7 +42,9 @@ export async function PUT(req: NextRequest) {
       matchGeneratorAccess,
       matchGeneratorMarketAccess,
       matchGeneratorMatchCount,
+      generatorFreeDailyLimit,
       groupChatEnabled,
+      groupChatCooldownSeconds,
       globalChatEnabled,
       newsFeedEnabled,
       dbStorageLimitMb,
@@ -164,6 +166,36 @@ export async function PUT(req: NextRequest) {
         );
       }
       update.matchGeneratorMatchCount = matchGeneratorMatchCount;
+    }
+
+    if (generatorFreeDailyLimit !== undefined) {
+      if (
+        typeof generatorFreeDailyLimit !== "number" ||
+        !Number.isInteger(generatorFreeDailyLimit) ||
+        generatorFreeDailyLimit < 0 ||
+        generatorFreeDailyLimit > 100
+      ) {
+        return NextResponse.json(
+          { success: false, message: "generatorFreeDailyLimit must be an integer between 0 and 100" },
+          { status: 400 }
+        );
+      }
+      update.generatorFreeDailyLimit = generatorFreeDailyLimit;
+    }
+
+    if (groupChatCooldownSeconds !== undefined) {
+      if (
+        typeof groupChatCooldownSeconds !== "number" ||
+        !Number.isInteger(groupChatCooldownSeconds) ||
+        groupChatCooldownSeconds < 0 ||
+        groupChatCooldownSeconds > 60
+      ) {
+        return NextResponse.json(
+          { success: false, message: "groupChatCooldownSeconds must be an integer between 0 and 60" },
+          { status: 400 }
+        );
+      }
+      update.groupChatCooldownSeconds = groupChatCooldownSeconds;
     }
 
     if (groupChatEnabled !== undefined) {

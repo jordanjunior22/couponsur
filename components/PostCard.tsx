@@ -231,7 +231,7 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
       {post.image && (
         <div style={mediaWrapStyle} onDoubleClick={handleImageDoubleClick}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={post.image} alt="" style={mediaImgStyle} draggable={false} />
+          <img src={post.image} alt="" loading="lazy" decoding="async" style={mediaImgStyle} draggable={false} />
           {heartPop && (
             <span style={heartOverlayStyle}>
               <PiHeartFill size={84} color="#fff" style={{ filter: "drop-shadow(0 2px 10px rgba(0,0,0,0.35))" }} />

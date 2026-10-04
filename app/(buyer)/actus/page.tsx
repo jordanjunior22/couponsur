@@ -7,26 +7,65 @@ import { InlineLoader } from "@/components/LoadingSpinner";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 import { markActusRead } from "@/hooks/useUnreadPosts";
 
-// The "Actus" feed — admin-authored news + team-vs-team polls. Same
-// polling shape PremiumPicksPage already uses for /api/picks: fetch on
-// mount, a light interval poll, and an immediate refresh on tab refocus —
-// no websocket/SSE backend exists in this project.
+// The "Actus" feed — admin-authored news + team-vs-team polls. Loaded a page
+// at a time (PAGE_SIZE posts), with the next page fetched as the reader
+// nears the bottom, instead of pulling the whole feed up front. No
+// websocket/SSE backend exists in this project, so freshness is a light poll
+// of ONLY the first page, plus an immediate refresh on tab refocus.
 const POLL_MS = 60000;
+const PAGE_SIZE = 10;
 
 export default function ActusPage() {
   const [posts, setPosts] = useState<ClientPost[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isMountedRef = useRef(true);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  // Read inside observer/poll callbacks without re-creating them.
+  const nextCursorRef = useRef<string | null>(null);
+  const loadingMoreRef = useRef(false);
+  nextCursorRef.current = nextCursor;
 
-  const fetchPosts = useCallback(async (showSpinner: boolean) => {
+  // First page: initial load, and the periodic/refocus refresh. On a
+  // refresh the fresh page is MERGED into what's already on screen — posts
+  // loaded further down (older pages) are kept, new ones are added on top,
+  // and counts (likes, comments, votes) on visible ones are updated.
+  const fetchFirstPage = useCallback(async (showSpinner: boolean) => {
     try {
       if (showSpinner) { setLoading(true); setError(null); }
-      const res = await fetch("/api/posts");
+      const res = await fetch(`/api/posts?limit=${PAGE_SIZE}`);
       const data = await res.json();
       if (!isMountedRef.current) return;
-      if (data?.success) { setPosts(data.data); markActusRead(); }
-      else if (showSpinner) setError(data?.message || "Erreur inconnue");
+      if (!data?.success) {
+        if (showSpinner) setError(data?.message || "Erreur inconnue");
+        return;
+      }
+      const fresh: ClientPost[] = data.data;
+      if (showSpinner) {
+        setPosts(fresh);
+        setNextCursor(data.nextCursor);
+      } else {
+        setPosts((prev) => {
+          const freshById = new Map(fresh.map((p) => [p._id, p]));
+          const prevIds = new Set(prev.map((p) => p._id));
+          const added = fresh.filter((p) => !prevIds.has(p._id));
+          // A post the fresh page SHOULD contain but doesn't was deleted or
+          // unpublished meanwhile — drop it. "Should contain" = at least as
+          // new as the fresh page's oldest entry (or everything, if the
+          // fresh page is the whole feed). Older posts simply weren't part
+          // of this request, so they're left alone.
+          const oldestFresh = fresh.length > 0 ? fresh[fresh.length - 1].createdAt : null;
+          const covered = (p: ClientPost) => !data.nextCursor || (oldestFresh !== null && p.createdAt >= oldestFresh);
+          const kept = prev
+            .filter((p) => freshById.has(p._id) || !covered(p))
+            .map((p) => freshById.get(p._id) ?? p);
+          return [...added, ...kept];
+        });
+      }
+      markActusRead();
     } catch (err) {
       if (showSpinner) setError(err instanceof Error ? err.message : "Erreur inconnue");
     } finally {
@@ -34,11 +73,40 @@ export default function ActusPage() {
     }
   }, []);
 
+  const loadMore = useCallback(async () => {
+    const cursor = nextCursorRef.current;
+    if (!cursor || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setMoreError(false);
+    try {
+      const res = await fetch(`/api/posts?limit=${PAGE_SIZE}&before=${encodeURIComponent(cursor)}`);
+      const data = await res.json();
+      if (!isMountedRef.current) return;
+      if (data?.success) {
+        setPosts((prev) => {
+          const known = new Set(prev.map((p) => p._id));
+          return [...prev, ...(data.data as ClientPost[]).filter((p) => !known.has(p._id))];
+        });
+        setNextCursor(data.nextCursor);
+      } else {
+        setMoreError(true);
+      }
+    } catch {
+      if (isMountedRef.current) setMoreError(true);
+    } finally {
+      loadingMoreRef.current = false;
+      if (isMountedRef.current) setLoadingMore(false);
+    }
+  }, []);
+
   useEffect(() => {
     isMountedRef.current = true;
-    fetchPosts(true);
-    const interval = setInterval(() => fetchPosts(false), POLL_MS);
-    const onVisible = () => { if (document.visibilityState === "visible") fetchPosts(false); };
+    fetchFirstPage(true);
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") fetchFirstPage(false);
+    }, POLL_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") fetchFirstPage(false); };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onVisible);
     return () => {
@@ -47,7 +115,20 @@ export default function ActusPage() {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
     };
-  }, [fetchPosts]);
+  }, [fetchFirstPage]);
+
+  // Fetch the next page when the sentinel at the bottom comes within ~600px
+  // of the viewport — before the reader actually hits the end.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !nextCursor) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting && !moreError) loadMore(); },
+      { rootMargin: "600px 0px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [nextCursor, loadMore, moreError, posts.length]);
 
   const updatePost = (updated: ClientPost) => {
     setPosts((prev) => prev.map((p) => (p._id === updated._id ? updated : p)));
@@ -68,7 +149,7 @@ export default function ActusPage() {
         {!loading && error && (
           <div style={{ textAlign: "center", padding: "40px 16px", color: "#7A8399" }}>
             <div style={{ fontSize: 13, marginBottom: 10 }}>Impossible de charger les actus.</div>
-            <button onClick={() => fetchPosts(true)} style={retryBtnStyle}>Réessayer</button>
+            <button onClick={() => fetchFirstPage(true)} style={retryBtnStyle}>Réessayer</button>
           </div>
         )}
 
@@ -84,6 +165,16 @@ export default function ActusPage() {
             {posts.map((post) => (
               <PostCard key={post._id} post={post} onUpdate={updatePost} />
             ))}
+
+            {nextCursor && (
+              <div ref={sentinelRef} style={{ padding: "8px 16px 24px", textAlign: "center" }}>
+                {moreError ? (
+                  <button onClick={() => { setMoreError(false); loadMore(); }} style={retryBtnStyle}>Réessayer</button>
+                ) : (
+                  loadingMore && <InlineLoader size={26} label="Chargement…" padding="12px 0" />
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

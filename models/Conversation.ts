@@ -7,6 +7,12 @@ export interface IChatMessage {
   _id?: Types.ObjectId;
   sender: ChatSender;
   text: string;
+  // Optional picture, stored inline as a data URI (client-downscaled to a
+  // JPEG) - same convention as GroupMessage.image. Never sent to clients
+  // inside conversation payloads: they get a cacheable URL instead (see
+  // utils/chatSerializer.ts + app/api/chat/image).
+  image?: string | null;
+  imageBytes?: number;
   createdAt: Date;
   editedAt?: Date | null;
 }
@@ -30,7 +36,11 @@ export interface IConversation extends Document {
 const ChatMessageSchema = new Schema<IChatMessage>(
   {
     sender: { type: String, enum: ["USER", "ADMIN"], required: true },
-    text: { type: String, required: true, trim: true, maxlength: 2000 },
+    // Not `required`: an image-only message (no caption) is valid. The API
+    // routes enforce "text or image".
+    text: { type: String, default: "", trim: true, maxlength: 2000 },
+    image: { type: String, default: null },
+    imageBytes: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
     // Set whenever the sender edits this message after sending it —
     // null/absent means never edited. Lets the UI show a small

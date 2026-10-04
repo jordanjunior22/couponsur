@@ -3,6 +3,7 @@ import ConversationModel from "@/models/Conversation";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { serializeConversation } from "@/utils/chatSerializer";
 
 // ─── HELPER: REQUIRE ADMIN ───────────────────────────────
 async function requireAdmin() {
@@ -28,9 +29,10 @@ export async function GET() {
       return NextResponse.json({ success: false, message: auth.error }, { status: auth.status });
     }
 
-    const conversations = await ConversationModel.find().sort({ lastMessageAt: -1 }).lean();
+    // `-messages.image`: the list never carries picture data, only URLs.
+    const conversations = await ConversationModel.find().select("-messages.image").sort({ lastMessageAt: -1 }).lean();
 
-    return NextResponse.json({ success: true, data: conversations });
+    return NextResponse.json({ success: true, data: conversations.map(serializeConversation) });
   } catch (error) {
     console.error("LIST CONVERSATIONS ERROR:", error);
     return NextResponse.json(

@@ -3,6 +3,8 @@ import ConversationModel from "@/models/Conversation";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { serializeConversation } from "@/utils/chatSerializer";
+import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 
 // ─── HELPER: REQUIRE ADMIN ───────────────────────────────
 async function requireAdmin() {
@@ -32,13 +34,13 @@ export async function GET(
     }
 
     const { id } = await params;
-    const conversation = await ConversationModel.findById(id);
+    const conversation = await ConversationModel.findById(id).select("-messages.image").lean();
 
     if (!conversation) {
       return NextResponse.json({ success: false, message: "Conversation not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: conversation });
+    return NextResponse.json({ success: true, data: serializeConversation(conversation) });
   } catch (error) {
     console.error("GET CONVERSATION ERROR:", error);
     return NextResponse.json(
@@ -49,7 +51,7 @@ export async function GET(
 }
 
 // ─── REPLY AS ADMIN ───────────────────────────────────────
-// POST /api/admin/conversations/:id   body: { text: string }
+// POST /api/admin/conversations/:id   body: { text?: string, image?: dataURI }
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -66,28 +68,44 @@ export async function POST(
     const body = await req.json();
     const text = typeof body.text === "string" ? body.text.trim() : "";
 
-    if (!text) {
+    const rawImage = typeof body.image === "string" ? body.image : null;
+
+    if (!text && !rawImage) {
       return NextResponse.json({ success: false, message: "Le message ne peut pas être vide" }, { status: 400 });
     }
     if (text.length > 2000) {
       return NextResponse.json({ success: false, message: "Le message est trop long (2000 caractères max)" }, { status: 400 });
     }
 
+    let image: string | null = null;
+    let imageBytes = 0;
+    if (rawImage) {
+      const parsed = parseImageDataUri(rawImage);
+      if (!parsed) {
+        return NextResponse.json({ success: false, message: "Image invalide" }, { status: 400 });
+      }
+      if (parsed.bytes > MAX_GROUP_IMAGE_BYTES) {
+        return NextResponse.json({ success: false, message: "Image trop volumineuse" }, { status: 400 });
+      }
+      image = rawImage;
+      imageBytes = parsed.bytes;
+    }
+
     const now = new Date();
     const conversation = await ConversationModel.findByIdAndUpdate(
       id,
       {
-        $push: { messages: { sender: "ADMIN", text, createdAt: now } },
+        $push: { messages: { sender: "ADMIN", text, image, imageBytes, createdAt: now } },
         $set: { lastMessageAt: now },
       },
       { new: true }
-    );
+    ).select("-messages.image");
 
     if (!conversation) {
       return NextResponse.json({ success: false, message: "Conversation not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: conversation });
+    return NextResponse.json({ success: true, data: serializeConversation(conversation) });
   } catch (error) {
     console.error("REPLY CONVERSATION ERROR:", error);
     return NextResponse.json(
@@ -125,13 +143,13 @@ export async function PATCH(
       id,
       { status: body.status },
       { new: true }
-    );
+    ).select("-messages.image");
 
     if (!conversation) {
       return NextResponse.json({ success: false, message: "Conversation not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: conversation });
+    return NextResponse.json({ success: true, data: serializeConversation(conversation) });
   } catch (error) {
     console.error("UPDATE CONVERSATION STATUS ERROR:", error);
     return NextResponse.json(

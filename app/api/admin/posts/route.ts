@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 import { toClientPost } from "@/utils/postSerializer";
+import { loadPostsPage, parsePageParams } from "@/utils/postFeed";
 import { sendPushToAll } from "@/lib/webpush";
 
 async function requireAdmin() {
@@ -20,7 +21,7 @@ async function requireAdmin() {
 // ─── GET: every post, published or not (ADMIN ONLY) ────────────────────────
 // Powers the dashboard's post list — the public feed (app/api/posts/route.ts)
 // only ever returns published ones.
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
@@ -29,8 +30,15 @@ export async function GET() {
       return NextResponse.json({ success: false, message: auth.error }, { status: auth.status });
     }
 
-    const posts = await PostModel.find().sort({ createdAt: -1 }).lean();
-    return NextResponse.json({ success: true, data: posts.map((p) => toClientPost(p, null)) });
+    // Paged like the public feed (?limit=10&before=<cursor>) — the list used
+    // to pull EVERY post ever made, images included, in one response.
+    const { limit, before } = parsePageParams(new URL(req.url).searchParams);
+    const { posts, imageIds, nextCursor } = await loadPostsPage({ publishedOnly: false, limit, before });
+    return NextResponse.json({
+      success: true,
+      data: posts.map((p) => toClientPost(p, null, { hasImage: imageIds.has(p._id.toString()) })),
+      nextCursor,
+    });
   } catch (error) {
     console.error("GET ADMIN POSTS ERROR:", error);
     return NextResponse.json({ success: false, message: "Failed to fetch posts" }, { status: 500 });

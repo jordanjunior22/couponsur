@@ -5,6 +5,8 @@ import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { sendPushToAdmins } from "@/lib/webpush";
+import { serializeConversation } from "@/utils/chatSerializer";
+import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 
 // Resolves who's talking: a logged-in visitor is identified by their
 // userId (reliable, can't be spoofed via query/body); an anonymous
@@ -45,11 +47,13 @@ export async function GET(req: NextRequest) {
     // .lean() — polled every 4s while the widget is open; no mutation
     // happens off this read, so there's no reason to pay for a hydrated
     // Mongoose Document (getters, change-tracking) on every tick.
+    // `-messages.image`: pictures are never loaded here - the client gets a
+    // cacheable URL per image instead (see utils/chatSerializer.ts).
     const conversation = identity.userId
-      ? await ConversationModel.findOne({ user: identity.userId }).lean()
-      : await ConversationModel.findOne({ phone: identity.phone, user: null }).lean();
+      ? await ConversationModel.findOne({ user: identity.userId }).select("-messages.image").lean()
+      : await ConversationModel.findOne({ phone: identity.phone, user: null }).select("-messages.image").lean();
 
-    return NextResponse.json({ success: true, data: conversation });
+    return NextResponse.json({ success: true, data: serializeConversation(conversation) });
   } catch (error) {
     console.error("GET CHAT ERROR:", error);
     return NextResponse.json(
@@ -60,8 +64,10 @@ export async function GET(req: NextRequest) {
 }
 
 // ─── POST: send a message as the visitor ──────────────────────────────────
-// Body: { phone?, text }. phone is required only when the sender isn't
-// logged in (it's how they'll be found again on the next poll).
+// Body: { phone?, text?, image? (data URI) } - at least one of text/image.
+// phone is required only when the sender isn't logged in (it's how they'll
+// be found again on the next poll). Pictures are for signed-in accounts only,
+// so an anonymous visitor can't use the widget to upload files.
 export async function POST(req: NextRequest) {
   try {
     await connectDB();
@@ -69,7 +75,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const text = typeof body.text === "string" ? body.text.trim() : "";
 
-    if (!text) {
+    const rawImage = typeof body.image === "string" ? body.image : null;
+
+    if (!text && !rawImage) {
       return NextResponse.json(
         { success: false, message: "Le message ne peut pas être vide" },
         { status: 400 }
@@ -90,6 +98,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    let image: string | null = null;
+    let imageBytes = 0;
+    if (rawImage) {
+      if (!identity.userId) {
+        return NextResponse.json(
+          { success: false, message: "Connectez-vous pour envoyer une image." },
+          { status: 403 }
+        );
+      }
+      const parsed = parseImageDataUri(rawImage);
+      if (!parsed) {
+        return NextResponse.json({ success: false, message: "Image invalide" }, { status: 400 });
+      }
+      if (parsed.bytes > MAX_GROUP_IMAGE_BYTES) {
+        return NextResponse.json({ success: false, message: "Image trop volumineuse" }, { status: 400 });
+      }
+      image = rawImage;
+      imageBytes = parsed.bytes;
+    }
+
     const filter = identity.userId
       ? { user: identity.userId }
       : { phone: identity.phone, user: null };
@@ -99,22 +127,22 @@ export async function POST(req: NextRequest) {
       filter,
       {
         $setOnInsert: { phone: identity.phone, user: identity.userId },
-        $push: { messages: { sender: "USER", text, createdAt: now } },
+        $push: { messages: { sender: "USER", text, image, imageBytes, createdAt: now } },
         $set: { lastMessageAt: now, status: "OPEN" },
       },
       { new: true, upsert: true }
-    );
+    ).select("-messages.image");
 
     // Fire-and-forget — this route only ever handles messages sent BY the
     // visitor (admin replies go through /api/admin/conversations/[id]),
     // so every message here is one the admin needs to see and respond to.
     sendPushToAdmins({
       title: "💬 Nouveau message",
-      body: `${identity.phone} : ${text.slice(0, 120)}`,
+      body: `${identity.phone} : ${text ? text.slice(0, 120) : "📷 Image"}`,
       url: "/dashboard",
     }).catch((e) => console.error("Push on chat message failed:", e));
 
-    return NextResponse.json({ success: true, data: conversation }, { status: 201 });
+    return NextResponse.json({ success: true, data: serializeConversation(conversation) }, { status: 201 });
   } catch (error) {
     console.error("SEND CHAT MESSAGE ERROR:", error);
     return NextResponse.json(

@@ -60,7 +60,14 @@ export interface IGroupMessage extends Document {
   // Admin-only moderation flag — surfaces the message in the pinned strip
   // at the top of the room. Not per-user (that's `star`, kept client-side).
   pinned: boolean;
+  // Emoji reactions: { "👍": [userId, ...], ... }. Only emojis from
+  // REACTION_EMOJIS (utils/groupChatSerializer.ts) are ever written.
+  reactions?: Record<string, Types.ObjectId[]>;
+  // Users who flagged this message to the admins ("Signaler"). Only the
+  // COUNT is ever sent to the client, and only to admins.
+  reports?: Types.ObjectId[];
   createdAt: Date;
+  updatedAt?: Date;
   editedAt?: Date | null;
 }
 
@@ -93,6 +100,8 @@ const GroupMessageSchema = new Schema<IGroupMessage>(
     imageBytes: { type: Number, default: 0 },
     replyTo: { type: GroupReplyPreviewSchema, default: null },
     pinned: { type: Boolean, default: false },
+    reactions: { type: Schema.Types.Mixed, default: () => ({}) },
+    reports: { type: [Schema.Types.ObjectId], default: [] },
     editedAt: { type: Date, default: null },
   },
   { timestamps: true }
@@ -111,6 +120,9 @@ const GroupMessageSchema = new Schema<IGroupMessage>(
 GroupMessageSchema.index({ createdAt: 1 });
 GroupMessageSchema.index({ pinned: 1 });
 GroupMessageSchema.index({ room: 1, createdAt: 1 });
+// The fast poll asks "what changed since X?" (new messages AND edits / pins /
+// reactions), keyed on updatedAt.
+GroupMessageSchema.index({ room: 1, updatedAt: 1 });
 
 const GroupMessageModel: Model<IGroupMessage> =
   mongoose.models.GroupMessage ||

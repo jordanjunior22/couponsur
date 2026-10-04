@@ -48,11 +48,20 @@ export interface ISettings extends Document {
   matchGeneratorMarketAccess: Record<MatchGeneratorMarket, MatchGeneratorAccess>;
   /** How many matches a single generation produces. */
   matchGeneratorMatchCount: number;
+  /** How many generations a FREE (non-subscribed) user gets per day (resets
+   *  at midnight WAT). Subscribers and admins are unlimited. See
+   *  lib/generatorQuota.ts. */
+  generatorFreeDailyLimit: number;
   /** Master switch for the premium group chat (admins + active
    *  subscribers). On by default — unlike the match generator, this ships
    *  already requested and meant to be live; an admin can still flip it
    *  off (e.g. during moderation or an incident) without touching code. */
   groupChatEnabled: boolean;
+  /** Minimum seconds between two messages from the same (non-admin)
+   *  account in either group room. 0 turns the pause off. Default 2 - short
+   *  enough that normal chatting never notices it, long enough to stop
+   *  flooding. */
+  groupChatCooldownSeconds: number;
   /** Master switch for "Chat Global" — same shape as groupChatEnabled, but
    *  gates the room open to every logged-in user rather than just admins +
    *  active subscribers. On by default for the same reason: it ships ready
@@ -106,7 +115,9 @@ const SettingsSchema = new Schema<ISettings>(
     matchGeneratorAccess: { type: String, enum: ["EVERYONE", "PREMIUM"], default: "PREMIUM" },
     matchGeneratorMarketAccess: { type: Schema.Types.Mixed, default: () => ({ ...DEFAULT_MARKET_ACCESS }) },
     matchGeneratorMatchCount: { type: Number, default: 3, min: 1, max: 10 },
+    generatorFreeDailyLimit: { type: Number, default: 5, min: 0, max: 100 },
     groupChatEnabled: { type: Boolean, default: true },
+    groupChatCooldownSeconds: { type: Number, default: 2, min: 0, max: 60 },
     globalChatEnabled: { type: Boolean, default: true },
     newsFeedEnabled: { type: Boolean, default: true },
     dbStorageLimitMb: { type: Number, default: 512, min: 1 },

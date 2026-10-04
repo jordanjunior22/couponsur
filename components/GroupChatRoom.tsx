@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useAuth } from "@/context/AuthContext";
 import { markRoomRead } from "@/hooks/useUnreadChat";
 import { compressImageToDataUri } from "@/utils/imageCompression";
 import { InlineLoader } from "@/components/LoadingSpinner";
 import type { GroupRoom } from "@/models/GroupMessage";
+import { REACTION_EMOJIS } from "@/utils/groupChatSerializer";
 
 interface ReplyPreview {
   messageId: string;
@@ -31,7 +33,13 @@ interface GroupMessage {
   image: string | null;
   replyTo: ReplyPreview | null;
   pinned: boolean;
+  reactions: { emoji: string; count: number; mine: boolean }[];
+  // Admins only: how many members flagged this message. For everyone else it
+  // is always 0 - they just learn whether THEY already reported it.
+  reportCount: number;
+  reportedByMe: boolean;
   createdAt: string;
+  updatedAt?: string;
   editedAt?: string | null;
   // Client-only fields for a message that hasn't been confirmed by the
   // server yet (see handleSend's optimistic append) — never sent/received
@@ -70,8 +78,108 @@ const HIGHLIGHT_MS = 1500;
 // as WhatsApp/Telegram/Messenger.
 const GROUP_GAP_MS = 5 * 60 * 1000;
 const COMPOSER_MAX_HEIGHT = 120;
+// Per-message "..." menu: its on-screen width, the screen-edge margin it must
+// keep, and a generous estimate of its tallest form (used only to decide
+// whether it opens below or above the button).
+const MENU_WIDTH = 230;
+const MENU_MARGIN = 8;
+const MENU_EST_HEIGHT = 240;
 
 const starredKey = (userId: string) => `groupchat_starred:${userId}`;
+
+// Newest `updatedAt` (falling back to createdAt) across a batch - what the
+// fast poll sends as `since` so it hears about new messages AND edits / pins /
+// reactions on existing ones.
+function maxUpdatedAt(list: { createdAt: string; updatedAt?: string }[], current: string | null): string | null {
+  let best = current;
+  for (const m of list) {
+    const t = m.updatedAt ?? m.createdAt;
+    if (!best || t > best) best = t;
+  }
+  return best;
+}
+
+// Keeps the first occurrence of each _id. A message can reach the screen
+// twice - once from the poll, once from its own send response - whichever
+// lands second must not leave a duplicate.
+function dedupeById<T extends { _id: string }>(list: T[]): T[] {
+  const seen = new Set<string>();
+  return list.filter((m) => (seen.has(m._id) ? false : (seen.add(m._id), true)));
+}
+
+// Applies "I tapped this emoji" to a message locally, before the server
+// answers (and again if it has to be undone).
+function withToggledReaction(m: GroupMessage, emoji: string): GroupMessage {
+  const existing = m.reactions.find((r) => r.emoji === emoji);
+  let reactions: GroupMessage["reactions"];
+  if (!existing) {
+    reactions = [...m.reactions, { emoji, count: 1, mine: true }];
+  } else if (existing.mine) {
+    reactions =
+      existing.count <= 1
+        ? m.reactions.filter((r) => r.emoji !== emoji)
+        : m.reactions.map((r) => (r.emoji === emoji ? { ...r, count: r.count - 1, mine: false } : r));
+  } else {
+    reactions = m.reactions.map((r) => (r.emoji === emoji ? { ...r, count: r.count + 1, mine: true } : r));
+  }
+  const order = (e: string) => (REACTION_EMOJIS as readonly string[]).indexOf(e);
+  return { ...m, reactions: reactions.sort((a, b) => order(a.emoji) - order(b.emoji)) };
+}
+const draftStorageKey = (room: string, userId: string) => `groupchat_draft:${room}:${userId}`;
+
+// Gestures (touch only - desktop has the ⋮ button and right-click):
+//   swipe a message sideways past SWIPE_THRESHOLD to reply to it,
+//   press and hold for LONG_PRESS_MS to open its action menu.
+const SWIPE_THRESHOLD = 56; // px of drag that counts as "reply"
+const SWIPE_MAX = 72; // px the bubble is allowed to travel
+const LONG_PRESS_MS = 420;
+const GESTURE_SLOP = 10; // px of movement before we decide swipe vs scroll vs hold
+
+// Tiny haptic tick where the device supports it (most Android browsers;
+// silently nothing on iOS/desktop).
+function buzz(ms: number) {
+  try { if (typeof navigator !== "undefined" && "vibrate" in navigator) navigator.vibrate(ms); } catch { /* ignore */ }
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// Turns http(s) links in a message into tappable links. Everything else stays
+// plain text (React escapes it), and only http/https is ever linked.
+function Linkified({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        /^https?:\/\//.test(part) ? (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer nofollow" style={{ color: "inherit", textDecoration: "underline", textUnderlineOffset: 2 }}>
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
 
 function senderLabel(m: GroupMessage, currentUserId?: string) {
   if (currentUserId && m.user === currentUserId) return "Vous";
@@ -202,6 +310,21 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   const [editText, setEditText] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  // Gesture bookkeeping lives in refs (a swipe updates the DOM directly -
+  // re-rendering the whole message list on every pixel of a drag would stutter).
+  const gestureRef = useRef<{
+    id: string; startX: number; startY: number; dir: 1 | -1; el: HTMLElement;
+    mode: "pending" | "swipe" | "cancel" | "long"; timer: ReturnType<typeof setTimeout> | null; offset: number;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
+  const menuOpenedAtRef = useRef(0);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // New messages from others that arrived while scrolled up (shown on the ↓ button).
+  const [unseenBelow, setUnseenBelow] = useState(0);
+  const prevLenRef = useRef(0);
+  // Where the open menu sits on screen (fixed coordinates) - see openMenuFor.
+  const [menuPos, setMenuPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
 
   const [starred, setStarred] = useState<string[]>([]);
   const [filter, setFilter] = useState<"all" | "starred">("all");
@@ -211,17 +334,41 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   const [atBottom, setAtBottom] = useState(true);
   const [onlineCount, setOnlineCount] = useState<number | null>(null);
 
+  // ─── Older history (loaded on demand as the reader scrolls up) ──────────
+  const [hasMoreOlder, setHasMoreOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingOlderRef = useRef(false);
+  const messagesRef = useRef<GroupMessage[]>([]);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  // Set while older messages are being prepended, so the auto-scroll /
+  // "new messages" logic doesn't mistake them for fresh arrivals, and so the
+  // scroll position can be pinned to what the reader was looking at.
+  const prependingRef = useRef(false);
+  const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null);
+  const initialLoadDoneRef = useRef(false);
+
+  // ─── Pause between messages (set by the admins; 0 = none) ─────────────
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+  const nextAllowedRef = useRef(0);
+
+  // ─── Who's online sheet ─────────────────────────────────────────────────
+  const [onlineOpen, setOnlineOpen] = useState(false);
+  const [onlineMembers, setOnlineMembers] = useState<{ user: string; role: "USER" | "ADMIN"; label: string; isMe: boolean }[]>([]);
+  const [onlineTotal, setOnlineTotal] = useState(0);
+  const [onlineLoading, setOnlineLoading] = useState(false);
+
   const listRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const didInitialScrollRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const msgRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  // Newest confirmed (non-pending/failed) message's createdAt this client
-  // has — what the fast poll tier sends as `since` so the server can
-  // answer "anything new?" instead of re-sending the whole window every
-  // 3s. Null until the first fetch lands (or forever, for an empty room).
-  const latestCreatedAtRef = useRef<string | null>(null);
+  // Newest `updatedAt` this client has seen — what the fast poll tier sends
+  // as `since` so the server answers "anything new OR changed?" (new
+  // messages, edits, pins, reactions, reports) instead of re-sending the
+  // whole window every 3s. Null until the first fetch lands (or forever, for
+  // an empty room).
+  const latestUpdatedAtRef = useRef<string | null>(null);
   // Guards setState calls in fetchMessages against firing after unmount.
   // Reset to true on every effect run (not just declared once via useRef's
   // initializer) because React 18 Strict Mode (on by default for the App
@@ -266,8 +413,18 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         // of letting this poll wipe it off the screen.
         setMessages((prev) => {
           const inFlight = prev.filter((m) => m.pending || m.failed);
-          return [...data.data, ...inFlight];
+          const confirmed: GroupMessage[] = data.data;
+          // Older pages the reader already scrolled back to stay put - the
+          // refresh only replaces the latest window.
+          const windowStart = confirmed.length > 0 ? confirmed[0].createdAt : null;
+          const older = windowStart ? prev.filter((m) => !m.pending && !m.failed && m.createdAt < windowStart) : [];
+          return [...older, ...confirmed, ...inFlight];
         });
+        if (!initialLoadDoneRef.current) {
+          initialLoadDoneRef.current = true;
+          setHasMoreOlder(!!data.hasMore);
+        }
+        if (typeof data.cooldownSeconds === "number") setCooldownSeconds(data.cooldownSeconds);
         setAccessError(null);
         setAmIBlocked(!!data.amIBlocked);
         if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
@@ -275,8 +432,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         // bar / room picker's unread badges key off of (see
         // hooks/useUnreadChat.ts).
         if (data.me) markRoomRead(data.me, room);
-        const confirmed: GroupMessage[] = data.data;
-        if (confirmed.length > 0) latestCreatedAtRef.current = confirmed[confirmed.length - 1].createdAt;
+        latestUpdatedAtRef.current = maxUpdatedAt(data.data as GroupMessage[], latestUpdatedAtRef.current);
       } else if (res.status === 401 || res.status === 403) {
         setAccessError(data?.message || "Accès refusé");
       }
@@ -291,26 +447,29 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     // Nothing to diff against yet (very first tick, or a room that's had
     // zero messages ever) — fall back to a full fetch instead of sending
     // a meaningless `since`.
-    if (!latestCreatedAtRef.current) return fetchMessages();
+    if (!latestUpdatedAtRef.current) return fetchMessages();
     try {
-      const params = new URLSearchParams({ room, since: latestCreatedAtRef.current });
+      const params = new URLSearchParams({ room, since: latestUpdatedAtRef.current });
       const res = await fetch(`/api/group-chat?${params.toString()}`, { credentials: "include" });
       const data = await res.json();
       if (!mountedRef.current || !data?.success) return;
       setAmIBlocked(!!data.amIBlocked);
       if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
+      if (typeof data.cooldownSeconds === "number") setCooldownSeconds(data.cooldownSeconds);
       if (data.me) markRoomRead(data.me, room);
       const fresh: GroupMessage[] = data.data;
       if (fresh.length === 0) return;
       setMessages((prev) => {
+        const freshById = new Map(fresh.map((m) => [m._id, m]));
         const known = new Set(prev.map((m) => m._id));
         const toAppend = fresh.filter((m) => !known.has(m._id));
-        if (toAppend.length === 0) return prev;
+        // Messages that changed (edit / pin / reaction / report) are replaced
+        // in place; brand-new ones go on the end.
+        const confirmed = prev.filter((m) => !m.pending && !m.failed).map((m) => freshById.get(m._id) ?? m);
         const inFlight = prev.filter((m) => m.pending || m.failed);
-        const confirmed = prev.filter((m) => !m.pending && !m.failed);
         return [...confirmed, ...toAppend, ...inFlight];
       });
-      latestCreatedAtRef.current = fresh[fresh.length - 1].createdAt;
+      latestUpdatedAtRef.current = maxUpdatedAt(fresh, latestUpdatedAtRef.current);
     } catch {
       // Silent — the next poll tick tries again.
     }
@@ -379,6 +538,26 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     }
   }, [messages, isEligible, room, user?._id]);
 
+  // ─── Unsent draft: survives leaving the room / refreshing the page ──────
+  const draftKey = user ? draftStorageKey(room, user._id) : null;
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      const saved = localStorage.getItem(draftKey);
+      if (saved) setDraft(saved);
+    } catch { /* private browsing etc. - the draft just won't persist */ }
+  }, [draftKey]);
+  useEffect(() => {
+    if (!draftKey) return;
+    const t = setTimeout(() => {
+      try {
+        if (draft) localStorage.setItem(draftKey, draft);
+        else localStorage.removeItem(draftKey);
+      } catch { /* ignore */ }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [draft, draftKey]);
+
   // ─── Starred (personal, per-device — no server round-trip needed) ──────
   useEffect(() => {
     if (!user) return;
@@ -404,6 +583,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     nearBottomRef.current = near;
     setAtBottom(near);
+    if (near) setUnseenBelow(0);
   };
 
   const jumpToBottom = () => {
@@ -412,6 +592,24 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     nearBottomRef.current = true;
     setAtBottom(true);
+    setUnseenBelow(0);
+  };
+
+  // Counts messages from others that land while the reader is scrolled up, so
+  // the ↓ button can say "3" instead of silently piling them up out of view.
+  useEffect(() => {
+    const added = messages.length - prevLenRef.current;
+    prevLenRef.current = messages.length;
+    if (loadingMessages || !didInitialScrollRef.current || added <= 0 || nearBottomRef.current || prependingRef.current) return;
+    const fromOthers = messages.slice(-added).filter((m) => m.user !== user?._id && !m.pending && !m.failed).length;
+    if (fromOthers > 0) setUnseenBelow((c) => c + fromOthers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, loadingMessages]);
+
+  const showToast = (text: string) => {
+    setToast(text);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 1600);
   };
 
   // Instant on first load (nothing to animate yet), smooth afterwards —
@@ -424,10 +622,80 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
       didInitialScrollRef.current = true;
       return;
     }
+    // Older messages were just added above - the scroll position is pinned by
+    // the layout effect below; never jump the reader to the bottom for them.
+    if (prependingRef.current) {
+      prependingRef.current = false;
+      return;
+    }
     if (nearBottomRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [messages.length, loadingMessages]);
+
+  // ─── Older history ──────────────────────────────────────────────────────
+  messagesRef.current = messages;
+
+  const loadOlder = useCallback(async () => {
+    if (loadingOlderRef.current) return;
+    const oldest = messagesRef.current.find((m) => !m.pending && !m.failed);
+    if (!oldest) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    const el = listRef.current;
+    scrollAnchorRef.current = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
+    try {
+      const params = new URLSearchParams({ room, before: oldest.createdAt });
+      const res = await fetch(`/api/group-chat?${params.toString()}`, { credentials: "include" });
+      const data = await res.json();
+      if (!mountedRef.current) return;
+      if (data?.success) {
+        const older: GroupMessage[] = data.data;
+        setHasMoreOlder(!!data.hasMore);
+        const known = new Set(messagesRef.current.map((m) => m._id));
+        const toPrepend = older.filter((m) => !known.has(m._id));
+        if (toPrepend.length > 0) {
+          prependingRef.current = true;
+          setMessages((prev) => [...toPrepend, ...prev]);
+        } else {
+          scrollAnchorRef.current = null;
+        }
+      } else {
+        scrollAnchorRef.current = null;
+      }
+    } catch {
+      scrollAnchorRef.current = null;
+    } finally {
+      loadingOlderRef.current = false;
+      if (mountedRef.current) setLoadingOlder(false);
+    }
+  }, [room]);
+
+  // After older messages are added ABOVE, keep the reader looking at the same
+  // message instead of letting the content shove them upward.
+  useLayoutEffect(() => {
+    const a = scrollAnchorRef.current;
+    const el = listRef.current;
+    if (a && el && prependingRef.current) {
+      el.scrollTop = a.top + (el.scrollHeight - a.height);
+      scrollAnchorRef.current = null;
+    }
+  }, [messages]);
+
+  // Auto-load the next page when the "earlier messages" row scrolls into view.
+  // Re-created when a load finishes so a row that is STILL visible (short
+  // pages) triggers the next one.
+  useEffect(() => {
+    const el = topSentinelRef.current;
+    const root = listRef.current;
+    if (!el || !root || !hasMoreOlder || loadingOlder || loadingMessages) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) loadOlder(); },
+      { root, rootMargin: "120px 0px 0px 0px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMoreOlder, loadingOlder, loadingMessages, loadOlder]);
 
   const scrollToMessage = (id: string) => {
     const el = msgRefs.current[id];
@@ -443,18 +711,61 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     const close = (e: Event) => {
       if (e instanceof KeyboardEvent && e.key !== "Escape") return;
       if (e instanceof MouseEvent) {
+        // A press-and-hold opens the menu while the finger is still down; the
+        // browser can then fire a compatibility "mousedown" on release that
+        // would instantly close it again.
+        if (Date.now() - menuOpenedAtRef.current < 450) return;
         const target = e.target as HTMLElement;
         if (target.closest(`[data-menu-root="${openMenuId}"]`)) return;
       }
       setOpenMenuId(null);
     };
+    // The menu is positioned in screen coordinates from where the button was
+    // when it opened, so any scroll or resize would leave it floating in the
+    // wrong place - close it instead.
+    const closeOnMove = () => setOpenMenuId(null);
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", close);
+    window.addEventListener("resize", closeOnMove);
+    window.addEventListener("scroll", closeOnMove, true);
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", close);
+      window.removeEventListener("resize", closeOnMove);
+      window.removeEventListener("scroll", closeOnMove, true);
     };
   }, [openMenuId]);
+
+  // Opens (or closes) a message's menu, placed from the button's real
+  // position: right-aligned to the button where there's room, but always
+  // clamped inside the screen so it can never be cut off - the old version
+  // was anchored to the button's edge, which pushed it off the left side of
+  // the screen for messages from other people. Opens upward near the bottom.
+  const placeMenu = (id: string, rect: { top: number; bottom: number; right: number }) => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = Math.min(MENU_WIDTH, vw - MENU_MARGIN * 2);
+    const left = Math.max(MENU_MARGIN, Math.min(rect.right - width, vw - width - MENU_MARGIN));
+    const roomBelow = vh - rect.bottom - MENU_MARGIN;
+    setMenuPos(
+      roomBelow >= MENU_EST_HEIGHT || roomBelow >= rect.top
+        ? { left, top: rect.bottom + 4 }
+        : { left, bottom: vh - rect.top + 4 }
+    );
+    menuOpenedAtRef.current = Date.now();
+    setOpenMenuId(id);
+  };
+
+  // The ⋮ button: toggles.
+  const openMenuFor = (id: string, button: HTMLElement) => {
+    if (openMenuId === id) { setOpenMenuId(null); return; }
+    placeMenu(id, button.getBoundingClientRect());
+  };
+
+  // Press-and-hold / right-click: opens at the finger or cursor.
+  const showMenuAt = (id: string, x: number, y: number) => {
+    placeMenu(id, { top: y - 8, bottom: y + 10, right: x });
+  };
 
   // ─── Composer ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -516,6 +827,15 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     const text = draft.trim();
     if ((!text && !pendingImage) || sending || compressing || !user) return;
 
+    // Respect the pause between messages locally - no point sending one the
+    // server is going to refuse. The draft is kept, nothing is lost.
+    const waitMs = nextAllowedRef.current - Date.now();
+    if (!isAdmin && waitMs > 0) {
+      setError(`Doucement ! Patientez ${Math.ceil(waitMs / 1000)} seconde${waitMs > 1000 ? "s" : ""} avant d'envoyer un autre message.`);
+      return;
+    }
+    nextAllowedRef.current = isAdmin ? 0 : Date.now() + cooldownSeconds * 1000;
+
     const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const imageToSend = pendingImage;
     const replySnapshot = replyingTo;
@@ -534,6 +854,9 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         ? { messageId: replySnapshot.id, user: "", role: "USER", phone: "", nickname: null, text: replySnapshot.text, label: replySnapshot.label }
         : null,
       pinned: false,
+      reactions: [],
+      reportCount: 0,
+      reportedByMe: false,
       createdAt: new Date().toISOString(),
       pending: true,
     };
@@ -549,12 +872,16 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     try {
       const data = await postMessage({ text, image: imageToSend, replyTo: replySnapshot?.id ?? null });
       if (data?.success) {
-        setMessages((prev) => prev.map((m) => (m.clientId === clientId ? data.data : m)));
+        // If the poll already delivered this message, dedupe keeps one copy.
+        setMessages((prev) => dedupeById(prev.map((m) => (m.clientId === clientId ? data.data : m))));
+        latestUpdatedAtRef.current = maxUpdatedAt([data.data], latestUpdatedAtRef.current);
       } else {
+        nextAllowedRef.current = 0; // a failed send must not also cost them the wait
         setMessages((prev) => prev.map((m) => (m.clientId === clientId ? { ...m, pending: false, failed: true } : m)));
         setError(data?.message || "Échec de l'envoi du message");
       }
     } catch {
+      nextAllowedRef.current = 0;
       setMessages((prev) => prev.map((m) => (m.clientId === clientId ? { ...m, pending: false, failed: true } : m)));
       setError("Erreur réseau — le message n'a pas été envoyé");
     } finally {
@@ -567,7 +894,8 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     try {
       const data = await postMessage({ text: m.text, image: m.image, replyTo: m.replyTo?.messageId ?? null });
       if (data?.success) {
-        setMessages((prev) => prev.map((x) => (x._id === m._id ? data.data : x)));
+        setMessages((prev) => dedupeById(prev.map((x) => (x._id === m._id ? data.data : x))));
+        latestUpdatedAtRef.current = maxUpdatedAt([data.data], latestUpdatedAtRef.current);
       } else {
         setMessages((prev) => prev.map((x) => (x._id === m._id ? { ...x, pending: false, failed: true } : x)));
         setError(data?.message || "Échec de l'envoi du message");
@@ -582,11 +910,184 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     setMessages((prev) => prev.filter((m) => m.clientId !== clientId));
   };
 
+  // Reaction: shown instantly, then confirmed (or undone) by the server.
+  const react = async (m: GroupMessage, emoji: string) => {
+    if (m.pending || m.failed) return;
+    const original = m;
+    setMessages((prev) => prev.map((x) => (x._id === m._id ? withToggledReaction(x, emoji) : x)));
+    try {
+      const res = await fetch(`/api/group-chat/${m._id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ react: emoji }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setMessages((prev) => prev.map((x) => (x._id === m._id ? data.data : x)));
+        latestUpdatedAtRef.current = maxUpdatedAt([data.data], latestUpdatedAtRef.current);
+      } else {
+        setMessages((prev) => prev.map((x) => (x._id === m._id ? original : x)));
+        showToast(data?.message || "Réaction impossible");
+      }
+    } catch {
+      setMessages((prev) => prev.map((x) => (x._id === m._id ? original : x)));
+      showToast("Erreur réseau");
+    }
+  };
+
+  const reportMessage = async (m: GroupMessage) => {
+    if (!confirm("Signaler ce message aux administrateurs ?")) return;
+    try {
+      const res = await fetch(`/api/group-chat/${m._id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ report: true }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setMessages((prev) => prev.map((x) => (x._id === m._id ? data.data : x)));
+        showToast("Signalement envoyé — merci 🙏");
+      } else {
+        showToast(data?.message || "Signalement impossible");
+      }
+    } catch {
+      showToast("Erreur réseau");
+    }
+  };
+
+  const clearReports = async (m: GroupMessage) => {
+    try {
+      const res = await fetch(`/api/group-chat/${m._id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clearReports: true }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setMessages((prev) => prev.map((x) => (x._id === m._id ? data.data : x)));
+        showToast("Signalements effacés");
+      }
+    } catch { /* leave as-is */ }
+  };
+
+  // Who's online: fetched when the sheet opens, then kept fresh while it's open.
+  const fetchOnline = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/group-chat/online?room=${room}`, { credentials: "include" });
+      const data = await res.json();
+      if (!mountedRef.current || !data?.success) return;
+      setOnlineMembers(data.data);
+      setOnlineTotal(data.total ?? data.data.length);
+    } catch { /* keep the last list */ }
+    finally { if (mountedRef.current) setOnlineLoading(false); }
+  }, [room]);
+
+  useEffect(() => {
+    if (!onlineOpen) return;
+    setOnlineLoading(true);
+    fetchOnline();
+    const id = setInterval(fetchOnline, 8000);
+    return () => clearInterval(id);
+  }, [onlineOpen, fetchOnline]);
+
   const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape" && replyingTo) {
+      setReplyingTo(null);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  // ─── Touch gestures on a message: swipe to reply, press-and-hold for the menu ──
+  // `dir` is the direction the bubble is dragged: your own messages sit on the
+  // right so they slide LEFT; everyone else's sit on the left so they slide
+  // RIGHT - always into free space, never off the edge of the screen.
+  const clearGesture = (animateBack: boolean) => {
+    const g = gestureRef.current;
+    if (!g) return;
+    if (g.timer) clearTimeout(g.timer);
+    if (animateBack) {
+      g.el.style.transition = "transform 0.18s ease";
+      g.el.style.transform = "";
+      g.el.style.setProperty("--p", "0");
+    }
+    gestureRef.current = null;
+  };
+
+  const gestureHandlers = (m: GroupMessage, isOwn: boolean) => {
+    if (m.pending || m.failed || editingId === m._id) return {};
+    const dir: 1 | -1 = isOwn ? -1 : 1;
+    return {
+      onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+        if (e.pointerType === "mouse" || !e.isPrimary) return;
+        clearGesture(false);
+        const el = e.currentTarget;
+        el.style.transition = "none";
+        const g = {
+          id: m._id, startX: e.clientX, startY: e.clientY, dir, el,
+          mode: "pending" as const, timer: null as ReturnType<typeof setTimeout> | null, offset: 0,
+        };
+        const x = e.clientX, y = e.clientY;
+        g.timer = setTimeout(() => {
+          const cur = gestureRef.current;
+          if (!cur || cur !== g || cur.mode !== "pending") return;
+          cur.mode = "long";
+          suppressClickRef.current = true;
+          setTimeout(() => { suppressClickRef.current = false; }, 500);
+          buzz(15);
+          showMenuAt(m._id, x, y);
+        }, LONG_PRESS_MS);
+        gestureRef.current = g;
+      },
+      onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+        const g = gestureRef.current;
+        if (!g || g.id !== m._id || g.mode === "cancel" || g.mode === "long") return;
+        const dx = e.clientX - g.startX;
+        const dy = e.clientY - g.startY;
+        if (g.mode === "pending") {
+          if (Math.abs(dx) < GESTURE_SLOP && Math.abs(dy) < GESTURE_SLOP) return;
+          if (g.timer) { clearTimeout(g.timer); g.timer = null; }
+          if (Math.abs(dx) > Math.abs(dy) && Math.sign(dx) === g.dir) {
+            g.mode = "swipe";
+            try { g.el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+          } else {
+            g.mode = "cancel"; // vertical scroll (or wrong direction) - let the page have it
+            return;
+          }
+        }
+        if (g.mode === "swipe") {
+          const travelled = Math.max(0, dx * g.dir);
+          const eased = Math.min(SWIPE_MAX, travelled * 0.8);
+          const offset = eased * g.dir;
+          if (eased >= SWIPE_THRESHOLD * 0.8 && Math.abs(g.offset) < SWIPE_THRESHOLD * 0.8) buzz(8); // "armed" tick
+          g.offset = offset;
+          g.el.style.transform = `translateX(${offset}px)`;
+          g.el.style.setProperty("--p", String(Math.min(1, eased / (SWIPE_THRESHOLD * 0.8))));
+        }
+      },
+      onPointerUp: () => {
+        const g = gestureRef.current;
+        if (!g || g.id !== m._id) return;
+        const triggered = g.mode === "swipe" && Math.abs(g.offset) >= SWIPE_THRESHOLD * 0.8;
+        if (g.mode === "swipe") {
+          suppressClickRef.current = true;
+          setTimeout(() => { suppressClickRef.current = false; }, 300);
+        }
+        clearGesture(g.mode === "swipe");
+        if (triggered) { buzz(12); startReply(m); }
+      },
+      onPointerCancel: () => clearGesture(true),
+      onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        if (openMenuId !== m._id) showMenuAt(m._id, e.clientX, e.clientY);
+      },
+    };
   };
 
   const startEdit = (m: GroupMessage) => { setEditingId(m._id); setEditText(m.text); };
@@ -714,11 +1215,20 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         .gc-msg-enter { animation: gcFadeIn 160ms ease; }
         .gc-menu-btn { background: none; border: none; cursor: pointer; color: ${C.muted}; font-size: 16px; line-height: 1; padding: 2px 5px; border-radius: 4px; }
         .gc-menu-btn:hover { background: rgba(255,255,255,0.08); }
-        .gc-menu-popover { position: absolute; top: calc(100% + 4px); right: 0; background: ${C.dark3}; border: 1px solid ${C.border}; border-radius: 10px; padding: 4px; min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); z-index: 20; }
+        .gc-menu-popover { position: fixed; background: ${C.dark3}; border: 1px solid ${C.border}; border-radius: 10px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); z-index: 2100; max-height: calc(100dvh - 16px); overflow-y: auto; }
         .gc-menu-item { display: flex; align-items: center; gap: 9px; width: 100%; background: none; border: none; text-align: left; padding: 8px 10px; font-size: 12px; color: ${C.text}; cursor: pointer; border-radius: 6px; font-family: inherit; }
         .gc-menu-item:hover { background: ${C.dark4}; }
         .gc-menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
         .gc-menu-item.danger { color: ${C.red}; }
+        .gc-bubble-wrap { -webkit-tap-highlight-color: transparent; }
+        .gc-react-row { display: flex; justify-content: space-between; gap: 2px; padding: 4px 4px 6px; margin-bottom: 4px; border-bottom: 1px solid ${C.border}; }
+        .gc-react-btn { flex: 1; background: none; border: none; font-size: 20px; line-height: 1; padding: 6px 0; border-radius: 8px; cursor: pointer; transition: transform 0.12s ease, background 0.12s ease; }
+        .gc-react-btn:hover { background: ${C.dark4}; transform: scale(1.15); }
+        .gc-react-btn-on { background: rgba(201,168,76,0.18); }
+        @media (pointer: coarse) { .gc-bubble-wrap { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; } }
+        .gc-swipe-hint { position: absolute; top: 50%; width: 26px; height: 26px; border-radius: 50%; background: ${C.dark4}; border: 1px solid ${C.border}; color: ${C.gold}; display: flex; align-items: center; justify-content: center; font-size: 14px; pointer-events: none; opacity: var(--p, 0); transform: translateY(-50%) scale(calc(0.6 + var(--p, 0) * 0.4)); }
+        .gc-fab-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: ${C.gold}; color: ${C.dark}; font-size: 10px; font-weight: 800; display: flex; align-items: center; justify-content: center; border: 2px solid ${C.dark}; }
+        .gc-toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: ${C.dark4}; border: 1px solid ${C.border}; color: ${C.text}; font-size: 12px; font-weight: 600; padding: 8px 14px; border-radius: 999px; box-shadow: 0 6px 18px rgba(0,0,0,0.45); animation: gcFadeIn 160ms ease; pointer-events: none; z-index: 30; }
         .gc-fab { position: absolute; right: 16px; bottom: 16px; width: 38px; height: 38px; border-radius: 50%; background: ${C.dark4}; border: 1px solid ${C.border}; color: ${C.gold}; font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
         .gc-composer-input { transition: height 0.1s ease; }
         .gc-header-btn { display: flex; align-items: center; justify-content: center; height: 36px; background: ${C.dark4}; border: 1px solid ${C.border}; border-radius: 10px; color: ${C.muted}; cursor: pointer; font-family: inherit; transition: background 0.15s ease, border-color 0.15s ease; }
@@ -757,10 +1267,17 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, fontSize: 11, color: C.muted, minWidth: 0 }}>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{subtitle}</span>
             {onlineCount !== null && onlineCount > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 5, color: "#4ADE80", flexShrink: 0, fontWeight: 600, whiteSpace: "nowrap" }}>
+              <button
+                type="button"
+                onClick={() => setOnlineOpen(true)}
+                aria-label={`${onlineCount} en ligne - voir qui`}
+                title="Voir qui est en ligne"
+                style={{ display: "flex", alignItems: "center", gap: 5, color: "#4ADE80", flexShrink: 0, fontWeight: 600, whiteSpace: "nowrap", background: "none", border: "none", padding: "2px 0", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
+              >
                 <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ADE80", boxShadow: "0 0 0 3px rgba(74,222,128,0.18)" }} />
                 {onlineCount} en ligne
-              </span>
+                <span aria-hidden style={{ opacity: 0.7 }}>›</span>
+              </button>
             )}
           </div>
         </div>
@@ -822,6 +1339,22 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           className="gc-scroll"
           style={{ position: "absolute", inset: 0, overflowY: "auto", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", padding: "14px 12px", display: "flex", flexDirection: "column" }}
         >
+          {hasMoreOlder && !loadingMessages && filter === "all" && (
+            <div ref={topSentinelRef} style={{ display: "flex", justifyContent: "center", padding: "2px 0 12px", flexShrink: 0 }}>
+              {loadingOlder ? (
+                <InlineLoader size={20} label="Chargement…" padding="2px 0" />
+              ) : (
+                <button
+                  type="button"
+                  onClick={loadOlder}
+                  style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 999, color: C.muted, fontSize: 11, fontWeight: 700, padding: "6px 14px", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  ↑ Messages précédents
+                </button>
+              )}
+            </div>
+          )}
+
           {loadingMessages ? (
             <div style={{ margin: "auto" }}><InlineLoader size={32} label="Chargement des messages…" padding="0" /></div>
           ) : visibleMessages.length === 0 ? (
@@ -857,13 +1390,16 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                     flex: isOwn ? undefined : 1, minWidth: 0,
                   }}
                 >
-                  {(groupStart || m.pinned || isStarred || (isAdmin && m.senderBlocked && !isOwn)) && (
+                  {(groupStart || m.pinned || isStarred || (isAdmin && m.senderBlocked && !isOwn) || (isAdmin && m.reportCount > 0)) && (
                     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, marginBottom: 3, color: isOwn ? "rgba(10,12,15,0.65)" : accent! }}>
                       {groupStart && m.role === "ADMIN" && !isOwn && <span>👑</span>}
                       {groupStart && <span>{senderLabel(m, user._id)}</span>}
                       {m.pinned && <span title="Épinglé">📌</span>}
                       {isStarred && <span title="Favori">⭐</span>}
                       {/* Visible to admins only — a muted account isn't publicly labeled to the rest of the room. */}
+                      {isAdmin && m.reportCount > 0 && (
+                        <span title={`Signalé par ${m.reportCount} membre${m.reportCount > 1 ? "s" : ""}`} style={{ color: C.red, fontWeight: 700 }}>🚩 {m.reportCount}</span>
+                      )}
                       {isAdmin && m.senderBlocked && !isOwn && (
                         <span title="Bloqué du groupe" style={{ color: C.red, fontWeight: 700 }}>🚫 bloqué</span>
                       )}
@@ -908,11 +1444,32 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                         <img
                           src={m.image}
                           alt="Image partagée"
-                          onClick={() => setLightboxImage(m.image)}
+                          onClick={() => { if (!suppressClickRef.current) setLightboxImage(m.image); }}
                           style={{ display: "block", maxWidth: "100%", maxHeight: 260, borderRadius: 8, marginBottom: m.text ? 6 : 2, cursor: "zoom-in" }}
                         />
                       )}
-                      {m.text && <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>}
+                      {m.text && <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}><Linkified text={m.text} /></div>}
+
+                      {m.reactions.length > 0 && !m.pending && !m.failed && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                          {m.reactions.map((r) => (
+                            <button
+                              key={r.emoji}
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); react(m, r.emoji); }}
+                              aria-label={`${r.emoji} ${r.count}${r.mine ? " (vous)" : ""}`}
+                              style={{
+                                display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "inherit",
+                                background: r.mine ? (isOwn ? "rgba(10,12,15,0.22)" : "rgba(201,168,76,0.18)") : (isOwn ? "rgba(10,12,15,0.1)" : "rgba(255,255,255,0.06)"),
+                                border: `1px solid ${r.mine ? (isOwn ? "rgba(10,12,15,0.5)" : C.gold) : (isOwn ? "rgba(10,12,15,0.18)" : C.border)}`,
+                                color: "inherit", borderRadius: 999, padding: "1px 8px", fontSize: 12, cursor: "pointer", lineHeight: 1.6,
+                              }}
+                            >
+                              <span>{r.emoji}</span><span style={{ fontSize: 11, fontWeight: 700 }}>{r.count}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
 
                       {m.pending ? (
                         <div style={{ fontSize: 9, opacity: 0.7, marginTop: 4 }}>Envoi…</div>
@@ -933,16 +1490,54 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                             <div style={{ position: "relative" }} data-menu-root={m._id}>
                               <button
                                 type="button" className="gc-menu-btn" aria-label="Plus d'options" title="Plus d'options"
-                                onClick={() => setOpenMenuId((id) => (id === m._id ? null : m._id))}
+                                onClick={(e) => openMenuFor(m._id, e.currentTarget)}
                                 style={{ color: isOwn ? "inherit" : C.muted, opacity: 0.75 }}
                               >
                                 ⋮
                               </button>
-                              {openMenuId === m._id && (
-                                <div className="gc-menu-popover">
+                              {openMenuId === m._id && menuPos && createPortal(
+                                <div
+                                  className="gc-menu-popover"
+                                  data-menu-root={m._id}
+                                  style={{ left: menuPos.left, top: menuPos.top, bottom: menuPos.bottom, width: Math.min(MENU_WIDTH, window.innerWidth - MENU_MARGIN * 2) }}
+                                >
+                                  <div className="gc-react-row">
+                                    {REACTION_EMOJIS.map((emoji) => {
+                                      const mine = m.reactions.some((r) => r.emoji === emoji && r.mine);
+                                      return (
+                                        <button
+                                          key={emoji}
+                                          type="button"
+                                          aria-label={`Réagir ${emoji}`}
+                                          className={mine ? "gc-react-btn gc-react-btn-on" : "gc-react-btn"}
+                                          onClick={() => { react(m, emoji); setOpenMenuId(null); }}
+                                        >
+                                          {emoji}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <button className="gc-menu-item" onClick={() => { startReply(m); setOpenMenuId(null); }}>
+                                    <span>↩</span><span>Répondre</span>
+                                  </button>
+                                  {m.text && (
+                                    <button className="gc-menu-item" onClick={async () => { setOpenMenuId(null); showToast((await copyText(m.text)) ? "Message copié ✓" : "Copie impossible"); }}>
+                                      <span>⧉</span><span>Copier le texte</span>
+                                    </button>
+                                  )}
                                   <button className="gc-menu-item" onClick={() => { toggleStar(m._id); setOpenMenuId(null); }}>
                                     <span>{isStarred ? "★" : "☆"}</span><span>{isStarred ? "Retirer des favoris" : "Ajouter aux favoris"}</span>
                                   </button>
+                                  {!isAdmin && !isOwn && !m.reportedByMe && (
+                                    <button className="gc-menu-item" onClick={() => { setOpenMenuId(null); reportMessage(m); }}>
+                                      <span>🚩</span><span>Signaler ce message</span>
+                                    </button>
+                                  )}
+                                  {isAdmin && m.reportCount > 0 && (
+                                    <button className="gc-menu-item" onClick={() => { setOpenMenuId(null); clearReports(m); }}>
+                                      <span>✅</span><span>Effacer les signalements ({m.reportCount})</span>
+                                    </button>
+                                  )}
                                   {isAdmin && (
                                     <button className="gc-menu-item" disabled={isBusy} onClick={() => { togglePin(m); setOpenMenuId(null); }}>
                                       <span>📌</span><span>{m.pinned ? "Désépingler" : "Épingler"}</span>
@@ -963,7 +1558,8 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                                       <span>🗑</span><span>{isAdmin && !isOwn ? "Supprimer (modération)" : "Supprimer"}</span>
                                     </button>
                                   )}
-                                </div>
+                                </div>,
+                                document.body
                               )}
                             </div>
                           </span>
@@ -996,7 +1592,14 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                         {groupEnd && <Avatar label={initialsFor(m)} color={accent ?? C.muted} src={avatars[m.user]} />}
                       </div>
                     )}
-                    <div style={{ maxWidth: "min(80%, 480px)", minWidth: 0 }}>{bubble}</div>
+                    <div
+                      className="gc-bubble-wrap"
+                      {...gestureHandlers(m, isOwn)}
+                      style={{ maxWidth: "min(80%, 480px)", minWidth: 0, position: "relative", touchAction: "pan-y" }}
+                    >
+                      <span aria-hidden className="gc-swipe-hint" style={isOwn ? { right: -30 } : { left: -30 }}>↩</span>
+                      {bubble}
+                    </div>
                   </div>
                 </div>
               );
@@ -1005,10 +1608,13 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         </div>
 
         {!atBottom && !loadingMessages && (
-          <button className="gc-fab" onClick={jumpToBottom} aria-label="Aller aux derniers messages" title="Aller aux derniers messages">
+          <button className="gc-fab" onClick={jumpToBottom} aria-label={unseenBelow > 0 ? `${unseenBelow} nouveaux messages - aller en bas` : "Aller aux derniers messages"} title="Aller aux derniers messages">
             ↓
+            {unseenBelow > 0 && <span className="gc-fab-badge">{unseenBelow > 9 ? "9+" : unseenBelow}</span>}
           </button>
         )}
+
+        {toast && <div role="status" className="gc-toast">{toast}</div>}
       </div>
 
       {/* Composer */}
@@ -1077,6 +1683,55 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           </button>
         </div>
       </form>
+      )}
+
+      {/* Who's online */}
+      {onlineOpen && (
+        <div
+          onClick={() => setOnlineOpen(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2200, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 480, maxHeight: "70dvh", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1, color: C.text }}>
+                En ligne <span style={{ color: "#4ADE80" }}>({onlineTotal})</span>
+              </div>
+              <button onClick={() => setOnlineOpen(false)} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 30, height: 30, cursor: "pointer", color: C.muted }}>✕</button>
+            </div>
+            <div className="gc-scroll" style={{ overflowY: "auto", padding: "6px 8px 12px" }}>
+              {onlineLoading && onlineMembers.length === 0 ? (
+                <div style={{ padding: 20 }}><InlineLoader size={24} label="Chargement…" padding="0" /></div>
+              ) : onlineMembers.length === 0 ? (
+                <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>Personne en ligne pour l&apos;instant.</div>
+              ) : (
+                onlineMembers.map((mb) => (
+                  <div key={mb.user} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10 }}>
+                    <Avatar
+                      label={mb.role === "ADMIN" ? "👑" : mb.label.slice(0, 2)}
+                      color={mb.role === "ADMIN" ? C.gold : colorForUser(mb.user)}
+                      src={mb.isMe ? user?.avatar : avatars[mb.user]}
+                    />
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {mb.isMe ? "Vous" : mb.label}
+                    </div>
+                    {mb.role === "ADMIN" && (
+                      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "1px", color: C.gold, background: "rgba(201,168,76,0.12)", border: "1px solid rgba(201,168,76,0.3)", padding: "2px 7px", borderRadius: 4, textTransform: "uppercase" }}>Admin</span>
+                    )}
+                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ADE80", flexShrink: 0 }} />
+                  </div>
+                ))
+              )}
+              {onlineTotal > onlineMembers.length && (
+                <div style={{ padding: "8px 10px", fontSize: 11, color: C.muted, textAlign: "center" }}>
+                  + {onlineTotal - onlineMembers.length} autre{onlineTotal - onlineMembers.length > 1 ? "s" : ""}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Image lightbox */}

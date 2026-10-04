@@ -17,6 +17,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import UserModel from "@/models/Users";
 import { getSettings } from "@/models/Settings";
+import { claimCooldown, reserveCredit, refundCredit, UNLIMITED_USAGE, type GeneratorUsage } from "@/lib/generatorQuota";
 import { getPredictions, buildVariedComboForTargetOdds, comboSignature, type PredictionPick, type Market } from "@/lib/predictionengine";
 
 export const dynamic = "force-dynamic";
@@ -64,12 +65,30 @@ function dedupeByMatch(picks: PredictionPick[]): PredictionPick[] {
   return [...bestByMatch.values()];
 }
 
+// A run that produced nothing is refunded, so report the usage as it stands
+// after that refund rather than the number reserved a moment ago.
+function refundedUsage(u: GeneratorUsage): GeneratorUsage {
+  if (u.unlimited || u.limit === null) return u;
+  const used = Math.max(0, u.used - 1);
+  return { ...u, used, remaining: u.limit - used };
+}
+
 // Sane bounds for a user-supplied target odds — below 1.1 it's not really a
 // combo, above 100 it stops being a realistic ask and just skews selection.
 const MIN_TARGET_ODDS = 1.1;
 const MAX_TARGET_ODDS = 100;
 
 export async function GET(req: NextRequest) {
+  // Set once a FREE user's daily generation has been spent, so every early
+  // exit below (no results, error) can hand it back.
+  let reserved: { userId: string; day: string } | null = null;
+  const refundIfReserved = async () => {
+    if (!reserved) return;
+    const r = reserved;
+    reserved = null;
+    await refundCredit(r.userId, r.day).catch((e) => console.error("Refund generation credit failed:", e));
+  };
+
   try {
     await connectDB();
     const settings = await getSettings();
@@ -126,20 +145,15 @@ export async function GET(req: NextRequest) {
     // most-restrictive-by-default posture as the schema's own default.
     const marketAccessFor = (m: Market) => settings.matchGeneratorMarketAccess?.[m] ?? "PREMIUM";
 
-    // Fetch subscription status once (not per-market, not per-check) if
-    // EITHER the outer gate or any selected market could require it.
-    const needsPremiumCheck =
-      settings.matchGeneratorAccess === "PREMIUM" || selectedMarkets.some((m) => marketAccessFor(m) === "PREMIUM");
-
-    let isPremium = false;
-    if (needsPremiumCheck) {
-      const dbUser = await UserModel.findById(decoded.userId).select("subscription").lean();
-      isPremium = !!(
-        dbUser?.subscription?.status === "ACTIVE" &&
-        dbUser.subscription.expiresAt &&
-        new Date(dbUser.subscription.expiresAt) > new Date()
-      );
-    }
+    // Subscription status is needed for the market gates AND the daily
+    // limit (subscribers + admins are unlimited), so always look it up.
+    const dbUser = await UserModel.findById(decoded.userId).select("subscription role").lean();
+    const isPremium = !!(
+      dbUser?.subscription?.status === "ACTIVE" &&
+      dbUser.subscription.expiresAt &&
+      new Date(dbUser.subscription.expiresAt) > new Date()
+    );
+    const isUnlimited = isPremium || dbUser?.role === "ADMIN";
 
     // Outer gate: can this user open the tool at all.
     if (settings.matchGeneratorAccess === "PREMIUM" && !isPremium) {
@@ -187,6 +201,38 @@ export async function GET(req: NextRequest) {
       targetOdds = parsed;
     }
 
+    // ── Usage limits ────────────────────────────────────────────────────────
+    // Short pause for everyone (anti-spam), then — free users only — spend
+    // one of today's generations. Placed after all validation so a rejected
+    // request never costs anything.
+    const userId = String(decoded.userId);
+    const cooldown = await claimCooldown(userId);
+    if (!cooldown.ok) {
+      return NextResponse.json(
+        { success: false, message: `Patientez ${cooldown.retryAfterSec} seconde${cooldown.retryAfterSec > 1 ? "s" : ""} avant de générer à nouveau.` },
+        { status: 429 }
+      );
+    }
+
+    let usage: GeneratorUsage = UNLIMITED_USAGE;
+    if (!isUnlimited) {
+      const freeLimit = settings.generatorFreeDailyLimit ?? 5;
+      const credit = await reserveCredit(userId, freeLimit);
+      if (!credit.ok) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: `Tu as utilisé tes ${freeLimit} générations gratuites d'aujourd'hui. Abonne-toi pour générer sans limite, ou reviens demain.`,
+            dailyLimitReached: true,
+            usage: credit.usage,
+          },
+          { status: 403 }
+        );
+      }
+      reserved = { userId, day: credit.day };
+      usage = credit.usage;
+    }
+
     // Signature of the combo the visitor just saw (see comboSignature), so a
     // repeat click never returns the identical combination when another exists.
     const avoid = searchParams.get("avoid");
@@ -197,6 +243,7 @@ export async function GET(req: NextRequest) {
     ).sort((a, b) => b.confidence - a.confidence);
 
     if (qualified.length === 0) {
+      await refundIfReserved();
       return NextResponse.json({
         success: true,
         matches: [],
@@ -204,6 +251,7 @@ export async function GET(req: NextRequest) {
         message: "Aucun match ne remplit les critères de confiance aujourd'hui. Réessayez plus tard.",
         disclaimer: DISCLAIMER,
         restrictedMarkets,
+        usage: refundedUsage(usage),
       });
     }
 
@@ -214,6 +262,7 @@ export async function GET(req: NextRequest) {
     if (targetOdds !== null) {
       const combo = buildVariedComboForTargetOdds(qualified, count, targetOdds, avoid);
       if (!combo) {
+        await refundIfReserved();
         return NextResponse.json({
           success: true,
           matches: [],
@@ -221,6 +270,7 @@ export async function GET(req: NextRequest) {
           message: "Impossible d'approcher cette cote aujourd'hui avec des matchs suffisamment fiables. Réessayez avec une autre cote.",
           disclaimer: DISCLAIMER,
           restrictedMarkets,
+          usage: refundedUsage(usage),
         });
       }
       selected = combo.selected;
@@ -261,8 +311,10 @@ export async function GET(req: NextRequest) {
       targetMissed,
       restrictedMarkets,
       disclaimer: DISCLAIMER,
+      usage,
     });
   } catch (error) {
+    await refundIfReserved();
     console.error("GENERATE MATCHES ERROR:", error);
     return NextResponse.json(
       { success: false, message: "Erreur lors de la génération des matchs." },

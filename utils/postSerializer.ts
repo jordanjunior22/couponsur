@@ -18,7 +18,8 @@ interface SerializablePost {
   _id: { toString(): string };
   authorName?: string;
   text: string;
-  image: string | null;
+  image?: string | null;
+  imageBytes?: number;
   shareCount?: number;
   createdAt: Date | string;
   poll?: { optionALabel: string; optionBLabel: string } | null;
@@ -34,7 +35,15 @@ interface SerializablePost {
   }[];
 }
 
-export function toClientPost(post: SerializablePost, viewerId: string | null) {
+export function toClientPost(
+  post: SerializablePost,
+  viewerId: string | null,
+  // The feed queries leave the (large) image out of the document entirely
+  // and tell us separately whether one exists; everything else just has the
+  // full doc, where presence is `!!post.image`.
+  opts: { hasImage?: boolean } = {}
+) {
+  const hasImage = opts.hasImage ?? !!post.image;
   const likes = post.likes || [];
   const likedByMe = !!viewerId && likes.some((id) => id.toString() === viewerId);
 
@@ -60,7 +69,11 @@ export function toClientPost(post: SerializablePost, viewerId: string | null) {
     // this codebase (e.g. groupChatEnabled's `!== false`).
     authorName: post.authorName || "Coupon Sûr",
     text: post.text,
-    image: post.image,
+    // Never the raw data URI: images used to ride along inside every feed
+    // response (up to ~1.5MB each, re-sent on every poll). They're served
+    // from /api/posts/[id]/image instead, which the browser caches. `v` only
+    // changes when the image itself does, so likes/comments don't bust it.
+    image: hasImage ? `/api/posts/${post._id.toString()}/image?v=${post.imageBytes ?? 0}` : null,
     poll,
     likeCount: likes.length,
     likedByMe,

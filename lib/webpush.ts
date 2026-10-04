@@ -136,3 +136,15 @@ export async function sendPushToAdmins(payload: PushPayload): Promise<PushSendRe
   });
   return deliverPush(subscriptions, payload);
 }
+
+// Sends to ONE account's own devices (every subscription tagged with their
+// userId) - e.g. "someone replied to your message". Same no-op-if-not-
+// configured and fire-and-forget conventions as the helpers above.
+export async function sendPushToUser(userId: string, payload: PushPayload): Promise<PushSendResult> {
+  if (!ensureConfigured()) return { attempted: 0, sent: 0, removed: 0 };
+
+  await connectDB();
+  const subscriptions = await PushSubscriptionModel.find({ user: userId });
+  if (subscriptions.length === 0) return { attempted: 0, sent: 0, removed: 0 };
+  return deliverPush(subscriptions, payload);
+}

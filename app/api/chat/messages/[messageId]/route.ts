@@ -4,6 +4,7 @@ import UserModel from "@/models/Users";
 import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
+import { serializeConversation } from "@/utils/chatSerializer";
 
 // Same identity resolution as app/api/chat/route.ts — kept local rather
 // than shared since it's a few lines and each chat route already owns
@@ -39,9 +40,6 @@ export async function PATCH(
     const body = await req.json();
     const text = typeof body.text === "string" ? body.text.trim() : "";
 
-    if (!text) {
-      return NextResponse.json({ success: false, message: "Le message ne peut pas être vide" }, { status: 400 });
-    }
     if (text.length > 2000) {
       return NextResponse.json({ success: false, message: "Le message est trop long (2000 caractères max)" }, { status: 400 });
     }
@@ -62,11 +60,17 @@ export async function PATCH(
       return NextResponse.json({ success: false, message: "Message introuvable" }, { status: 404 });
     }
 
+    // A caption can be cleared on a picture message, but a text-only message
+    // can't be emptied.
+    if (!text && !message.image) {
+      return NextResponse.json({ success: false, message: "Le message ne peut pas être vide" }, { status: 400 });
+    }
+
     message.text = text;
     message.editedAt = new Date();
     await conversation.save();
 
-    return NextResponse.json({ success: true, data: conversation });
+    return NextResponse.json({ success: true, data: serializeConversation(conversation) });
   } catch (error) {
     console.error("EDIT CHAT MESSAGE ERROR:", error);
     return NextResponse.json({ success: false, message: "Échec de la modification du message" }, { status: 500 });
@@ -111,7 +115,7 @@ export async function DELETE(
     message.deleteOne();
     await conversation.save();
 
-    return NextResponse.json({ success: true, data: conversation });
+    return NextResponse.json({ success: true, data: serializeConversation(conversation) });
   } catch (error) {
     console.error("DELETE CHAT MESSAGE ERROR:", error);
     return NextResponse.json({ success: false, message: "Échec de la suppression du message" }, { status: 500 });

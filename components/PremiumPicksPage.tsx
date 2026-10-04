@@ -108,13 +108,16 @@ function getWeekDayKeys(weekKey: string): string[] {
 
 interface Tally { wins: number; losses: number; refunds: number; graded: number; winRate: number | null }
 
-// Win rate excludes REFUNDED picks — a void isn't a loss.
+// A REFUNDED pick counts as a win in the rate: the buyer's stake came back,
+// so the pick didn't cost them anything. `wins` stays the strict number of
+// WIN picks (shown on its own), `refunds` is shown separately, and the rate
+// is (wins + refunds) / (wins + refunds + losses).
 function computeRecord(picks: Pick[]): Tally {
   const wins = picks.filter((p) => p.outcome === "WIN").length;
   const losses = picks.filter((p) => p.outcome === "LOSS").length;
   const refunds = picks.filter((p) => p.outcome === "REFUNDED").length;
-  const graded = wins + losses;
-  return { wins, losses, refunds, graded, winRate: graded > 0 ? Math.round((wins / graded) * 100) : null };
+  const graded = wins + losses + refunds;
+  return { wins, losses, refunds, graded, winRate: graded > 0 ? Math.round(((wins + refunds) / graded) * 100) : null };
 }
 
 // ─── Kickoff countdown hook ───────────────────────────────────────────────────
