@@ -66,6 +66,21 @@ export async function POST(
       );
     }
 
+    // Account-takeover guard: an admin's payouts are sent to their phone, so
+    // changing it redirects their money. Only the super admin may change an
+    // admin account's phone (and only the super admin themself their own).
+    const target = await UserModel.findById(id).select("role isSuperAdmin");
+    if (!target) {
+      return NextResponse.json({ success: false, message: "User not found" }, { status: 404 });
+    }
+    if (target.role === "ADMIN") {
+      const callerIsSuper = !!auth.user.isSuperAdmin;
+      const isSelf = String(target._id) === String(auth.user.userId);
+      if (!callerIsSuper || (target.isSuperAdmin && !isSelf)) {
+        return NextResponse.json({ success: false, message: "Forbidden" }, { status: 403 });
+      }
+    }
+
     const updated = await UserModel.findByIdAndUpdate(
       id,
       { $set: { phone: newPhone } },

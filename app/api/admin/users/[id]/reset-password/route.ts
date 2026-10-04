@@ -65,6 +65,22 @@ export async function POST(
     const newPassword = requested || generatePassword();
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
+    // Account-takeover guard: payouts go to the account's phone, so letting
+    // any admin reset another admin's password would let them log in as that
+    // admin and withdraw their earnings. Only the super admin may touch
+    // admin accounts (and only the super admin themself may touch theirs).
+    const target = await UserModel.findById(id).select("role isSuperAdmin");
+    if (!target) {
+      return NextResponse.json({ success: false, message: "User not found" }, { status: 404 });
+    }
+    if (target.role === "ADMIN") {
+      const callerIsSuper = !!auth.user.isSuperAdmin;
+      const isSelf = String(target._id) === String(auth.user.userId);
+      if (!callerIsSuper || (target.isSuperAdmin && !isSelf)) {
+        return NextResponse.json({ success: false, message: "Forbidden" }, { status: 403 });
+      }
+    }
+
     const updated = await UserModel.findByIdAndUpdate(
       id,
       { $set: { password: hashedPassword } },

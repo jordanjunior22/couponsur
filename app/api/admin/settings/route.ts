@@ -52,6 +52,20 @@ export async function PUT(req: NextRequest) {
       payoutOperatorFeePercent,
     } = body;
 
+    // Money-affecting settings (payout fee, default revenue shares) are
+    // super-admin only; every other setting stays editable by any admin.
+    if (
+      (payoutOperatorFeePercent !== undefined ||
+        defaultSubscriptionSharePercent !== undefined ||
+        defaultPickSharePercent !== undefined) &&
+      !auth.user.isSuperAdmin
+    ) {
+      return NextResponse.json(
+        { success: false, message: "Seul le super administrateur peut modifier ces paramètres" },
+        { status: 403 }
+      );
+    }
+
     const update: Record<string, unknown> = {};
 
     if (subscriptionMonthlyPrice !== undefined) {

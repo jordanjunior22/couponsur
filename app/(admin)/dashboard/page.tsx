@@ -2978,11 +2978,19 @@ function PendingPayoutRow({ payout, onUpdated }: { payout: ApiPendingPayout; onU
 function AdminsTab() {
   const [admins, setAdmins] = useState<{ admin: ApiAdminUser; earnings: AdminEarningsData | null }[]>([]);
   const [pendingPayouts, setPendingPayouts] = useState<ApiPendingPayout[]>([]);
+  const [payoutHistory, setPayoutHistory] = useState<ApiPendingPayout[]>([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [fapshiBalance, setFapshiBalance] = useState<{ balance: number; currency: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [defaultShares, setDefaultShares] = useState({ sub: 30, pick: 100 });
+
+  const formatDateTime = (d: string) =>
+    new Date(d).toLocaleString("fr-FR", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   const load = async () => {
     try {
@@ -3001,8 +3009,26 @@ function AdminsTab() {
     }
   };
 
+  const loadHistory = async (page: number) => {
+    try {
+      setHistoryLoading(true);
+      const res = await fetch(`/api/admin/payouts/history?page=${page}&limit=10`, { credentials: "include" });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Échec du chargement de l'historique");
+      setPayoutHistory(data.data || []);
+      setHistoryPage(data.pagination.page);
+      setHistoryTotal(data.pagination.total);
+      setHistoryTotalPages(data.pagination.totalPages);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur réseau");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   useEffect(() => {
     load();
+    loadHistory(1);
     (async () => {
       try {
         const res = await fetch("/api/admin/settings", { credentials: "include" });
@@ -3053,16 +3079,71 @@ function AdminsTab() {
               key={p._id}
               payout={p}
               onUpdated={(updated) =>
-                setPendingPayouts((cur) =>
-                  updated.status === "REJECTED"
-                    ? cur.filter((x) => x._id !== updated._id)
-                    : cur.map((x) => (x._id === updated._id ? updated : x))
-                )
+                {
+                  if (updated.status === "REJECTED") {
+                    setPendingPayouts((cur) => cur.filter((x) => x._id !== updated._id));
+                    loadHistory(1);
+                  } else {
+                    setPendingPayouts((cur) => cur.map((x) => (x._id === updated._id ? updated : x)));
+                  }
+                }
               }
             />
           ))}
         </div>
       )}
+
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 10 }}>
+          Historique des paiements ({historyTotal})
+        </div>
+        <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", opacity: historyLoading ? 0.6 : 1 }}>
+          {payoutHistory.length === 0 && (
+            <div style={{ padding: "24px", textAlign: "center", color: C.muted, fontSize: 13 }}>Aucun paiement traité pour l&apos;instant.</div>
+          )}
+          {payoutHistory.map((p, i) => {
+            const who = typeof p.adminId === "object" ? (p.adminId.nickname || p.adminId.phone) : p.adminId;
+            return (
+              <div key={p._id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 16px", borderBottom: i < payoutHistory.length - 1 ? `1px solid ${C.border}` : "none", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{who} — {formatCFA(p.amount)}</div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                    Demandé le {formatDateTime(p.createdAt)}
+                    {p.decidedAt && ` · traité le ${formatDateTime(p.decidedAt)}`}
+                  </div>
+                  {p.status === "PAID" && !!p.operatorFee && (
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                      Frais opérateur : <span style={{ color: C.red }}>-{formatCFA(p.operatorFee)}</span>
+                      {" "}— net envoyé : <span style={{ color: C.gold }}>{formatCFA(p.netAmount ?? p.amount)}</span>
+                    </div>
+                  )}
+                  {p.note && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{p.note}</div>}
+                </div>
+                <PayoutStatusBadge status={p.status} />
+              </div>
+            );
+          })}
+        </div>
+        {historyTotalPages > 1 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+            <button
+              onClick={() => loadHistory(historyPage - 1)}
+              disabled={historyPage <= 1 || historyLoading}
+              style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: historyPage <= 1 ? "not-allowed" : "pointer", opacity: historyPage <= 1 ? 0.5 : 1, fontFamily: "inherit" }}
+            >
+              Précédent
+            </button>
+            <span style={{ fontSize: 11, color: C.muted }}>Page {historyPage} / {historyTotalPages}</span>
+            <button
+              onClick={() => loadHistory(historyPage + 1)}
+              disabled={historyPage >= historyTotalPages || historyLoading}
+              style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: historyPage >= historyTotalPages ? "not-allowed" : "pointer", opacity: historyPage >= historyTotalPages ? 0.5 : 1, fontFamily: "inherit" }}
+            >
+              Suivant
+            </button>
+          </div>
+        )}
+      </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <div style={{ fontSize: 10, letterSpacing: "2px", color: C.muted, textTransform: "uppercase", fontWeight: 600 }}>
