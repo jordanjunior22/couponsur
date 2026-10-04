@@ -666,6 +666,24 @@ const MomoLogo = ({ op }: { op: "mtn" | "orange" }) => (
   </div>
 );
 
+// Shown on a failed/expired payment. Mobile money operators (MTN MoMo,
+// Orange Money) charge their own transaction fee on top of the price, and a
+// balance that only just covers the price is a common reason for a refusal.
+// Deliberately states no fee percentage — the operators set and change those
+// themselves, so any figure written here would eventually be wrong.
+function ExtraBalanceTip({ priceLabel, operator }: { priceLabel: string; operator: "mtn" | "orange" }) {
+  const opName = operator === "mtn" ? "MTN MoMo" : "Orange Money";
+  return (
+    <div style={{ background: "rgba(201,168,76,0.07)", border: "1px solid rgba(201,168,76,0.25)", borderRadius: 8, padding: "10px 14px", margin: "0 0 20px", textAlign: "left" }}>
+      <div style={{ color: "#C9A84C", fontWeight: 700, marginBottom: 4, fontSize: 10, letterSpacing: "1px", textTransform: "uppercase" }}>💡 Conseil</div>
+      <div style={{ fontSize: 12, color: "#E8EAF0", lineHeight: 1.6 }}>
+        Avant de réessayer, assurez-vous d&apos;avoir <strong>un peu plus que {priceLabel}</strong> sur votre compte {opName}.
+        L&apos;opérateur prélève des <strong>frais de transaction</strong> en plus du montant : votre solde doit couvrir le prix <strong>+ ces frais</strong>, sinon le paiement est refusé.
+      </div>
+    </div>
+  );
+}
+
 export function SubscribePayment({ onSuccess, onBack }: { onSuccess: () => void; onBack: () => void }) {
   const { user } = useAuth();
   const [step, setStep] = useState<PayStep>("form");
@@ -811,6 +829,8 @@ export function SubscribePayment({ onSuccess, onBack }: { onSuccess: () => void;
         <div style={{ fontSize: 13, color: "#E8EAF0", marginBottom: 8, lineHeight: 1.7 }}>
           {errorMsg || (isExpired ? "La session a expiré avant la confirmation." : "Le paiement n'a pas pu être traité.")}
         </div>
+        <div style={{ height: 12 }} />
+        <ExtraBalanceTip priceLabel={priceLabel} operator={operator} />
         <button onClick={() => { setStep("form"); setTransId(null); setErrorMsg(""); }} style={S.btnGold}>Réessayer</button>
         <button onClick={onBack} style={S.btnGhost}>Annuler</button>
       </div>
@@ -1031,6 +1051,7 @@ export function MomoPayment({ pick, onSuccess, onBack }: { pick: Pick; onSuccess
             <div>• Demande refusée ou ignorée</div><div>• Réseau mobile instable</div>
           </div>
         </div>
+        <ExtraBalanceTip priceLabel={`${pick.price.toLocaleString("fr-FR")} FCFA`} operator={operator} />
         <button onClick={() => { setStep("form"); setTransId(null); setErrorMsg(""); }} style={S.btnGold}>Réessayer</button>
         <button onClick={onBack} style={S.btnGhost}>Annuler</button>
       </div>
