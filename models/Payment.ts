@@ -74,6 +74,9 @@ PaymentSchema.index({ createdAt: -1 });
 PaymentSchema.index({ status: 1, createdAt: -1 });
 PaymentSchema.index({ paymentType: 1, createdAt: -1 });
 PaymentSchema.index({ userId: 1, createdAt: -1 });
+// Subscriber loyalty stats (app/api/admin/loyalty): scans only SUCCESSFUL
+// SUBSCRIPTION payments, grouped per user.
+PaymentSchema.index({ paymentType: 1, status: 1, userId: 1, createdAt: 1 });
 
 export default (mongoose.models.Payment as Model<IPayment>) ||
   mongoose.model<IPayment>("Payment", PaymentSchema);

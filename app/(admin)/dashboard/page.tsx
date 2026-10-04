@@ -1635,6 +1635,180 @@ function ActivityUserList({
   );
 }
 
+// ─── Loyalty ("Fidélité") view — best / longest-standing subscribers ──────────
+interface LoyaltyRow {
+  userId: string;
+  phone: string;
+  paymentsCount: number;
+  totalSpent: number;
+  firstPaidAt: string;
+  lastPaidAt: string;
+  tenureDays: number;
+  avgGapDays: number | null;
+  active: boolean;
+}
+interface LoyaltySummary {
+  subscribers: number;
+  repeatSubscribers: number;
+  repeatRate: number;
+  avgPayments: number;
+  totalRevenue: number;
+}
+
+const LOYALTY_SORTS = [
+  ["payments", "Plus de paiements"],
+  ["tenure", "Plus anciens"],
+  ["spent", "Plus dépensé"],
+] as const;
+
+function loyaltyTier(count: number): { label: string; color: string } {
+  if (count >= 7) return { label: "VIP", color: C.gold };
+  if (count >= 4) return { label: "Fidèle", color: C.green };
+  if (count >= 2) return { label: "Régulier", color: C.blue };
+  return { label: "Nouveau", color: C.muted };
+}
+
+function formatTenure(days: number): string {
+  if (days < 30) return `${days} j`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} mois`;
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  return `${years} an${years > 1 ? "s" : ""}${rest ? ` ${rest} mois` : ""}`;
+}
+
+function LoyaltyView({ users, onSelectUser }: { users: ApiUser[]; onSelectUser: (u: ApiUser) => void }) {
+  const [rows, setRows] = useState<LoyaltyRow[]>([]);
+  const [summary, setSummary] = useState<LoyaltySummary | null>(null);
+  const [sort, setSort] = useState<(typeof LOYALTY_SORTS)[number][0]>("payments");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const res = await fetch(`/api/admin/loyalty?page=${page}&limit=15&sort=${sort}`, { credentials: "include" });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!data.success) throw new Error(data.message || "Échec du chargement");
+        setRows(data.data || []);
+        setSummary(data.summary);
+        setTotalPages(data.pagination?.totalPages ?? 1);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Erreur réseau");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [page, sort]);
+
+  const fmtDate = (d: string) => new Date(d).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
+  const btn = (disabled: boolean): React.CSSProperties => ({
+    background: "none", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 6, padding: "6px 12px",
+    fontSize: 11, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, fontFamily: "inherit",
+  });
+
+  return (
+    <div>
+      {summary && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+          <StatCard label="Abonnés payants" value={summary.subscribers} sub="ont déjà payé au moins 1 mois" accent />
+          <StatCard label="Abonnés récurrents" value={summary.repeatSubscribers} sub={`${summary.repeatRate}% ont renouvelé`} />
+          <StatCard label="Moyenne de paiements" value={summary.avgPayments} sub="mois payés par abonné" />
+          <StatCard label="Revenus abonnements" value={formatCFA(summary.totalRevenue)} sub="depuis le début" />
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {LOYALTY_SORTS.map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => { setSort(id); setPage(1); }}
+            style={{
+              background: sort === id ? "rgba(201,168,76,0.15)" : C.dark4, color: sort === id ? C.gold : C.muted,
+              border: `1px solid ${sort === id ? C.gold : C.border}`, borderRadius: 8,
+              padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {error && (
+        <div style={{ fontSize: 12, padding: "10px 12px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.red, marginBottom: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}><Spinner /></div>
+      ) : rows.length === 0 ? (
+        <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>
+          Aucun abonnement payé pour l&apos;instant.
+        </div>
+      ) : (
+        <div style={{ background: C.dark3, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+          {rows.map((r, i) => {
+            const tier = loyaltyTier(r.paymentsCount);
+            const rank = (page - 1) * 15 + i + 1;
+            const full = users.find((u) => u._id === r.userId);
+            return (
+              <div
+                key={r.userId}
+                onClick={() => full && onSelectUser(full)}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: i < rows.length - 1 ? `1px solid ${C.border}` : "none", cursor: full ? "pointer" : "default", flexWrap: "wrap" }}
+              >
+                <div style={{ width: 28, textAlign: "center", fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: rank <= 3 ? C.gold : C.muted, flexShrink: 0 }}>
+                  {rank}
+                </div>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>+237 {r.phone}</span>
+                    <span style={{ background: `${tier.color}1F`, color: tier.color, border: `1px solid ${tier.color}40`, fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4, letterSpacing: "1px", textTransform: "uppercase" }}>
+                      {tier.label}
+                    </span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: r.active ? C.green : C.muted }}>
+                      {r.active ? "● Actif" : "○ Expiré"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                    Client depuis le {fmtDate(r.firstPaidAt)} ({formatTenure(r.tenureDays)})
+                    {" · "}dernier paiement le {fmtDate(r.lastPaidAt)}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.gold }}>
+                    {r.paymentsCount} mois payé{r.paymentsCount > 1 ? "s" : ""}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                    {formatCFA(r.totalSpent)}
+                    {r.avgGapDays !== null && ` · tous les ~${r.avgGapDays} j`}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+          <button onClick={() => setPage((p) => p - 1)} disabled={page <= 1 || loading} style={btn(page <= 1 || loading)}>Précédent</button>
+          <span style={{ fontSize: 11, color: C.muted }}>Page {page} / {totalPages}</span>
+          <button onClick={() => setPage((p) => p + 1)} disabled={page >= totalPages || loading} style={btn(page >= totalPages || loading)}>Suivant</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UsersActivityView({ users, onSelectUser }: { users: ApiUser[]; onSelectUser: (u: ApiUser) => void }) {
   const [data, setData] = useState<ActivityData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1729,7 +1903,7 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
   const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);
   const [search, setSearch] = useState("");
   const [subPrice, setSubPrice] = useState<number | null>(null);
-  const [view, setView] = useState<"list" | "activity">("list");
+  const [view, setView] = useState<"list" | "activity" | "loyalty">("list");
   const [page, setPage] = useState(1);
   const USERS_PAGE_SIZE = 25;
 
@@ -1805,7 +1979,7 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {([["list", "Liste"], ["activity", "Activité"]] as const).map(([id, label]) => (
+        {([["list", "Liste"], ["activity", "Activité"], ["loyalty", "Fidélité"]] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setView(id)}
@@ -1822,6 +1996,8 @@ function UsersTab({ users, setUsers, usersLoading, picks }: { users: ApiUser[]; 
 
       {view === "activity" ? (
         <UsersActivityView users={users} onSelectUser={setSelectedUser} />
+      ) : view === "loyalty" ? (
+        <LoyaltyView users={users} onSelectUser={setSelectedUser} />
       ) : (
       <>
       <div style={{ marginBottom: 16 }}>
