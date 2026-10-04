@@ -7,10 +7,11 @@ import { useAppSettings } from "@/hooks/useAppSettings";
 import { OneXBetBanner } from "./OneXBetBanner";
 import { CompoundBetBanner } from "./CompoundBanner";
 import { SubscribeBanner } from "./SubscribeBanner";
-import { Spinner, PageLoader } from "./LoadingSpinner";
+import { Spinner } from "./LoadingSpinner";
 import { trackEvent, generateEventId, getFbCookies } from "@/lib/pixelClient";
 import { BOTTOM_SAFE_OFFSET } from "@/lib/layoutConstants";
 import { pickKickoffMs } from "@/utils/pickKickoff";
+import { readPicksCache, writePicksCache, type HomeStats } from "@/lib/picksCache";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Match {
@@ -41,6 +42,7 @@ export interface Pick {
   tier?: PickTier;
   avg_confidence?: number | null;
   matches: Match[];
+  updatedAt?: string;
 }
 
 // ─── Tier config ──────────────────────────────────────────────────────────────
@@ -255,6 +257,9 @@ const GlobalStyles = () => (
     .kickoff-blink { animation: kickoffBlink 1.6s ease-in-out infinite; }
     .kickoff-blink-fast { animation-duration: 0.9s; }
     @media (prefers-reduced-motion: reduce) { .kickoff-blink { animation: none; } }
+    .hp-skel { background: linear-gradient(90deg, #14181D 0%, #1C2128 50%, #14181D 100%); background-size: 200% 100%; animation: hpShimmer 1.3s ease-in-out infinite; }
+    @keyframes hpShimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    @media (prefers-reduced-motion: reduce) { .hp-skel { animation: none; } }
     @keyframes scaleIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   `}</style>
 );
@@ -411,7 +416,7 @@ function PartialRefundChip({ count }: { count: number }) {
 }
 
 // ─── Hero ─────────────────────────────────────────────────────────────────────
-function Hero({ picks }: { picks: Pick[] }) {
+function Hero({ picks, stats }: { picks: Pick[]; stats: HomeStats | null }) {
   const [scope, setScope] = useState<"week" | "all">("week");
   const [warnOpen, setWarnOpen] = useState(false);
   const publishedPicks = picks.filter((p) => p.is_published !== false);
@@ -423,7 +428,11 @@ function Hero({ picks }: { picks: Pick[] }) {
     [publishedPicks, currentWeekKey]
   );
   const weekRecord = useMemo(() => computeRecord(weekPicks), [weekPicks]);
-  const allRecord = useMemo(() => computeRecord(publishedPicks), [publishedPicks]);
+  // The global record, streak and trend come from the server (they cover EVERY
+  // pick, not just the weeks loaded on screen); the current week IS fully
+  // loaded, so its record is still computed here. Falls back to computing from
+  // what's on screen only until the server's numbers arrive.
+  const allRecord = useMemo<Tally>(() => (stats ? stats.record : computeRecord(publishedPicks)), [stats, publishedPicks]);
   const active = scope === "week" ? weekRecord : allRecord;
 
   const todayCount = publishedPicks.filter((p) => p.match_date.split("T")[0] === today).length;
@@ -433,6 +442,7 @@ function Hero({ picks }: { picks: Pick[] }) {
   // a void, not a result). Global by design — a streak spanning a week
   // boundary is still a streak.
   const streak = useMemo(() => {
+    if (stats) return stats.streak;
     const gradedDesc = publishedPicks
       .filter((p) => p.outcome === "WIN" || p.outcome === "LOSS")
       .sort((a, b) => b.match_date.localeCompare(a.match_date));
@@ -442,11 +452,12 @@ function Hero({ picks }: { picks: Pick[] }) {
       else break;
     }
     return count;
-  }, [publishedPicks]);
+  }, [publishedPicks, stats]);
 
   // Last up to 6 weeks (including the current one) as a tiny trend strip —
   // reuses the same week grouping WeekCalendar uses, just capped short.
   const weekTrend = useMemo(() => {
+    if (stats) return stats.trend.map((t) => ({ weekKey: t.weekKey, record: t as Tally }));
     const groups: Record<string, Pick[]> = {};
     publishedPicks.forEach((p) => {
       const key = getWeekKey(p.match_date);
@@ -454,7 +465,7 @@ function Hero({ picks }: { picks: Pick[] }) {
       groups[key].push(p);
     });
     return Object.keys(groups).sort().slice(-6).map((weekKey) => ({ weekKey, record: computeRecord(groups[weekKey]) }));
-  }, [publishedPicks]);
+  }, [publishedPicks, stats]);
   const gradedWeeksInTrend = weekTrend.filter((w) => w.record.graded > 0).length;
 
   return (
@@ -1341,7 +1352,6 @@ function TodayNudgeRow({ date }: { date: string }) {
   );
 }
 
-const WEEKS_PAGE_SIZE = 4;
 
 // ─── Week Calendar ────────────────────────────────────────────────────────────
 // Everything before the current week, one row per week, newest first —
@@ -1350,9 +1360,10 @@ const WEEKS_PAGE_SIZE = 4;
 // time, same accordion mechanics the old history toggle used. Paginated
 // 4 weeks at a time so a long-running site doesn't dump its whole history
 // on the page at once.
-function WeekCalendar({ picks, onSelect }: { picks: Pick[]; onSelect: (p: Pick) => void }) {
+function WeekCalendar({ picks, onSelect, hasMore, loadingMore, onLoadMore, weeksTotal }: {
+  picks: Pick[]; onSelect: (p: Pick) => void; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void; weeksTotal: number;
+}) {
   const [openWeekKey, setOpenWeekKey] = useState<string | null>(null);
-  const [visibleWeeks, setVisibleWeeks] = useState(WEEKS_PAGE_SIZE);
 
   const weeks = useMemo(() => {
     const groups: Record<string, Pick[]> = {};
@@ -1367,15 +1378,11 @@ function WeekCalendar({ picks, onSelect }: { picks: Pick[]; onSelect: (p: Pick) 
       .map((weekKey) => ({ weekKey, picks: groups[weekKey], record: computeRecord(groups[weekKey]) }));
   }, [picks]);
 
-  // Reset back to the first page whenever the underlying pick list changes
-  // identity — i.e. the buyer picked a different filter upstream.
-  useEffect(() => { setVisibleWeeks(WEEKS_PAGE_SIZE); }, [picks]);
+  // Older weeks arrive from the server a few at a time (onLoadMore), so every
+  // week loaded so far is shown; nothing is sliced here any more.
+  if (weeks.length === 0 && !hasMore) return null;
 
-  if (weeks.length === 0) return null;
-
-  const visible = weeks.slice(0, visibleWeeks);
-  const hasMore = visibleWeeks < weeks.length;
-  const remaining = Math.min(WEEKS_PAGE_SIZE, weeks.length - visibleWeeks);
+  const visible = weeks;
 
   return (
     <div style={{ marginTop: 8 }}>
@@ -1453,19 +1460,22 @@ function WeekCalendar({ picks, onSelect }: { picks: Pick[]; onSelect: (p: Pick) 
           <div style={weekFadeStyle} />
           <div style={{ display: "flex", justifyContent: "center", marginTop: -14, position: "relative" }}>
             <button
-              onClick={() => setVisibleWeeks((c) => c + WEEKS_PAGE_SIZE)}
-              style={loadMoreWeeksStyle}
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              style={{ ...loadMoreWeeksStyle, cursor: loadingMore ? "wait" : "pointer" }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#C9A84C"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 24px rgba(201,168,76,0.15)"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#2A3140"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "none"; }}
             >
-              <WeekLoadDial progress={visible.length / weeks.length} />
+              <WeekLoadDial progress={weeksTotal > 0 ? Math.min(1, (visible.length + 1) / weeksTotal) : 0} />
               <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.3 }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#E8EAF0" }}>
-                  Encore {remaining} semaine{remaining > 1 ? "s" : ""}
+                  {loadingMore ? "Chargement…" : "Voir des semaines plus anciennes"}
                 </span>
-                <span style={{ fontSize: 10, color: "#7A8399" }}>
-                  {visible.length} / {weeks.length} affichées
-                </span>
+                {weeksTotal > 0 && (
+                  <span style={{ fontSize: 10, color: "#7A8399" }}>
+                    {Math.min(weeksTotal, visible.length + 1)} / {weeksTotal} semaines affichées
+                  </span>
+                )}
               </span>
             </button>
           </div>
@@ -1532,7 +1542,7 @@ function LockedPredictions({ pick, onUnlock }: { pick: Pick; onUnlock: () => voi
             {m.home} vs {m.away}
             {m.kickoff && <span style={{ color: "#7A8399", fontSize: 12 }}> · {m.kickoff}</span>}
             <span style={{ color: "#7A8399" }}> | </span>
-            <span style={{ display: "inline-block", filter: "blur(4px)", userSelect: "none", color: "#C9A84C", fontWeight: 700 }}>{m.tip}</span>
+            <span style={{ display: "inline-block", filter: "blur(4px)", userSelect: "none", color: "#C9A84C", fontWeight: 700 }}>{m.tip || "•••"}</span>
           </div>
           <div style={{ width: 22, height: 22, borderRadius: "50%", background: "rgba(201,168,76,0.1)", flexShrink: 0 }} />
         </div>
@@ -1667,9 +1677,13 @@ function Modal({ pick, onClose }: { pick: Pick; onClose: () => void }) {
 // ─── Filter Bar ───────────────────────────────────────────────────────────────
 type FilterType = "ALL" | "safe" | "value" | "bold" | string;
 
-function FilterBar({ active, onChange, picks }: { active: FilterType; onChange: (l: FilterType) => void; picks: Pick[] }) {
-  const hasTiers = picks.some((p) => p.tier);
-  const leagues = useMemo(() => Array.from(new Set(picks.map((p) => p.league))), [picks]);
+function FilterBar({ active, onChange, picks, leagues: serverLeagues, hasTiers: serverHasTiers }: {
+  active: FilterType; onChange: (l: FilterType) => void; picks: Pick[]; leagues?: string[]; hasTiers?: boolean;
+}) {
+  // With only a few weeks loaded, the full list of leagues / whether tiers exist
+  // comes from the server's stats; what's on screen is the fallback.
+  const hasTiers = serverHasTiers ?? picks.some((p) => p.tier);
+  const leagues = useMemo(() => serverLeagues ?? Array.from(new Set(picks.map((p) => p.league))), [picks, serverLeagues]);
   const filters: { id: FilterType; label: string }[] = [
     { id: "ALL", label: "Tous" },
     ...(hasTiers ? [{ id: "safe", label: "Safe" }, { id: "value", label: "Value" }, { id: "bold", label: "Bold" }] : []),
@@ -1692,58 +1706,116 @@ function FilterBar({ active, onChange, picks }: { active: FilterType; onChange: 
   );
 }
 
+// Placeholder layout shown while the very first load has nothing to show: the
+// hero card and a few pick cards in their final positions, instead of a
+// full-screen spinner.
+function HomeSkeleton() {
+  return (
+    <main aria-busy="true" aria-label="Chargement des picks" style={{ minHeight: "100vh", background: "#0A0C0F", paddingBottom: `max(80px, ${BOTTOM_SAFE_OFFSET})` }}>
+      <div style={{ padding: "26px 16px 20px", maxWidth: 700, margin: "0 auto" }}>
+        <div className="hp-skel" style={{ height: 34, width: "70%", borderRadius: 8, margin: "0 auto 12px" }} />
+        <div className="hp-skel" style={{ height: 12, width: "85%", borderRadius: 6, margin: "0 auto 22px" }} />
+        <div className="hp-skel" style={{ height: 96, borderRadius: 16 }} />
+      </div>
+      <div style={{ padding: "8px 16px", maxWidth: 700, margin: "0 auto" }}>
+        {[0, 1, 2].map((i) => (
+          <div key={i} style={{ background: "#1A1F26", border: "1px solid #2A3140", borderRadius: 10, padding: "14px", marginBottom: 8 }}>
+            <div className="hp-skel" style={{ height: 11, width: "40%", borderRadius: 5, marginBottom: 10 }} />
+            <div className="hp-skel" style={{ height: 14, width: "88%", borderRadius: 5, marginBottom: 14 }} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div className="hp-skel" style={{ height: 22, width: 64, borderRadius: 6 }} />
+              <div className="hp-skel" style={{ height: 34, width: 150, borderRadius: 7 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </main>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
+// Newest `updatedAt` (falling back to the pick's own date) across a batch -
+// what the live poll sends as `since`.
+function newestUpdate(list: Pick[], current: string | null): string | null {
+  let best = current;
+  for (const p of list) {
+    const t = p.updatedAt ?? p.match_date;
+    if (!best || t > best) best = t;
+  }
+  return best;
+}
+
 export default function PremiumPicksPage() {
   const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
   const [selectedPick, setSelectedPick] = useState<Pick | null>(null);
   const [picks, setPicks] = useState<Pick[]>([]);
+  const [stats, setStats] = useState<HomeStats | null>(null);
+  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [loadingMoreWeeks, setLoadingMoreWeeks] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSubscribe, setShowSubscribe] = useState(false);
   const [newPicksBanner, setNewPicksBanner] = useState<number | null>(null);
-  const { user, hasActiveSubscription, refreshUser } = useAuth();
+  const { user, hasActiveSubscription, refreshUser, loading: authLoading } = useAuth();
   const settings = useAppSettings();
+  const viewerKey = user?._id ?? "anon";
 
   // Kept outside React state so the polling/focus refresh below can diff
   // "what we already had" vs "what just came back" without re-subscribing
   // effects every time `picks` changes.
   const picksRef = useRef<Pick[]>([]);
+  const statsRef = useRef<HomeStats | null>(null);
+  statsRef.current = stats;
+  const nextBeforeRef = useRef<string | null>(null);
+  nextBeforeRef.current = nextBefore;
+  const sinceRef = useRef<string | null>(null);
+  const loadingMoreRef = useRef(false);
+  const initialFetchStartedRef = useRef(false);
+  const cacheHydratedRef = useRef(false);
   const isMountedRef = useRef(true);
   const bannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  const flagNewPicks = (count: number) => {
+    if (count <= 0) return;
+    setNewPicksBanner(count);
+    clearTimeout(bannerTimeoutRef.current);
+    bannerTimeoutRef.current = setTimeout(() => setNewPicksBanner(null), 6000);
+  };
+
+  // The first few weeks (this one + the previous two, + anything dated later)
+  // and the global stats - NOT the whole history. Older weeks load on demand.
   const fetchPicks = useCallback(async (showSpinner: boolean) => {
     try {
-      if (showSpinner) { setLoading(true); setError(null); }
-      const res = await fetch("/api/picks");
+      if (showSpinner && picksRef.current.length === 0) { setLoading(true); setError(null); }
+      const res = await fetch("/api/picks/feed", { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       const data = await res.json();
       if (!isMountedRef.current) return;
-      let resolved: Pick[] = [];
-      if (Array.isArray(data)) resolved = data;
-      else if (Array.isArray(data?.picks)) resolved = data.picks;
-      else if (Array.isArray(data?.data)) resolved = data.data;
-      const published = resolved.filter((p) => p.is_published !== false);
+      if (!data?.success) throw new Error(data?.message || "Erreur inconnue");
 
-      // Background refreshes (polling / tab refocus) are otherwise silent —
-      // surface a small "new picks" nudge when the list actually grew, so
-      // visitors notice without needing to hit reload themselves.
+      const fresh: Pick[] = (data.picks as Pick[]).filter((p) => p.is_published !== false);
+      const windowStart: string = data.windowStart;
+      // Older weeks the visitor already opened stay; the refresh only replaces
+      // the weeks this request covers.
+      const older = picksRef.current.filter((p) => getWeekKey(p.match_date) < windowStart);
+
+      // Background refreshes are otherwise silent - nudge when new picks showed up.
       if (!showSpinner && picksRef.current.length > 0) {
         const previousIds = new Set(picksRef.current.map((p) => p._id));
-        const newCount = published.filter((p) => !previousIds.has(p._id)).length;
-        if (newCount > 0) {
-          setNewPicksBanner(newCount);
-          clearTimeout(bannerTimeoutRef.current);
-          bannerTimeoutRef.current = setTimeout(() => setNewPicksBanner(null), 6000);
-        }
+        flagNewPicks(fresh.filter((p) => !previousIds.has(p._id)).length);
       }
 
-      picksRef.current = published;
-      setPicks(published);
+      const merged = [...fresh, ...older];
+      picksRef.current = merged;
+      setPicks(merged);
+      if (data.stats) setStats(data.stats);
+      if (older.length === 0) setNextBefore(data.nextBefore ?? null);
+      sinceRef.current = newestUpdate(fresh, sinceRef.current);
     } catch (err) {
       // A background refresh failing is not worth interrupting the visitor
-      // over — they still have the last good list. Only surface an error
-      // for the initial load.
-      if (showSpinner && isMountedRef.current) {
+      // over - they still have the last good list. Only surface an error
+      // when there is nothing to show.
+      if (showSpinner && isMountedRef.current && picksRef.current.length === 0) {
         setError(err instanceof Error ? err.message : "Erreur inconnue");
         setPicks([]);
       }
@@ -1752,30 +1824,143 @@ export default function PremiumPicksPage() {
     }
   }, []);
 
+  // The few-seconds live check: only picks that CHANGED after the newest thing we
+  // have - a new pick, a result (WIN / LOSS), an edit. Usually an empty answer.
+  const pollChanges = useCallback(async () => {
+    const since = sinceRef.current;
+    if (!since) return;
+    try {
+      const res = await fetch(`/api/picks/feed?since=${encodeURIComponent(since)}`, { credentials: "include" });
+      const data = await res.json();
+      if (!isMountedRef.current || !data?.success) return;
+      const changed: Pick[] = (data.picks as Pick[]).filter((p) => p.is_published !== false);
+      if (changed.length === 0) return;
+      sinceRef.current = newestUpdate(changed, sinceRef.current);
+      if (data.stats) setStats(data.stats);
+
+      const prev = picksRef.current;
+      const oldestLoadedWeek = prev.reduce<string | null>((min, p) => {
+        const k = getWeekKey(p.match_date);
+        return min === null || k < min ? k : min;
+      }, null);
+      const byId = new Map(prev.map((p) => [p._id, p]));
+      let added = 0;
+      for (const c of changed) {
+        if (byId.has(c._id)) byId.set(c._id, c);
+        // A new pick inside the weeks on screen is added; one from an older week
+        // we haven't loaded will simply be there when that week loads.
+        else if (oldestLoadedWeek === null || getWeekKey(c.match_date) >= oldestLoadedWeek) {
+          byId.set(c._id, c);
+          added++;
+        }
+      }
+      const merged = Array.from(byId.values());
+      picksRef.current = merged;
+      setPicks(merged);
+      flagNewPicks(added);
+    } catch {
+      /* the next tick tries again */
+    }
+  }, []);
+
+  const loadMoreWeeks = useCallback(async () => {
+    const cursor = nextBeforeRef.current;
+    if (!cursor || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMoreWeeks(true);
+    try {
+      const res = await fetch(`/api/picks/feed?before=${encodeURIComponent(cursor)}`, { credentials: "include" });
+      const data = await res.json();
+      if (!isMountedRef.current || !data?.success) return;
+      const older: Pick[] = (data.picks as Pick[]).filter((p) => p.is_published !== false);
+      const known = new Set(picksRef.current.map((p) => p._id));
+      const merged = [...picksRef.current, ...older.filter((p) => !known.has(p._id))];
+      picksRef.current = merged;
+      setPicks(merged);
+      setNextBefore(data.nextBefore ?? null);
+      sinceRef.current = newestUpdate(older, sinceRef.current);
+    } catch {
+      /* the button simply stays; tapping again retries */
+    } finally {
+      loadingMoreRef.current = false;
+      if (isMountedRef.current) setLoadingMoreWeeks(false);
+    }
+  }, []);
+
+  // Show the last-known picks INSTANTLY once we know whose they are (a live
+  // coupon's selections are per-viewer), then the fetch below refreshes them.
+  useEffect(() => {
+    if (authLoading || cacheHydratedRef.current) return;
+    cacheHydratedRef.current = true;
+    const cached = readPicksCache(viewerKey);
+    if (!cached || cached.picks.length === 0 || picksRef.current.length > 0) return;
+    picksRef.current = cached.picks;
+    setPicks(cached.picks);
+    setStats((cur) => cur ?? cached.stats);
+    setNextBefore((cur) => cur ?? cached.nextBefore);
+    sinceRef.current = newestUpdate(cached.picks, sinceRef.current);
+    setLoading(false);
+  }, [authLoading, viewerKey]);
+
+  // Keep that cache current (a moment after the last change, not on every one).
+  useEffect(() => {
+    if (authLoading || loading) return;
+    const t = setTimeout(() => {
+      writePicksCache(viewerKey, { picks: picksRef.current, stats: statsRef.current, nextBefore: nextBeforeRef.current });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [picks, stats, nextBefore, loading, authLoading, viewerKey]);
+
   useEffect(() => {
     isMountedRef.current = true;
-    fetchPicks(true);
+    // The first fetch doesn't wait for the "who am I" check - the endpoint reads
+    // the cookie itself - so it runs in parallel with it.
+    if (!initialFetchStartedRef.current) {
+      initialFetchStartedRef.current = true;
+      fetchPicks(true);
+    }
 
-    // Real-time-ish updates without a websocket/SSE backend: a light
-    // interval poll (same pattern as the admin dashboard's conversation
-    // polling) plus an immediate refresh whenever the visitor comes back
-    // to this tab — covers the common "left it open, missed the new pick"
-    // case as well as "posted a pick, buyer's tab updates on its own".
-    const interval = setInterval(() => fetchPicks(false), 60000);
-    const onFocusOrVisible = () => {
+    // Live updates without a websocket backend: a tiny "what changed?" check
+    // every few seconds, a fuller refresh of the first weeks once a minute (it
+    // also catches deletions / unpublished picks, which "changed since" can't
+    // see), and an immediate refresh whenever the visitor comes back to the tab.
+    const liveInterval = setInterval(() => {
+      if (document.visibilityState === "visible") pollChanges();
+    }, 8000);
+    const fullInterval = setInterval(() => {
       if (document.visibilityState === "visible") fetchPicks(false);
+    }, 60000);
+    const onFocusOrVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      pollChanges();
+      fetchPicks(false);
     };
     document.addEventListener("visibilitychange", onFocusOrVisible);
     window.addEventListener("focus", onFocusOrVisible);
 
     return () => {
       isMountedRef.current = false;
-      clearInterval(interval);
+      clearInterval(liveInterval);
+      clearInterval(fullInterval);
       clearTimeout(bannerTimeoutRef.current);
       document.removeEventListener("visibilitychange", onFocusOrVisible);
       window.removeEventListener("focus", onFocusOrVisible);
     };
-  }, [fetchPicks]);
+  }, [fetchPicks, pollChanges]);
+
+  // A purchase, a new subscription, signing in or out changes which coupons'
+  // selections this visitor may see - fetch again so they appear right away
+  // (the server only sends them to people who have paid).
+  const entitlementSig = `${user?._id ?? ""}:${user?.unlockedPickIds?.length ?? 0}:${user?.subscription?.status ?? ""}:${user?.subscription?.expiresAt ?? ""}`;
+  const lastEntitlementSigRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (authLoading) return;
+    if (lastEntitlementSigRef.current === null) { lastEntitlementSigRef.current = entitlementSig; return; }
+    if (lastEntitlementSigRef.current !== entitlementSig) {
+      lastEntitlementSigRef.current = entitlementSig;
+      fetchPicks(false);
+    }
+  }, [authLoading, entitlementSig, fetchPicks]);
 
   const filtered = useMemo(() => {
     if (activeFilter === "ALL") return picks;
@@ -1833,7 +2018,7 @@ export default function PremiumPicksPage() {
   if (loading) return (
     <>
       <GlobalStyles />
-      <PageLoader label="Chargement des picks…" />
+      <HomeSkeleton />
     </>
   );
 
@@ -1873,8 +2058,8 @@ export default function PremiumPicksPage() {
         </div>
       )}
       <main style={{ minHeight: "100vh", background: "#0A0C0F", paddingBottom: `max(80px, ${BOTTOM_SAFE_OFFSET})` }}>
-        <Hero picks={picks} />
-        <FilterBar active={activeFilter} onChange={setActiveFilter} picks={picks} />
+        <Hero picks={picks} stats={stats} />
+        <FilterBar active={activeFilter} onChange={setActiveFilter} picks={picks} leagues={stats?.leagues} hasTiers={stats?.hasTiers} />
         <OneXBetBanner />
         {/* ── Subscription banner ── */}
         <SubscribeBanner
@@ -1946,7 +2131,14 @@ export default function PremiumPicksPage() {
           )}
 
           {/* ── WEEK CALENDAR — everything before this week ── */}
-          <WeekCalendar picks={pastWeeksPicks} onSelect={setSelectedPick} />
+          <WeekCalendar
+            picks={pastWeeksPicks}
+            onSelect={setSelectedPick}
+            hasMore={!!nextBefore}
+            loadingMore={loadingMoreWeeks}
+            onLoadMore={loadMoreWeeks}
+            weeksTotal={stats?.weeksTotal ?? 0}
+          />
         </section>
         <CompoundBetBanner />
 

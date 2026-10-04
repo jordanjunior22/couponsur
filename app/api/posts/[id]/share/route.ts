@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import PostModel from "@/models/Post";
 import { connectDB } from "@/utils/ConnectDb";
 import { requireLoggedInUser } from "@/utils/postAuth";
-import { toClientPost } from "@/utils/postSerializer";
+import { respondPost, invalidatePostsCache } from "@/utils/postFeed";
 
 // ─── POST: record a share ───────────────────────────────────────────────────
 // Called after the client's own share action succeeds (native share sheet,
@@ -21,12 +21,14 @@ export async function POST(
     }
 
     const { id } = await params;
-    const post = await PostModel.findByIdAndUpdate(id, { $inc: { shareCount: 1 } }, { new: true });
-    if (!post) {
+    const result = await PostModel.updateOne({ _id: id }, { $inc: { shareCount: 1 } });
+    if (result.matchedCount === 0) {
       return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });
     }
+    invalidatePostsCache();
 
-    return NextResponse.json({ success: true, data: toClientPost(post.toObject(), access.user.userId) });
+    const data = await respondPost(id, access.user.userId);
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("SHARE POST ERROR:", error);
     return NextResponse.json({ success: false, message: "Échec de l'opération" }, { status: 500 });

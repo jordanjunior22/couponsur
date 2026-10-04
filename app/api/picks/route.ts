@@ -4,6 +4,7 @@ import { connectDB } from "@/utils/ConnectDb";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { sendPushToAll } from "@/lib/webpush";
+import { resolveViewer, maskPickForViewer } from "@/utils/pickAccess";
 // ─── GET: Fetch Picks ────────────────────────────────────
 export async function GET(req: NextRequest) {
     try {
@@ -21,6 +22,12 @@ export async function GET(req: NextRequest) {
         if (outcome) query.outcome = outcome;
         if (published) query.is_published = published === "true";
 
+        // Only staff (the dashboard) may see unpublished drafts; everyone
+        // else gets published picks only, and a LIVE coupon's selections are
+        // masked unless they've paid for it (see utils/pickAccess.ts).
+        const viewer = await resolveViewer();
+        if (!viewer?.isAdmin) query.is_published = true;
+
         // .lean() — this is polled every 60s by the buyer homepage
         // (PremiumPicksPage) for every visitor; without it, Mongoose
         // hydrates a full Document (getters, casters, change-tracking) per
@@ -29,7 +36,7 @@ export async function GET(req: NextRequest) {
         const picks = await Pick.find(query).sort({ match_date: -1 }).lean();
 
         return NextResponse.json(
-            { success: true, data: picks },
+            { success: true, data: viewer?.isAdmin ? picks : picks.map((p) => maskPickForViewer(p, viewer)) },
             { status: 200 }
         );
     } catch (error) {

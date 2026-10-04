@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 import { toClientPost } from "@/utils/postSerializer";
+import { invalidatePostsCache } from "@/utils/postFeed";
 import { sendPushToAll } from "@/lib/webpush";
 
 async function requireAdmin() {
@@ -101,6 +102,7 @@ export async function PATCH(
     }
 
     await post.save();
+    invalidatePostsCache();
 
     // Only notify on the actual publish transition — not on every edit to
     // an already-published post (would spam subscribers on every typo fix)
@@ -135,6 +137,7 @@ export async function DELETE(
     }
 
     const { id } = await params;
+    invalidatePostsCache();
     const post = await PostModel.findByIdAndDelete(id);
     if (!post) {
       return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });

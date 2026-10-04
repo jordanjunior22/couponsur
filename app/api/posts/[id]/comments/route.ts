@@ -4,7 +4,7 @@ import PostModel from "@/models/Post";
 import { connectDB } from "@/utils/ConnectDb";
 import { requireLoggedInUser } from "@/utils/postAuth";
 import { detectProhibitedContact, moderationMessage } from "@/utils/chatModeration";
-import { toClientPost } from "@/utils/postSerializer";
+import { respondPost, invalidatePostsCache } from "@/utils/postFeed";
 
 // ─── POST: add a comment ────────────────────────────────────────────────────
 // Same auto-moderation group chat already applies to its messages (blocks
@@ -37,20 +37,31 @@ export async function POST(
     }
 
     const { id } = await params;
-    const post = await PostModel.findById(id);
-    if (!post) {
+    if (!Types.ObjectId.isValid(id)) {
       return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });
     }
 
-    post.comments.push({
-      user: new Types.ObjectId(access.user.userId),
-      phone: access.user.phone,
-      role: access.user.role,
-      text,
-    });
-    await post.save();
+    // Atomic append - never re-saves the whole post (picture and all comments).
+    const result = await PostModel.updateOne(
+      { _id: id },
+      {
+        $push: {
+          comments: {
+            user: new Types.ObjectId(access.user.userId),
+            phone: access.user.phone,
+            role: access.user.role,
+            text,
+          },
+        },
+      }
+    );
+    if (result.matchedCount === 0) {
+      return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });
+    }
+    invalidatePostsCache();
 
-    return NextResponse.json({ success: true, data: toClientPost(post.toObject(), access.user.userId) }, { status: 201 });
+    const data = await respondPost(id, access.user.userId);
+    return NextResponse.json({ success: true, data }, { status: 201 });
   } catch (error) {
     console.error("ADD POST COMMENT ERROR:", error);
     return NextResponse.json({ success: false, message: "Échec de l'envoi du commentaire" }, { status: 500 });

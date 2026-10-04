@@ -102,6 +102,9 @@ const PostSchema = new Schema<IPost>(
 
 // Feed reads are always "published, newest first".
 PostSchema.index({ isPublished: 1, createdAt: -1 });
+// The feed's fast poll asks "which published posts changed since X?"
+// (likes, comments, votes bump updatedAt).
+PostSchema.index({ isPublished: 1, updatedAt: 1 });
 
 const PostModel: Model<IPost> =
   mongoose.models.Post || mongoose.model<IPost>("Post", PostSchema, "posts");

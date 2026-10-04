@@ -9,6 +9,7 @@ import {
   PiChartBarFill,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
+import { maskPhone } from "@/utils/maskPhone";
 
 export interface ClientPostComment {
   _id: string;
@@ -18,6 +19,8 @@ export interface ClientPostComment {
   text: string;
   createdAt: string;
   isMine: boolean;
+  // Client-only: shown the instant it is sent, before the server confirms it.
+  pending?: boolean;
 }
 
 export interface ClientPostPoll {
@@ -39,6 +42,7 @@ export interface ClientPost {
   shareCount: number;
   comments: ClientPostComment[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 // First letter of up to the first two words — "Coupon Sûr" -> "CS", a
@@ -102,17 +106,20 @@ function timeAgo(iso: string): string {
 // icon-only action row, bold like count, caption, collapsed "view
 // comments" link, small caps timestamp last). Posting is admin-only —
 // everything interactive here is a buyer action.
-export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: ClientPost) => void }) {
+// `onUpdate(post, true)` means "this change is mine, made just now" - the feed
+// uses that to keep a poll that started a moment earlier from briefly undoing it.
+export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: ClientPost, local?: boolean) => void }) {
   const { user } = useAuth();
   const router = useRouter();
-  const [liking, setLiking] = useState(false);
-  const [voting, setVoting] = useState<"A" | "B" | null>(null);
+  const likeSeqRef = useRef(0);
+  // Always the latest version of this post, for reverting after a failed request
+  // without clobbering changes (other people's comments...) that landed meanwhile.
+  const postRef = useRef(post);
+  postRef.current = post;
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentDraft, setCommentDraft] = useState("");
-  const [commentSending, setCommentSending] = useState(false);
   const [commentError, setCommentError] = useState<string | null>(null);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
-  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
   const [heartPop, setHeartPop] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
 
@@ -131,19 +138,34 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
     setTimeout(() => setHeartPop(false), 700);
   };
 
-  const toggleLike = async () => {
+  // Likes show INSTANTLY: the heart, the count and the pop happen on the tap,
+  // and the request runs behind it. The request states the wanted result
+  // ("liked: true") instead of "flip it", so fast repeated taps or a retry can't
+  // end up inverted. Only the answer to the LATEST tap is applied.
+  const toggleLike = () => {
     if (!user) return requireLogin();
-    if (liking) return;
-    setLiking(true);
-    try {
-      const res = await fetch(`/api/posts/${post._id}/like`, { method: "POST", credentials: "include" });
-      const data = await res.json();
-      if (data?.success) {
-        if (!post.likedByMe && data.data.likedByMe) popHeart();
-        onUpdate(data.data);
-      }
-    } catch { /* silent — the next tap tries again */ }
-    finally { setLiking(false); }
+    const before = postRef.current;
+    const wantLiked = !before.likedByMe;
+    const seq = ++likeSeqRef.current;
+    if (wantLiked) popHeart();
+    onUpdate({ ...before, likedByMe: wantLiked, likeCount: Math.max(0, before.likeCount + (wantLiked ? 1 : -1)) }, true);
+
+    fetch(`/api/posts/${before._id}/like`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ liked: wantLiked }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (seq !== likeSeqRef.current) return;
+        if (data?.success) onUpdate(data.data, true);
+        else onUpdate({ ...postRef.current, likedByMe: before.likedByMe, likeCount: before.likeCount }, true);
+      })
+      .catch(() => {
+        if (seq !== likeSeqRef.current) return;
+        onUpdate({ ...postRef.current, likedByMe: before.likedByMe, likeCount: before.likeCount }, true);
+      });
   };
 
   // Classic Instagram gesture — double-tapping the photo always likes
@@ -154,52 +176,91 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
     if (!post.likedByMe) toggleLike();
   };
 
-  const vote = async (option: "A" | "B") => {
+  // The vote registers and the results appear on the tap; if the server
+  // disagrees (already voted, poll gone) it sends the real state back and we
+  // adopt it.
+  const vote = (option: "A" | "B") => {
     if (!user) return requireLogin();
-    if (voting || post.poll?.myVote) return;
-    setVoting(option);
-    try {
-      const res = await fetch(`/api/posts/${post._id}/vote`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ option }),
-      });
-      const data = await res.json();
-      if (data?.success) onUpdate(data.data);
-    } catch { /* silent */ }
-    finally { setVoting(null); }
+    const before = postRef.current;
+    if (!before.poll || before.poll.myVote) return;
+    const poll = before.poll;
+    onUpdate(
+      {
+        ...before,
+        poll: {
+          ...poll,
+          myVote: option,
+          total: poll.total + 1,
+          counts: { a: poll.counts.a + (option === "A" ? 1 : 0), b: poll.counts.b + (option === "B" ? 1 : 0) },
+        },
+      },
+      true
+    );
+
+    fetch(`/api/posts/${before._id}/vote`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ option }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.data) onUpdate(data.data, true); // success, or the server's real state after a refusal
+        else onUpdate({ ...postRef.current, poll: before.poll }, true);
+      })
+      .catch(() => onUpdate({ ...postRef.current, poll: before.poll }, true));
   };
 
-  const sendComment = async () => {
+  // A comment appears the moment you send it (slightly dimmed until the server
+  // confirms), the box clears at once, and if it fails the comment is taken
+  // back out and your text is put back so nothing is lost.
+  const sendComment = () => {
     if (!user) return requireLogin();
     const text = commentDraft.trim();
-    if (!text || commentSending) return;
-    setCommentSending(true);
+    if (!text) return;
+    const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const temp: ClientPostComment = {
+      _id: tempId, user: user._id, phone: maskPhone(user.phone), role: user.role,
+      text, createdAt: new Date().toISOString(), isMine: true, pending: true,
+    };
     setCommentError(null);
-    try {
-      const res = await fetch(`/api/posts/${post._id}/comments`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      const data = await res.json();
-      if (data?.success) { onUpdate(data.data); setCommentDraft(""); }
-      else setCommentError(data?.message || "Échec de l'envoi");
-    } catch {
-      setCommentError("Erreur réseau");
-    } finally {
-      setCommentSending(false);
-    }
+    setCommentDraft("");
+    onUpdate({ ...postRef.current, comments: [...postRef.current.comments, temp] }, true);
+
+    const undo = (message: string) => {
+      onUpdate({ ...postRef.current, comments: postRef.current.comments.filter((c) => c._id !== tempId) }, true);
+      setCommentDraft((cur) => cur || text);
+      setCommentError(message);
+    };
+
+    fetch(`/api/posts/${post._id}/comments`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.success) onUpdate(data.data, true);
+        else undo(data?.message || "Échec de l'envoi");
+      })
+      .catch(() => undo("Erreur réseau"));
   };
 
-  const deleteComment = async (commentId: string) => {
-    setDeletingCommentId(commentId);
-    try {
-      const res = await fetch(`/api/posts/${post._id}/comments/${commentId}`, { method: "DELETE", credentials: "include" });
-      const data = await res.json();
-      if (data?.success) onUpdate(data.data);
-    } catch { /* comment just stays if the request failed */ }
-    finally { setDeletingCommentId(null); }
+  // Removed from the list immediately; put back if the request fails.
+  const deleteComment = (commentId: string) => {
+    const removed = postRef.current.comments.find((c) => c._id === commentId);
+    if (!removed || removed.pending) return;
+    onUpdate({ ...postRef.current, comments: postRef.current.comments.filter((c) => c._id !== commentId) }, true);
+
+    const restore = () => {
+      if (postRef.current.comments.some((c) => c._id === commentId)) return;
+      const merged = [...postRef.current.comments, removed].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      onUpdate({ ...postRef.current, comments: merged }, true);
+    };
+
+    fetch(`/api/posts/${post._id}/comments/${commentId}`, { method: "DELETE", credentials: "include" })
+      .then((r) => r.json())
+      .then((data) => { if (data?.success) onUpdate(data.data, true); else restore(); })
+      .catch(restore);
   };
 
   const share = async () => {
@@ -215,7 +276,7 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
       }
       const res = await fetch(`/api/posts/${post._id}/share`, { method: "POST", credentials: "include" });
       const data = await res.json();
-      if (data?.success) onUpdate(data.data);
+      if (data?.success) onUpdate(data.data, true);
     } catch {
       // Share sheet cancelled, clipboard denied, etc. — not worth an error.
     }
@@ -242,13 +303,13 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
 
       {post.poll && (
         <div style={{ padding: post.image ? "12px 16px 0" : "0 16px" }}>
-          <PollBlock poll={post.poll} voting={voting} onVote={vote} />
+          <PollBlock poll={post.poll} voting={null} onVote={vote} />
         </div>
       )}
 
       <div style={bodyPadStyle}>
         <div style={actionRowStyle}>
-          <button onClick={toggleLike} disabled={liking} style={iconBtnStyle} aria-label="J'aime">
+          <button onClick={toggleLike} style={iconBtnStyle} aria-label="J'aime" aria-pressed={post.likedByMe}>
             {post.likedByMe ? <PiHeartFill size={25} color="#ED4956" /> : <PiHeart size={25} color="#F5F5F5" />}
           </button>
           <button onClick={() => setCommentsOpen((v) => !v)} style={iconBtnStyle} aria-label="Commenter">
@@ -275,17 +336,16 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
         {commentsOpen && (
           <div style={commentsWrapStyle}>
             {post.comments.map((c) => (
-              <div key={c._id} style={commentRowStyle}>
+              <div key={c._id} style={{ ...commentRowStyle, opacity: c.pending ? 0.55 : 1 }}>
                 <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#F5F5F5", lineHeight: 1.4 }}>
                   <span style={{ fontWeight: 700, color: c.role === "ADMIN" ? "#C9A84C" : "#F5F5F5" }}>
                     {c.role === "ADMIN" ? "Admin" : c.phone}
                   </span>{" "}
                   {c.text}
                 </div>
-                {(c.isMine || user?.role === "ADMIN") && (
+                {(c.isMine || user?.role === "ADMIN") && !c.pending && (
                   <button
                     onClick={() => deleteComment(c._id)}
-                    disabled={deletingCommentId === c._id}
                     style={commentDeleteBtnStyle}
                     aria-label="Supprimer"
                   >
@@ -303,11 +363,10 @@ export function PostCard({ post, onUpdate }: { post: ClientPost; onUpdate: (p: C
                     onChange={(e) => { setCommentDraft(e.target.value); setCommentError(null); }}
                     onKeyDown={(e) => { if (e.key === "Enter") sendComment(); }}
                     placeholder="Ajouter un commentaire…"
-                    disabled={commentSending}
                     style={commentInputStyle}
                     autoFocus
                   />
-                  <button onClick={sendComment} disabled={commentSending || !commentDraft.trim()} style={commentSendBtnStyle}>
+                  <button onClick={sendComment} disabled={!commentDraft.trim()} style={commentSendBtnStyle}>
                     <PiPaperPlaneRightBold size={14} />
                   </button>
                 </div>

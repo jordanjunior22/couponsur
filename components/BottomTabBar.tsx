@@ -12,6 +12,8 @@ import {
   PiClockCounterClockwise, PiClockCounterClockwiseFill,
 } from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
+import { prefetchPosts } from "@/lib/postsCache";
+import { prefetchPicks } from "@/lib/picksCache";
 import { useAppSettings } from "@/hooks/useAppSettings";
 import { useUnreadChatCounts, formatBadgeCount } from "@/hooks/useUnreadChat";
 import { useUnreadPostsCount } from "@/hooks/useUnreadPosts";
@@ -83,6 +85,21 @@ export function BottomTabBar() {
   // leaving a chat room (or the Actus feed) should clear its badge without
   // waiting out the hook's own poll interval.
   useEffect(() => { refreshUnread(); refreshUnreadPosts(); }, [pathname, refreshUnread, refreshUnreadPosts]);
+
+  // Warm the news feed's first page in the background (and again whenever you
+  // move between pages), so tapping Actus opens onto content that is already
+  // there. Skipped while you're ON Actus - it keeps itself fresh.
+  useEffect(() => {
+    if (!showActus || pathname.startsWith("/actus")) return;
+    prefetchPosts(user?._id ?? "anon", 20000);
+  }, [showActus, pathname, user?._id]);
+
+  // Same for the home page's picks: keep them warm while you're elsewhere, so
+  // coming back to Accueil is instant. (The home page keeps itself fresh.)
+  useEffect(() => {
+    if (pathname === "/") return;
+    prefetchPicks(user?._id ?? "anon", 20000);
+  }, [pathname, user?._id]);
 
   // Order is deliberate, not alphabetical or "as features shipped" — it's
   // built around one goal: keep people coming back.

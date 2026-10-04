@@ -22,6 +22,7 @@ interface SerializablePost {
   imageBytes?: number;
   shareCount?: number;
   createdAt: Date | string;
+  updatedAt?: Date | string;
   poll?: { optionALabel: string; optionBLabel: string } | null;
   votes?: { user: { toString(): string }; option: "A" | "B" }[];
   likes?: { toString(): string }[];
@@ -88,5 +89,7 @@ export function toClientPost(
       isMine: !!viewerId && c.user.toString() === viewerId,
     })),
     createdAt: post.createdAt,
+    // Lets the client's fast poll ask only for what changed after this.
+    updatedAt: post.updatedAt ?? post.createdAt,
   };
 }

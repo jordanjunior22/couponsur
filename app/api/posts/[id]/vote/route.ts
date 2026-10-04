@@ -3,11 +3,13 @@ import { Types } from "mongoose";
 import PostModel from "@/models/Post";
 import { connectDB } from "@/utils/ConnectDb";
 import { requireLoggedInUser } from "@/utils/postAuth";
-import { toClientPost } from "@/utils/postSerializer";
+import { respondPost, invalidatePostsCache } from "@/utils/postFeed";
 
 // ─── POST: cast a vote on a poll post ──────────────────────────────────────
-// Votes are immutable — a simple prediction-poll convention, not a
+// Votes are immutable - a simple prediction-poll convention, not a
 // changeable-until-close poll. Body: { option: "A" | "B" }.
+// One atomic update: it only matches a poll the caller hasn't voted in yet, so
+// two simultaneous taps can't count twice.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -26,21 +28,30 @@ export async function POST(
     }
 
     const { id } = await params;
-    const post = await PostModel.findById(id);
-    if (!post) {
+    if (!Types.ObjectId.isValid(id)) {
       return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });
     }
-    if (!post.poll) {
-      return NextResponse.json({ success: false, message: "Ce post n'est pas un sondage" }, { status: 400 });
-    }
-    if (post.votes.some((v) => v.user.toString() === access.user.userId)) {
-      return NextResponse.json({ success: false, message: "Vous avez déjà voté" }, { status: 400 });
-    }
+    const uid = new Types.ObjectId(access.user.userId);
 
-    post.votes.push({ user: new Types.ObjectId(access.user.userId), option: body.option });
-    await post.save();
+    const result = await PostModel.updateOne(
+      { _id: id, poll: { $ne: null }, "votes.user": { $ne: uid } },
+      { $push: { votes: { user: uid, option: body.option } } }
+    );
+    invalidatePostsCache();
 
-    return NextResponse.json({ success: true, data: toClientPost(post.toObject(), access.user.userId) });
+    const data = await respondPost(id, access.user.userId);
+    if (!data) {
+      return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });
+    }
+    if (result.modifiedCount === 0) {
+      // Either not a poll, or already voted. `data` is the real current state,
+      // so a client that guessed wrong can put itself right.
+      return NextResponse.json(
+        { success: false, message: data.poll ? "Vous avez déjà voté" : "Ce post n'est pas un sondage", data },
+        { status: 400 }
+      );
+    }
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("VOTE POST ERROR:", error);
     return NextResponse.json({ success: false, message: "Échec du vote" }, { status: 500 });

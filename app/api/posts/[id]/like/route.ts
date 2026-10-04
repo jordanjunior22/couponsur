@@ -1,15 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { Types } from "mongoose";
 import PostModel from "@/models/Post";
 import { connectDB } from "@/utils/ConnectDb";
 import { requireLoggedInUser } from "@/utils/postAuth";
-import { toClientPost } from "@/utils/postSerializer";
+import { respondPost, invalidatePostsCache } from "@/utils/postFeed";
 
-// ─── POST: toggle a like ────────────────────────────────────────────────────
-// No unlike-vs-like distinction in the body — this just flips the caller's
-// own membership in `likes`, same "toggle" shape as a typical like button.
+// ─── POST: like or unlike ───────────────────────────────────────────────────
+// Body (optional): { liked: boolean } - the state the caller WANTS. Asking
+// for a state, instead of "flip it", makes the call safe to repeat and to
+// reorder: tapping fast, or a retry after a dropped connection, still lands
+// on what the person last chose. With no body it flips, as it always did.
+//
+// One atomic update ($addToSet / $pull) - the old read-modify-write could
+// drop a like when two people liked the same post at the same moment.
 export async function POST(
-  req: Request,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -21,20 +26,27 @@ export async function POST(
     }
 
     const { id } = await params;
-    const post = await PostModel.findById(id);
-    if (!post) {
+    if (!Types.ObjectId.isValid(id)) {
       return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });
     }
+    const uid = new Types.ObjectId(access.user.userId);
 
-    const alreadyLiked = post.likes.some((u) => u.toString() === access.user.userId);
-    if (alreadyLiked) {
-      post.likes = post.likes.filter((u) => u.toString() !== access.user.userId);
+    const body = await req.json().catch(() => ({}));
+    let wantLiked: boolean;
+    if (typeof body.liked === "boolean") {
+      wantLiked = body.liked;
     } else {
-      post.likes.push(new Types.ObjectId(access.user.userId));
+      wantLiked = !(await PostModel.exists({ _id: id, likes: uid }));
     }
-    await post.save();
 
-    return NextResponse.json({ success: true, data: toClientPost(post.toObject(), access.user.userId) });
+    await PostModel.updateOne({ _id: id }, wantLiked ? { $addToSet: { likes: uid } } : { $pull: { likes: uid } });
+    invalidatePostsCache();
+
+    const data = await respondPost(id, access.user.userId);
+    if (!data) {
+      return NextResponse.json({ success: false, message: "Post introuvable" }, { status: 404 });
+    }
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("TOGGLE POST LIKE ERROR:", error);
     return NextResponse.json({ success: false, message: "Échec de l'opération" }, { status: 500 });

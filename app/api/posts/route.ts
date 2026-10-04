@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
 import { optionalUserId } from "@/utils/postAuth";
 import { toClientPost } from "@/utils/postSerializer";
-import { loadPostsPage, parsePageParams } from "@/utils/postFeed";
+import { loadPostsPage, loadChangedPosts, parsePageParams } from "@/utils/postFeed";
 
 // ─── GET: the public news feed, one page at a time ─────────────────────────
 // ?limit=10 (max 20) &before=<createdAt of the last post you already have>
@@ -16,8 +16,23 @@ export async function GET(req: NextRequest) {
   try {
     await connectDB();
 
-    const { limit, before } = parsePageParams(new URL(req.url).searchParams);
+    const searchParams = new URL(req.url).searchParams;
     const viewerId = await optionalUserId();
+
+    // ?since=<ISO updatedAt>: only what CHANGED after that moment - new posts
+    // and likes / comments / votes on existing ones. The feed asks this every
+    // few seconds, so likes and comments from other people show up live.
+    const sinceRaw = searchParams.get("since");
+    const sinceDate = sinceRaw ? new Date(sinceRaw) : null;
+    if (sinceDate && !Number.isNaN(sinceDate.getTime())) {
+      const { posts, imageIds } = await loadChangedPosts(sinceDate);
+      return NextResponse.json({
+        success: true,
+        data: posts.map((p) => toClientPost(p, viewerId, { hasImage: imageIds.has(p._id.toString()) })),
+      });
+    }
+
+    const { limit, before } = parsePageParams(searchParams);
     const { posts, imageIds, nextCursor } = await loadPostsPage({ publishedOnly: true, limit, before });
 
     return NextResponse.json({

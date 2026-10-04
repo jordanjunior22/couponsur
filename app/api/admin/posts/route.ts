@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 import { toClientPost } from "@/utils/postSerializer";
-import { loadPostsPage, parsePageParams } from "@/utils/postFeed";
+import { loadPostsPage, parsePageParams, invalidatePostsCache } from "@/utils/postFeed";
 import { sendPushToAll } from "@/lib/webpush";
 
 async function requireAdmin() {
@@ -95,6 +95,7 @@ export async function POST(req: NextRequest) {
       imageBytes = parsed.bytes;
     }
 
+    invalidatePostsCache();
     const post = await PostModel.create({
       authorName,
       text,
