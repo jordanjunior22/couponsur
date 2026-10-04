@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     // Normalized so spaces or a typed-in "+237"/"237" country code can't
     // cause a false "Invalid credentials" against an account that's really
     // the same phone number (see utils/normalizeUserPhone).
-    const user = await User.findOne({ phone: normalizeUserPhone(phone) });
+    const user = await User.findOne({ phone: normalizeUserPhone(phone) }).select("+avatar");
 
     if (!user) {
       return NextResponse.json(
@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
       revenueShare: user.revenueShare,
       unlockedPickIds: user.unlockedPickIds,
       nickname: user.nickname ?? null,
+      avatar: user.avatar ?? null,
       subscription: user.subscription,
       lastLoginAt: user.lastLoginAt,
     };

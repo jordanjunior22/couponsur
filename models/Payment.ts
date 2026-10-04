@@ -65,5 +65,15 @@ const PaymentSchema = new Schema<IPayment>(
 // Compound index: fast duplicate-payment lookup in /api/pay
 PaymentSchema.index({ pickId: 1, userId: 1, status: 1 });
 
+// Admin "Transactions" tab (app/api/admin/transactions): it always sorts by
+// newest first, optionally narrowed by status / type / one user. Without
+// these, MongoDB has to load and sort the WHOLE collection in memory to
+// return a single page of 20. These let it read just the 20 rows it needs
+// straight off the index.
+PaymentSchema.index({ createdAt: -1 });
+PaymentSchema.index({ status: 1, createdAt: -1 });
+PaymentSchema.index({ paymentType: 1, createdAt: -1 });
+PaymentSchema.index({ userId: 1, createdAt: -1 });
+
 export default (mongoose.models.Payment as Model<IPayment>) ||
   mongoose.model<IPayment>("Payment", PaymentSchema);

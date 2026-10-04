@@ -340,6 +340,45 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     };
   }, [authLoading, isEligible, fetchMessages, fetchNewMessages]);
 
+  // ─── Profile pictures ───────────────────────────────────────────────────
+  // Fetched once per sender (not repeated on every polled message) and
+  // cached for the life of the room. A value of null means "checked — no
+  // picture", so those senders aren't asked about again. A picture someone
+  // changes mid-session shows up the next time the room is opened.
+  const [avatars, setAvatars] = useState<Record<string, string | null>>({});
+  const requestedAvatarsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!isEligible) return;
+    const missing = Array.from(
+      new Set(
+        messages
+          .filter((m) => !m.pending && !m.failed && m.user !== user?._id && !requestedAvatarsRef.current.has(m.user))
+          .map((m) => m.user)
+      )
+    );
+    if (missing.length === 0) return;
+
+    for (let i = 0; i < missing.length; i += 50) {
+      const batch = missing.slice(i, i + 50);
+      batch.forEach((id) => requestedAvatarsRef.current.add(id));
+      fetch(`/api/group-chat/avatars?room=${room}&ids=${batch.join(",")}`, { credentials: "include" })
+        .then((r) => r.json())
+        .then((data) => {
+          if (!mountedRef.current || !data?.success) return;
+          setAvatars((prev) => {
+            const next = { ...prev };
+            for (const id of batch) next[id] = data.avatars?.[id] ?? null;
+            return next;
+          });
+        })
+        .catch(() => {
+          // Let a later render retry these instead of marking them "no picture".
+          batch.forEach((id) => requestedAvatarsRef.current.delete(id));
+        });
+    }
+  }, [messages, isEligible, room, user?._id]);
+
   // ─── Starred (personal, per-device — no server round-trip needed) ──────
   useEffect(() => {
     if (!user) return;
@@ -682,6 +721,13 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         .gc-menu-item.danger { color: ${C.red}; }
         .gc-fab { position: absolute; right: 16px; bottom: 16px; width: 38px; height: 38px; border-radius: 50%; background: ${C.dark4}; border: 1px solid ${C.border}; color: ${C.gold}; font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
         .gc-composer-input { transition: height 0.1s ease; }
+        .gc-header-btn { display: flex; align-items: center; justify-content: center; height: 36px; background: ${C.dark4}; border: 1px solid ${C.border}; border-radius: 10px; color: ${C.muted}; cursor: pointer; font-family: inherit; transition: background 0.15s ease, border-color 0.15s ease; }
+        .gc-header-btn:hover { background: ${C.border}; }
+        /* On narrow phones the star filter collapses to just its icon so the title keeps its room. */
+        @media (max-width: 420px) {
+          .gc-header-btn-label { display: none; }
+          .gc-header-btn:has(.gc-header-btn-label) { width: 36px; padding: 0 !important; }
+        }
         /* Scoped (not just relying on the app-wide rule in globals.css) so
            the room's scrollable areas — the message list and the
            auto-growing composer — always get this exact thin on-theme bar
@@ -694,37 +740,47 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
       `}</style>
 
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}`, background: C.dark3, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 20 }}>{icon}</span>
-          <div>
-            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1, color: C.text }}>{title}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: C.muted }}>
-              <span>{subtitle}</span>
-              {onlineCount !== null && onlineCount > 0 && (
-                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "#4ADE80" }}>
-                  <span aria-hidden style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#4ADE80" }} />
-                  {onlineCount} en ligne
-                </span>
-              )}
-            </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderBottom: `1px solid ${C.border}`, background: C.dark3, flexShrink: 0 }}>
+        <button onClick={close} aria-label="Retour" title="Retour" className="gc-header-btn" style={{ width: 36, flexShrink: 0, padding: 0, fontSize: 18 }}>
+          ←
+        </button>
+
+        <div aria-hidden style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: "rgba(201,168,76,0.12)", border: "1px solid rgba(201,168,76,0.3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>
+          {icon}
+        </div>
+
+        {/* minWidth: 0 is what lets the title/subtitle truncate instead of pushing the buttons off-screen on narrow phones. */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 19, letterSpacing: 1, lineHeight: 1.15, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {title}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, fontSize: 11, color: C.muted, minWidth: 0 }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{subtitle}</span>
+            {onlineCount !== null && onlineCount > 0 && (
+              <span style={{ display: "flex", alignItems: "center", gap: 5, color: "#4ADE80", flexShrink: 0, fontWeight: 600, whiteSpace: "nowrap" }}>
+                <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ADE80", boxShadow: "0 0 0 3px rgba(74,222,128,0.18)" }} />
+                {onlineCount} en ligne
+              </span>
+            )}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            onClick={() => setFilter((f) => (f === "all" ? "starred" : "all"))}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, background: filter === "starred" ? "rgba(201,168,76,0.15)" : C.dark4,
-              border: `1px solid ${filter === "starred" ? C.gold : C.border}`, borderRadius: 8, padding: "6px 10px",
-              color: filter === "starred" ? C.gold : C.muted, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
-            }}
-          >
-            ⭐ {filter === "starred" ? "Favoris" : "Tout voir"}
-          </button>
-          <button onClick={close} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted, flexShrink: 0 }}>
-            ✕
-          </button>
-        </div>
+
+        <button
+          onClick={() => setFilter((f) => (f === "all" ? "starred" : "all"))}
+          aria-label={filter === "starred" ? "Afficher tous les messages" : "Afficher les favoris"}
+          aria-pressed={filter === "starred"}
+          title={filter === "starred" ? "Afficher tous les messages" : "Afficher les favoris"}
+          className="gc-header-btn"
+          style={{
+            flexShrink: 0, gap: 6, padding: "0 12px", fontSize: 12, fontWeight: 700,
+            background: filter === "starred" ? "rgba(201,168,76,0.15)" : undefined,
+            borderColor: filter === "starred" ? C.gold : undefined,
+            color: filter === "starred" ? C.gold : undefined,
+          }}
+        >
+          <span aria-hidden>{filter === "starred" ? "⭐" : "☆"}</span>
+          <span className="gc-header-btn-label">{filter === "starred" ? "Favoris" : "Tout voir"}</span>
+        </button>
       </div>
 
       {/* Pinned strip */}
@@ -936,8 +992,8 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                     }}
                   >
                     {!isOwn && (
-                      <div style={{ width: 24, flexShrink: 0, alignSelf: "flex-end" }}>
-                        {groupEnd && <Avatar label={initialsFor(m)} color={accent ?? C.muted} />}
+                      <div style={{ width: 28, flexShrink: 0, alignSelf: "flex-end" }}>
+                        {groupEnd && <Avatar label={initialsFor(m)} color={accent ?? C.muted} src={avatars[m.user]} />}
                       </div>
                     )}
                     <div style={{ maxWidth: "min(80%, 480px)", minWidth: 0 }}>{bubble}</div>
@@ -1037,17 +1093,22 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   );
 }
 
-function Avatar({ label, color }: { label: string; color: string }) {
+function Avatar({ label, color, src }: { label: string; color: string; src?: string | null }) {
   return (
     <div
       style={{
-        width: 24, height: 24, borderRadius: "50%", flexShrink: 0,
-        background: `${color}26`, border: `1px solid ${color}`,
+        width: 28, height: 28, borderRadius: "50%", flexShrink: 0, overflow: "hidden",
+        background: `${color}26`, border: `1.5px solid ${color}`,
         display: "flex", alignItems: "center", justifyContent: "center",
         fontSize: 10, fontWeight: 700, color,
       }}
     >
-      {label}
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- data: URI, next/image can't optimize it anyway
+        <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+      ) : (
+        label
+      )}
     </div>
   );
 }

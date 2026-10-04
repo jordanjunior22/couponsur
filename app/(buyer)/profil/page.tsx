@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import {
   PiUserCircleFill, PiDeviceMobileFill, PiStarFill,
   PiWrenchFill, PiKeyFill, PiSignOutBold,
   PiDownloadSimpleBold, PiCheckCircleFill, PiShareFatBold,
-  PiTagFill,
+  PiTagFill, PiCameraFill,
 } from "react-icons/pi";
+import { compressImageToDataUri } from "@/utils/imageCompression";
 import { useAuth } from "@/context/AuthContext";
 import { SubscribePayment } from "@/components/PremiumPicksPage";
 import { validateCameroonPhone, formatCameroonPhone } from "@/utils/cameroonPhone";
@@ -188,6 +189,8 @@ function AccountPanel() {
   return (
     <>
       <div style={cardStyle}>
+        <AvatarPicker />
+
         <div style={phoneDisplayStyle}>
           <PiDeviceMobileFill size={15} />
           +237 {formatCameroonPhone(user.phone)}
@@ -253,6 +256,73 @@ function AccountPanel() {
         <NicknameSheet onClose={() => setNicknameOpen(false)} />
       )}
     </>
+  );
+}
+
+// ─── SIGNED-IN: PROFILE PICTURE (optional) ─────────────────────────────────
+// Downscaled to a small JPEG in the browser before upload; the server
+// re-validates it (app/api/auth/avatar).
+function AvatarPicker() {
+  const { user, updateAvatar } = useAuth();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return setError("Choisissez une image");
+    try {
+      setBusy(true);
+      setError(null);
+      const dataUri = await compressImageToDataUri(file, { maxDimension: 256, maxBytes: 100_000 });
+      await updateAvatar(dataUri);
+    } catch (err: any) {
+      setError(err.message || "Échec de l'envoi");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    try {
+      setBusy(true);
+      setError(null);
+      await updateAvatar(null);
+    } catch (err: any) {
+      setError(err.message || "Échec de la suppression");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 16 }}>
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        aria-label="Changer la photo de profil"
+        style={{ position: "relative", width: 84, height: 84, borderRadius: "50%", border: "2px solid #C9A84C", background: "#0D1117", padding: 0, cursor: busy ? "wait" : "pointer", overflow: "visible", opacity: busy ? 0.6 : 1 }}
+      >
+        {user?.avatar ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={user.avatar} alt="Photo de profil" style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover", display: "block" }} />
+        ) : (
+          <PiUserCircleFill size={76} color="#3A4455" style={{ display: "block", margin: "auto" }} />
+        )}
+        <span style={{ position: "absolute", right: -2, bottom: -2, width: 26, height: 26, borderRadius: "50%", background: "#C9A84C", color: "#0A0C0F", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <PiCameraFill size={14} />
+        </span>
+      </button>
+      <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+      {user?.avatar && (
+        <button onClick={handleRemove} disabled={busy} style={{ marginTop: 8, background: "none", border: "none", color: "#6B7280", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
+          Supprimer la photo
+        </button>
+      )}
+      {error && <div style={{ fontSize: 11, color: "#f87171", marginTop: 6 }}>⚠️ {error}</div>}
+    </div>
   );
 }
 

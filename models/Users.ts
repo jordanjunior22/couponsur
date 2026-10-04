@@ -48,6 +48,11 @@ export interface IUser extends Document {
   // and null/unset falls back to the plain "Admin" label (see
   // GroupChatRoom's senderLabel).
   nickname?: string | null;
+  // Optional profile picture, stored as a small (client-downscaled) JPEG data
+  // URI. Excluded from queries by default (select: false) so admin user
+  // lists and other bulk reads don't drag every picture along — the routes
+  // that serve the signed-in user's own profile opt in with "+avatar".
+  avatar?: string | null;
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -99,6 +104,7 @@ const UserSchema = new Schema<IUser>(
     subscription: { type: SubscriptionSchema, default: () => ({}) },
     groupChatBlocked: { type: Boolean, default: false },
     nickname: { type: String, trim: true, maxlength: 40, default: null },
+    avatar: { type: String, default: null, select: false },
     lastLoginAt: { type: Date, default: null },
   },
   {

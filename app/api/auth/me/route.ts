@@ -23,7 +23,7 @@ export async function GET() {
       return NextResponse.json({ user: null });
     }
 
-    const user = await User.findById(decoded.userId).select("-password");
+    const user = await User.findById(decoded.userId).select("-password +avatar");
 
     // ─── Guard null ───────────────────────────────────────────
     if (!user) {

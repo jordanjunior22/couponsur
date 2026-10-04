@@ -21,6 +21,8 @@ interface AuthUser {
   // Admin-only group chat display name — see AccountPanel's nickname
   // editor and GroupChatRoom's senderLabel.
   nickname?: string | null;
+  // Optional profile picture (small JPEG data URI) — see /api/auth/avatar.
+  avatar?: string | null;
   subscription?: {
     status: "NONE" | "ACTIVE" | "EXPIRED";
     plan: "MONTHLY";
@@ -37,6 +39,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateNickname: (nickname: string) => Promise<void>;
+  updateAvatar: (avatar: string | null) => Promise<void>;
   unlockPick: (pickId: string) => Promise<void>;
   refreshUser: () => Promise<void>;
   hasActiveSubscription: () => boolean;
@@ -142,6 +145,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setUser(data.user);
   };
 
+  const updateAvatar = async (avatar: string | null) => {
+    const res = await fetch("/api/auth/avatar", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatar }),
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+      throw new Error(data.message);
+    }
+
+    setUser(data.user);
+  };
+
   const unlockPick = async (pickId: string) => {
     if (!user) return;
 
@@ -171,7 +191,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signup, login, logout, changePassword, updateNickname, unlockPick, refreshUser, hasActiveSubscription }}>
+    <AuthContext.Provider value={{ user, loading, signup, login, logout, changePassword, updateNickname, updateAvatar, unlockPick, refreshUser, hasActiveSubscription }}>
       {children}
     </AuthContext.Provider>
   );

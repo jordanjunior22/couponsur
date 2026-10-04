@@ -49,10 +49,15 @@ export async function GET(req: NextRequest) {
 
     if (search) {
       const re = new RegExp(escapeRegex(search), "i");
+      // Transaction ids match from the START and case-sensitively: an
+      // anchored, case-sensitive regex can use fapshiTransId's unique index,
+      // whereas a "contains / any case" one forces a scan of every payment.
+      // (Phone stays "contains" so support can search by the last digits.)
+      const idPrefix = new RegExp("^" + escapeRegex(search));
       // A search term matching a valid ObjectId also matches by userId
       // directly, so pasting a user's id (e.g. from the Users tab) works
       // as well as searching by phone or transaction id.
-      const or: Record<string, unknown>[] = [{ phone: re }, { fapshiTransId: re }];
+      const or: Record<string, unknown>[] = [{ phone: re }, { fapshiTransId: idPrefix }];
       if (mongoose.Types.ObjectId.isValid(search)) or.push({ userId: new mongoose.Types.ObjectId(search) });
       query.$or = or;
     }
@@ -66,13 +71,17 @@ export async function GET(req: NextRequest) {
       query.createdAt = createdAt;
     }
 
+    const hasFilter = Object.keys(query).length > 0;
     const [transactions, total] = await Promise.all([
       PaymentModel.find(query)
         .populate("userId", "phone role")
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
-        .limit(limit),
-      PaymentModel.countDocuments(query),
+        .limit(limit)
+        .lean(), // plain objects: skips building a full Mongoose document per row
+      // Unfiltered total comes from collection metadata (instant); only a
+      // filtered view needs a real count.
+      hasFilter ? PaymentModel.countDocuments(query) : PaymentModel.estimatedDocumentCount(),
     ]);
 
     return NextResponse.json({
