@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  PiPaperclipBold, PiPaperPlaneRightFill, PiArrowDownBold, PiArrowLeftBold, PiStarFill, PiStarBold, PiXBold,
+  PiArrowBendUpLeftBold, PiCopyBold, PiFlagBold, PiPushPinBold, PiPushPinSlashBold, PiTrashBold,
+  PiPencilSimpleBold, PiProhibitBold, PiCheckCircleBold, PiDotsThreeBold, PiDotsThreeVerticalBold,
+  PiCaretRightBold, PiCaretLeftBold, PiLightbulbBold,
+} from "react-icons/pi";
 import { useAuth } from "@/context/AuthContext";
 import { markRoomRead } from "@/hooks/useUnreadChat";
 import { compressImageToDataUri } from "@/utils/imageCompression";
@@ -318,6 +324,14 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   } | null>(null);
   const suppressClickRef = useRef(false);
   const menuOpenedAtRef = useRef(0);
+  // The menu shows the everyday actions first; moderation / less common ones
+  // sit behind "Plus".
+  const [menuMore, setMenuMore] = useState(false);
+  // One-time tip about the touch gestures.
+  const [showHint, setShowHint] = useState(false);
+  // Names of other members currently typing (from the poll).
+  const [typingNames, setTypingNames] = useState<string[]>([]);
+  const lastTypingPingRef = useRef(0);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // New messages from others that arrived while scrolled up (shown on the ↓ button).
@@ -389,6 +403,28 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   // "global" has no subscription gate at all — any logged-in user passes.
   const isEligible = !!user && (room === "global" || isAdmin || hasActiveSubscription());
 
+  // While the room is open, stop the page itself from panning or bouncing
+  // sideways (the iOS/Android "whole screen drifts left and right" feel).
+  // Restored when the room closes.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = {
+      htmlOverflowX: html.style.overflowX, htmlOverscrollX: html.style.overscrollBehaviorX,
+      bodyOverflowX: body.style.overflowX, bodyOverscrollX: body.style.overscrollBehaviorX,
+    };
+    html.style.overflowX = "hidden";
+    html.style.overscrollBehaviorX = "none";
+    body.style.overflowX = "hidden";
+    body.style.overscrollBehaviorX = "none";
+    return () => {
+      html.style.overflowX = prev.htmlOverflowX;
+      html.style.overscrollBehaviorX = prev.htmlOverscrollX;
+      body.style.overflowX = prev.bodyOverflowX;
+      body.style.overscrollBehaviorX = prev.bodyOverscrollX;
+    };
+  }, []);
+
   // ─── Fetch / poll ───────────────────────────────────────────────────────
   // Two-tier poll, not one: a plain "re-fetch the last 200 every 3s" was
   // re-masking and re-serializing the whole window — inline images
@@ -425,6 +461,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           setHasMoreOlder(!!data.hasMore);
         }
         if (typeof data.cooldownSeconds === "number") setCooldownSeconds(data.cooldownSeconds);
+        if (Array.isArray(data.typing)) setTypingNames(data.typing);
         setAccessError(null);
         setAmIBlocked(!!data.amIBlocked);
         if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
@@ -456,6 +493,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
       setAmIBlocked(!!data.amIBlocked);
       if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
       if (typeof data.cooldownSeconds === "number") setCooldownSeconds(data.cooldownSeconds);
+      if (Array.isArray(data.typing)) setTypingNames(data.typing);
       if (data.me) markRoomRead(data.me, room);
       const fresh: GroupMessage[] = data.data;
       if (fresh.length === 0) return;
@@ -606,6 +644,19 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, loadingMessages]);
 
+  useEffect(() => {
+    try {
+      if (window.matchMedia("(pointer: coarse)").matches && !localStorage.getItem("groupchat_hint_seen")) {
+        setShowHint(true);
+      }
+    } catch { /* storage / matchMedia unavailable - just no hint */ }
+  }, []);
+
+  const dismissHint = () => {
+    setShowHint(false);
+    try { localStorage.setItem("groupchat_hint_seen", "1"); } catch { /* ignore */ }
+  };
+
   const showToast = (text: string) => {
     setToast(text);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -753,6 +804,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         : { left, bottom: vh - rect.top + 4 }
     );
     menuOpenedAtRef.current = Date.now();
+    setMenuMore(false);
     setOpenMenuId(id);
   };
 
@@ -1041,6 +1093,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           suppressClickRef.current = true;
           setTimeout(() => { suppressClickRef.current = false; }, 500);
           buzz(15);
+          dismissHint();
           showMenuAt(m._id, x, y);
         }, LONG_PRESS_MS);
         gestureRef.current = g;
@@ -1080,7 +1133,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           setTimeout(() => { suppressClickRef.current = false; }, 300);
         }
         clearGesture(g.mode === "swipe");
-        if (triggered) { buzz(12); startReply(m); }
+        if (triggered) { buzz(12); dismissHint(); startReply(m); }
       },
       onPointerCancel: () => clearGesture(true),
       onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1207,7 +1260,12 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: C.dark, fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{
+      display: "flex", flexDirection: "column", height: "100%", background: C.dark, fontFamily: "'DM Sans', sans-serif",
+      // The room only ever moves up and down: nothing in it may scroll or
+      // rubber-band sideways, like a native chat screen.
+      overflow: "hidden", touchAction: "pan-y pinch-zoom", overscrollBehavior: "none",
+    }}>
       <style>{`
         @keyframes groupChatHighlight { 0%, 100% { background: transparent; } 40% { background: rgba(201,168,76,0.18); } }
         .gc-highlight { animation: groupChatHighlight ${HIGHLIGHT_MS}ms ease; }
@@ -1221,6 +1279,14 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         .gc-menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
         .gc-menu-item.danger { color: ${C.red}; }
         .gc-bubble-wrap { -webkit-tap-highlight-color: transparent; }
+        .gc-typing { position: absolute; left: 12px; bottom: 8px; max-width: calc(100% - 76px); display: flex; align-items: center; gap: 8px; background: ${C.dark3}; border: 1px solid ${C.border}; color: ${C.muted}; font-size: 11px; font-weight: 600; padding: 5px 11px; border-radius: 999px; box-shadow: 0 4px 14px rgba(0,0,0,0.35); pointer-events: none; z-index: 5; }
+        .gc-typing-dots { display: inline-flex; gap: 3px; }
+        .gc-typing-dots i { width: 4px; height: 4px; border-radius: 50%; background: ${C.gold}; animation: gcTypingBounce 1.1s ease-in-out infinite; }
+        .gc-typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+        .gc-typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes gcTypingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-3px); opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { .gc-typing-dots i { animation: none; opacity: 0.8; } }
+        .gc-menu-item svg { flex-shrink: 0; }
         .gc-react-row { display: flex; justify-content: space-between; gap: 2px; padding: 4px 4px 6px; margin-bottom: 4px; border-bottom: 1px solid ${C.border}; }
         .gc-react-btn { flex: 1; background: none; border: none; font-size: 20px; line-height: 1; padding: 6px 0; border-radius: 8px; cursor: pointer; transition: transform 0.12s ease, background 0.12s ease; }
         .gc-react-btn:hover { background: ${C.dark4}; transform: scale(1.15); }
@@ -1251,8 +1317,8 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderBottom: `1px solid ${C.border}`, background: C.dark3, flexShrink: 0 }}>
-        <button onClick={close} aria-label="Retour" title="Retour" className="gc-header-btn" style={{ width: 36, flexShrink: 0, padding: 0, fontSize: 18 }}>
-          ←
+        <button onClick={close} aria-label="Retour" title="Retour" className="gc-header-btn" style={{ width: 36, flexShrink: 0, padding: 0 }}>
+          <PiArrowLeftBold size={17} />
         </button>
 
         <div aria-hidden style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: "rgba(201,168,76,0.12)", border: "1px solid rgba(201,168,76,0.3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>
@@ -1295,7 +1361,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
             color: filter === "starred" ? C.gold : undefined,
           }}
         >
-          <span aria-hidden>{filter === "starred" ? "⭐" : "☆"}</span>
+          <span aria-hidden style={{ display: "flex" }}>{filter === "starred" ? <PiStarFill size={15} /> : <PiStarBold size={15} />}</span>
           <span className="gc-header-btn-label">{filter === "starred" ? "Favoris" : "Tout voir"}</span>
         </button>
       </div>
@@ -1307,7 +1373,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
             onClick={() => setPinnedOpen((o) => !o)}
             style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", color: C.gold, fontSize: 12, fontWeight: 700, padding: "8px 16px", cursor: "pointer", fontFamily: "inherit" }}
           >
-            <span>📌 {pinnedMessages.length} message{pinnedMessages.length > 1 ? "s" : ""} épinglé{pinnedMessages.length > 1 ? "s" : ""}</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><PiPushPinBold size={13} /> {pinnedMessages.length} message{pinnedMessages.length > 1 ? "s" : ""} épinglé{pinnedMessages.length > 1 ? "s" : ""}</span>
             <span>{pinnedOpen ? "▲" : "▼"}</span>
           </button>
           {pinnedOpen && (
@@ -1337,7 +1403,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           ref={listRef}
           onScroll={handleScroll}
           className="gc-scroll"
-          style={{ position: "absolute", inset: 0, overflowY: "auto", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", padding: "14px 12px", display: "flex", flexDirection: "column" }}
+          style={{ position: "absolute", inset: 0, overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain", touchAction: "pan-y", WebkitOverflowScrolling: "touch", padding: "14px 12px", display: "flex", flexDirection: "column" }}
         >
           {hasMoreOlder && !loadingMessages && filter === "all" && (
             <div ref={topSentinelRef} style={{ display: "flex", justifyContent: "center", padding: "2px 0 12px", flexShrink: 0 }}>
@@ -1355,11 +1421,25 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
             </div>
           )}
 
+          {showHint && !loadingMessages && messages.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(201,168,76,0.08)", border: "1px solid rgba(201,168,76,0.25)", borderRadius: 12, padding: "9px 12px", marginBottom: 12, flexShrink: 0 }}>
+              <span style={{ color: C.gold, display: "flex", flexShrink: 0 }}><PiLightbulbBold size={18} /></span>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: C.text, lineHeight: 1.45 }}>
+                <strong>Astuce :</strong> glissez un message pour y répondre, ou maintenez-le appuyé pour réagir, copier ou signaler.
+              </div>
+              <button type="button" onClick={dismissHint} style={{ background: C.gold, color: C.dark, border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, padding: "6px 11px", cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+                OK
+              </button>
+            </div>
+          )}
+
           {loadingMessages ? (
             <div style={{ margin: "auto" }}><InlineLoader size={32} label="Chargement des messages…" padding="0" /></div>
           ) : visibleMessages.length === 0 ? (
             <div style={{ margin: "auto", textAlign: "center", color: C.muted, fontSize: 13, padding: "0 20px" }}>
-              {filter === "starred" ? "Aucun message favori pour l'instant ⭐" : "Soyez le premier à écrire dans le groupe premium 👋"}
+              {filter === "starred"
+                ? "Aucun message favori pour l'instant"
+                : room === "premium" ? "Soyez le premier à écrire dans le groupe premium 👋" : "Soyez le premier à écrire dans le chat global 👋"}
             </div>
           ) : (
             visibleMessages.map((m, i) => {
@@ -1394,11 +1474,11 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, marginBottom: 3, color: isOwn ? "rgba(10,12,15,0.65)" : accent! }}>
                       {groupStart && m.role === "ADMIN" && !isOwn && <span>👑</span>}
                       {groupStart && <span>{senderLabel(m, user._id)}</span>}
-                      {m.pinned && <span title="Épinglé">📌</span>}
-                      {isStarred && <span title="Favori">⭐</span>}
+                      {m.pinned && <span title="Épinglé" style={{ display: "inline-flex" }}><PiPushPinBold size={11} /></span>}
+                      {isStarred && <span title="Favori" style={{ display: "inline-flex" }}><PiStarFill size={11} /></span>}
                       {/* Visible to admins only — a muted account isn't publicly labeled to the rest of the room. */}
                       {isAdmin && m.reportCount > 0 && (
-                        <span title={`Signalé par ${m.reportCount} membre${m.reportCount > 1 ? "s" : ""}`} style={{ color: C.red, fontWeight: 700 }}>🚩 {m.reportCount}</span>
+                        <span title={`Signalé par ${m.reportCount} membre${m.reportCount > 1 ? "s" : ""}`} style={{ color: C.red, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 3 }}><PiFlagBold size={11} /> {m.reportCount}</span>
                       )}
                       {isAdmin && m.senderBlocked && !isOwn && (
                         <span title="Bloqué du groupe" style={{ color: C.red, fontWeight: 700 }}>🚫 bloqué</span>
@@ -1459,13 +1539,13 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                               onClick={(e) => { e.stopPropagation(); react(m, r.emoji); }}
                               aria-label={`${r.emoji} ${r.count}${r.mine ? " (vous)" : ""}`}
                               style={{
-                                display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "inherit",
+                                display: "inline-flex", alignItems: "center", gap: 3, fontFamily: "inherit",
                                 background: r.mine ? (isOwn ? "rgba(10,12,15,0.22)" : "rgba(201,168,76,0.18)") : (isOwn ? "rgba(10,12,15,0.1)" : "rgba(255,255,255,0.06)"),
                                 border: `1px solid ${r.mine ? (isOwn ? "rgba(10,12,15,0.5)" : C.gold) : (isOwn ? "rgba(10,12,15,0.18)" : C.border)}`,
-                                color: "inherit", borderRadius: 999, padding: "1px 8px", fontSize: 12, cursor: "pointer", lineHeight: 1.6,
+                                color: "inherit", borderRadius: 999, padding: "0 7px", fontSize: 11.5, cursor: "pointer", lineHeight: 1.55,
                               }}
                             >
-                              <span>{r.emoji}</span><span style={{ fontSize: 11, fontWeight: 700 }}>{r.count}</span>
+                              <span>{r.emoji}</span><span style={{ fontSize: 10.5, fontWeight: 700 }}>{r.count}</span>
                             </button>
                           ))}
                         </div>
@@ -1486,14 +1566,14 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                             {m.editedAt ? " · modifié" : ""}
                           </span>
                           <span style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
-                            <IconBtn title="Répondre" onClick={() => startReply(m)} dim={isOwn}>↩</IconBtn>
+                            <IconBtn title="Répondre" onClick={() => startReply(m)} dim={isOwn}><PiArrowBendUpLeftBold size={13} /></IconBtn>
                             <div style={{ position: "relative" }} data-menu-root={m._id}>
                               <button
                                 type="button" className="gc-menu-btn" aria-label="Plus d'options" title="Plus d'options"
                                 onClick={(e) => openMenuFor(m._id, e.currentTarget)}
                                 style={{ color: isOwn ? "inherit" : C.muted, opacity: 0.75 }}
                               >
-                                ⋮
+                                <PiDotsThreeVerticalBold size={16} />
                               </button>
                               {openMenuId === m._id && menuPos && createPortal(
                                 <div
@@ -1517,47 +1597,76 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                                       );
                                     })}
                                   </div>
-                                  <button className="gc-menu-item" onClick={() => { startReply(m); setOpenMenuId(null); }}>
-                                    <span>↩</span><span>Répondre</span>
-                                  </button>
-                                  {m.text && (
-                                    <button className="gc-menu-item" onClick={async () => { setOpenMenuId(null); showToast((await copyText(m.text)) ? "Message copié ✓" : "Copie impossible"); }}>
-                                      <span>⧉</span><span>Copier le texte</span>
-                                    </button>
-                                  )}
-                                  <button className="gc-menu-item" onClick={() => { toggleStar(m._id); setOpenMenuId(null); }}>
-                                    <span>{isStarred ? "★" : "☆"}</span><span>{isStarred ? "Retirer des favoris" : "Ajouter aux favoris"}</span>
-                                  </button>
-                                  {!isAdmin && !isOwn && !m.reportedByMe && (
-                                    <button className="gc-menu-item" onClick={() => { setOpenMenuId(null); reportMessage(m); }}>
-                                      <span>🚩</span><span>Signaler ce message</span>
-                                    </button>
-                                  )}
-                                  {isAdmin && m.reportCount > 0 && (
-                                    <button className="gc-menu-item" onClick={() => { setOpenMenuId(null); clearReports(m); }}>
-                                      <span>✅</span><span>Effacer les signalements ({m.reportCount})</span>
-                                    </button>
-                                  )}
-                                  {isAdmin && (
-                                    <button className="gc-menu-item" disabled={isBusy} onClick={() => { togglePin(m); setOpenMenuId(null); }}>
-                                      <span>📌</span><span>{m.pinned ? "Désépingler" : "Épingler"}</span>
-                                    </button>
-                                  )}
-                                  {isAdmin && !isOwn && (
-                                    <button className="gc-menu-item danger" disabled={blockBusyUserId === m.user} onClick={() => { toggleBlock(m); setOpenMenuId(null); }}>
-                                      <span>🚫</span><span>{m.senderBlocked ? "Débloquer" : "Bloquer cet utilisateur"}</span>
-                                    </button>
-                                  )}
-                                  {isOwn && (
-                                    <button className="gc-menu-item" disabled={isBusy} onClick={() => { startEdit(m); setOpenMenuId(null); }}>
-                                      <span>✎</span><span>Modifier</span>
-                                    </button>
-                                  )}
-                                  {(isOwn || isAdmin) && (
-                                    <button className="gc-menu-item danger" disabled={isBusy} onClick={() => { setOpenMenuId(null); deleteMessage(m._id); }}>
-                                      <span>🗑</span><span>{isAdmin && !isOwn ? "Supprimer (modération)" : "Supprimer"}</span>
-                                    </button>
-                                  )}
+                                  {(() => {
+                                    const canReport = !isAdmin && !isOwn && !m.reportedByMe;
+                                    const hasMore = canReport || isAdmin; // moderation + report live behind "Plus"
+                                    const I = 15;
+                                    if (menuMore) {
+                                      return (
+                                        <>
+                                          <button className="gc-menu-item" onClick={() => setMenuMore(false)}>
+                                            <PiCaretLeftBold size={I} /><span>Retour</span>
+                                          </button>
+                                          {canReport && (
+                                            <button className="gc-menu-item" onClick={() => { setOpenMenuId(null); reportMessage(m); }}>
+                                              <PiFlagBold size={I} /><span>Signaler ce message</span>
+                                            </button>
+                                          )}
+                                          {isAdmin && m.reportCount > 0 && (
+                                            <button className="gc-menu-item" onClick={() => { setOpenMenuId(null); clearReports(m); }}>
+                                              <PiCheckCircleBold size={I} /><span>Effacer les signalements ({m.reportCount})</span>
+                                            </button>
+                                          )}
+                                          {isAdmin && (
+                                            <button className="gc-menu-item" disabled={isBusy} onClick={() => { togglePin(m); setOpenMenuId(null); }}>
+                                              {m.pinned ? <PiPushPinSlashBold size={I} /> : <PiPushPinBold size={I} />}<span>{m.pinned ? "Désépingler" : "Épingler"}</span>
+                                            </button>
+                                          )}
+                                          {isAdmin && !isOwn && (
+                                            <button className="gc-menu-item danger" disabled={blockBusyUserId === m.user} onClick={() => { toggleBlock(m); setOpenMenuId(null); }}>
+                                              <PiProhibitBold size={I} /><span>{m.senderBlocked ? "Débloquer" : "Bloquer cet utilisateur"}</span>
+                                            </button>
+                                          )}
+                                          {isAdmin && !isOwn && (
+                                            <button className="gc-menu-item danger" disabled={isBusy} onClick={() => { setOpenMenuId(null); deleteMessage(m._id); }}>
+                                              <PiTrashBold size={I} /><span>Supprimer (modération)</span>
+                                            </button>
+                                          )}
+                                        </>
+                                      );
+                                    }
+                                    return (
+                                      <>
+                                        <button className="gc-menu-item" onClick={() => { startReply(m); setOpenMenuId(null); }}>
+                                          <PiArrowBendUpLeftBold size={I} /><span>Répondre</span>
+                                        </button>
+                                        {m.text && (
+                                          <button className="gc-menu-item" onClick={async () => { setOpenMenuId(null); showToast((await copyText(m.text)) ? "Message copié ✓" : "Copie impossible"); }}>
+                                            <PiCopyBold size={I} /><span>Copier le texte</span>
+                                          </button>
+                                        )}
+                                        <button className="gc-menu-item" onClick={() => { toggleStar(m._id); setOpenMenuId(null); }}>
+                                          {isStarred ? <PiStarFill size={I} /> : <PiStarBold size={I} />}<span>{isStarred ? "Retirer des favoris" : "Ajouter aux favoris"}</span>
+                                        </button>
+                                        {isOwn && (
+                                          <button className="gc-menu-item" disabled={isBusy} onClick={() => { startEdit(m); setOpenMenuId(null); }}>
+                                            <PiPencilSimpleBold size={I} /><span>Modifier</span>
+                                          </button>
+                                        )}
+                                        {isOwn && (
+                                          <button className="gc-menu-item danger" disabled={isBusy} onClick={() => { setOpenMenuId(null); deleteMessage(m._id); }}>
+                                            <PiTrashBold size={I} /><span>Supprimer</span>
+                                          </button>
+                                        )}
+                                        {hasMore && (
+                                          <button className="gc-menu-item" onClick={() => setMenuMore(true)}>
+                                            <PiDotsThreeBold size={I} /><span>Plus</span>
+                                            <PiCaretRightBold size={12} style={{ marginLeft: "auto", opacity: 0.6 }} />
+                                          </button>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
                                 </div>,
                                 document.body
                               )}
@@ -1597,7 +1706,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                       {...gestureHandlers(m, isOwn)}
                       style={{ maxWidth: "min(80%, 480px)", minWidth: 0, position: "relative", touchAction: "pan-y" }}
                     >
-                      <span aria-hidden className="gc-swipe-hint" style={isOwn ? { right: -30 } : { left: -30 }}>↩</span>
+                      <span aria-hidden className="gc-swipe-hint" style={isOwn ? { right: -30 } : { left: -30 }}><PiArrowBendUpLeftBold size={14} /></span>
                       {bubble}
                     </div>
                   </div>
@@ -1609,12 +1718,25 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
 
         {!atBottom && !loadingMessages && (
           <button className="gc-fab" onClick={jumpToBottom} aria-label={unseenBelow > 0 ? `${unseenBelow} nouveaux messages - aller en bas` : "Aller aux derniers messages"} title="Aller aux derniers messages">
-            ↓
+            <PiArrowDownBold size={16} />
             {unseenBelow > 0 && <span className="gc-fab-badge">{unseenBelow > 9 ? "9+" : unseenBelow}</span>}
           </button>
         )}
 
         {toast && <div role="status" className="gc-toast">{toast}</div>}
+
+        {typingNames.length > 0 && (
+          <div className="gc-typing" aria-live="polite">
+            <span className="gc-typing-dots" aria-hidden><i /><i /><i /></span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {typingNames.length === 1
+                ? `${typingNames[0]} écrit…`
+                : typingNames.length === 2
+                  ? `${typingNames[0]} et ${typingNames[1]} écrivent…`
+                  : `${typingNames.length} personnes écrivent…`}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Composer */}
@@ -1630,7 +1752,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
               <div style={{ fontSize: 10, fontWeight: 700, color: C.gold }}>Réponse à {replyingTo.label}</div>
               <div style={{ fontSize: 11, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{replyingTo.text}</div>
             </div>
-            <button type="button" onClick={() => setReplyingTo(null)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, flexShrink: 0 }}>✕</button>
+            <button type="button" onClick={() => setReplyingTo(null)} aria-label="Annuler la réponse" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", display: "flex", flexShrink: 0 }}><PiXBold size={14} /></button>
           </div>
         )}
 
@@ -1656,13 +1778,26 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
             title="Joindre une image"
             style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: compressing ? "wait" : "pointer", color: C.muted, flexShrink: 0, fontSize: 15 }}
           >
-            {compressing ? "…" : "📎"}
+            {compressing ? "…" : <PiPaperclipBold size={17} />}
           </button>
           <textarea
             ref={textareaRef}
             className="gc-composer-input gc-scroll"
             value={draft}
-            onChange={(e) => { setDraft(e.target.value); setError(null); }}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setError(null);
+              // Let the room know someone is typing (throttled; best-effort).
+              if (e.target.value.trim() && Date.now() - lastTypingPingRef.current > 2500) {
+                lastTypingPingRef.current = Date.now();
+                fetch("/api/group-chat/typing", {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ room }),
+                }).catch(() => { /* a missed ping just means a slightly late indicator */ });
+              }
+            }}
             onKeyDown={handleComposerKeyDown}
             placeholder="Écrivez au groupe…"
             maxLength={2000}
@@ -1679,7 +1814,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
             aria-label="Envoyer"
             style={{ background: C.gold, color: C.dark, border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, opacity: ((!draft.trim() && !pendingImage) || sending || compressing) ? 0.5 : 1, fontSize: 15 }}
           >
-            ➤
+            <PiPaperPlaneRightFill size={16} />
           </button>
         </div>
       </form>
@@ -1699,7 +1834,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1, color: C.text }}>
                 En ligne <span style={{ color: "#4ADE80" }}>({onlineTotal})</span>
               </div>
-              <button onClick={() => setOnlineOpen(false)} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 30, height: 30, cursor: "pointer", color: C.muted }}>✕</button>
+              <button onClick={() => setOnlineOpen(false)} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 30, height: 30, cursor: "pointer", color: C.muted, display: "flex", alignItems: "center", justifyContent: "center" }}><PiXBold size={14} /></button>
             </div>
             <div className="gc-scroll" style={{ overflowY: "auto", padding: "6px 8px 12px" }}>
               {onlineLoading && onlineMembers.length === 0 ? (
@@ -1789,7 +1924,7 @@ function GatedShell({ children, onClose }: { children: React.ReactNode; onClose?
     <div style={{ height: "100%", background: C.dark, display: "flex", flexDirection: "column", fontFamily: "'DM Sans', sans-serif" }}>
       {onClose && (
         <div style={{ display: "flex", justifyContent: "flex-end", padding: 16 }}>
-          <button onClick={onClose} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted }}>✕</button>
+          <button onClick={onClose} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.muted }}><PiXBold size={14} /></button>
         </div>
       )}
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>{children}</div>

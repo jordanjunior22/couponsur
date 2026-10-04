@@ -14,16 +14,21 @@ export interface IGroupPresence extends Document {
   room: GroupRoom;
   user: Types.ObjectId;
   lastSeenAt: Date;
+  // Last "is typing" ping from this member - others show "X écrit…" while it
+  // is only a few seconds old (see TYPING_WINDOW_MS in utils/groupChatPresence).
+  typingAt?: Date | null;
 }
 
 const GroupPresenceSchema = new Schema<IGroupPresence>({
   room: { type: String, enum: ["premium", "global"], required: true },
   user: { type: Schema.Types.ObjectId, ref: "User", required: true },
   lastSeenAt: { type: Date, required: true },
+  typingAt: { type: Date, default: null },
 });
 
 GroupPresenceSchema.index({ room: 1, user: 1 }, { unique: true });
 GroupPresenceSchema.index({ room: 1, lastSeenAt: 1 });
+GroupPresenceSchema.index({ room: 1, typingAt: 1 });
 
 const GroupPresenceModel: Model<IGroupPresence> =
   mongoose.models.GroupPresence ||

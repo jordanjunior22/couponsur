@@ -8,7 +8,7 @@ import { maskPhone } from "@/utils/maskPhone";
 import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage";
 import { detectProhibitedContact, moderationMessage } from "@/utils/chatModeration";
 import { toClientMessage } from "@/utils/groupChatSerializer";
-import { ONLINE_WINDOW_MS } from "@/utils/groupChatPresence";
+import { ONLINE_WINDOW_MS, TYPING_WINDOW_MS } from "@/utils/groupChatPresence";
 import { getSettings } from "@/models/Settings";
 import UserModel from "@/models/Users";
 import { sendPushToAdmins, sendPushToUser } from "@/lib/webpush";
@@ -130,10 +130,28 @@ export async function GET(req: NextRequest) {
       { $set: { lastSeenAt: now } },
       { upsert: true }
     );
-    const [onlineCount, settings] = await Promise.all([
+    const [onlineCount, settings, typingRows] = await Promise.all([
       GroupPresenceModel.countDocuments({ room, lastSeenAt: { $gte: new Date(now.getTime() - ONLINE_WINDOW_MS) } }),
       getSettings(),
+      // Everyone else who pinged "typing" in the last few seconds (a handful at
+      // most - a small, indexed query).
+      GroupPresenceModel.find({
+        room,
+        typingAt: { $gte: new Date(now.getTime() - TYPING_WINDOW_MS) },
+        user: { $ne: access.user.userId },
+      })
+        .limit(4)
+        .select("user")
+        .lean(),
     ]);
+
+    let typing: string[] = [];
+    if (typingRows.length > 0) {
+      const typists = await UserModel.find({ _id: { $in: typingRows.map((r) => r.user) } })
+        .select("phone role nickname")
+        .lean();
+      typing = typists.map((u) => (u.role === "ADMIN" ? u.nickname || "Admin" : maskPhone(u.phone)));
+    }
 
     return NextResponse.json({
       success: true,
@@ -142,6 +160,7 @@ export async function GET(req: NextRequest) {
       me: access.user.userId,
       amIBlocked: access.user.blocked,
       onlineCount,
+      typing,
       // So the composer can wait out the pause locally instead of sending a
       // message the server is going to refuse. Admins are exempt.
       cooldownSeconds: viewerIsAdmin ? 0 : settings.groupChatCooldownSeconds ?? 2,
