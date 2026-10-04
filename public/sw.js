@@ -36,6 +36,9 @@ self.addEventListener("push", (event) => {
         icon: data.icon || "/icons/icon-192.png",
         badge: "/icons/icon-192.png",
         data: { url: data.url || "/" },
+        // Same tag = same slot: a chat room shows ONE notification that
+        // updates (and buzzes again) instead of a stack of them.
+        ...(data.tag ? { tag: data.tag, renotify: true } : {}),
       });
       await syncBadge();
     })()

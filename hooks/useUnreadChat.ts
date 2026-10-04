@@ -22,6 +22,9 @@ function getLastRead(userId: string, room: GroupRoom): string | null {
 }
 
 const POLL_MS = 90000;
+// A device with no "last read" yet (new phone, cleared storage) would count the
+// room's ENTIRE history as unread. Look back this far instead.
+const FIRST_VISIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Below this gap since the last fetch, a refresh() call is a no-op — this
 // is what keeps BottomTabBar's own per-navigation refresh (it calls
 // refresh() on every pathname change, so the badge clears promptly after
@@ -36,37 +39,52 @@ const MIN_REFRESH_GAP_MS = 15000;
 // room). Only ever queries a room the caller says is currently eligible +
 // enabled, so an ineligible viewer never fires a request that would just
 // 403.
+export interface LatestMessage {
+  senderLabel: string;
+  preview: string;
+  at: string;
+  mine: boolean;
+}
+
 export function useUnreadChatCounts(premiumEligible: boolean, globalEligible: boolean) {
   const { user } = useAuth();
   const [premium, setPremium] = useState(0);
   const [global, setGlobal] = useState(0);
+  const [premiumLatest, setPremiumLatest] = useState<LatestMessage | null>(null);
+  const [globalLatest, setGlobalLatest] = useState<LatestMessage | null>(null);
   const lastFetchRef = useRef(0);
 
-  const refresh = useCallback(async () => {
-    if (!user) { setPremium(0); setGlobal(0); return; }
+  // `force` skips the minimum gap - used by the room list, which must show
+  // fresh numbers the moment you arrive on it.
+  const refresh = useCallback(async (force: boolean = false) => {
+    if (!user) { setPremium(0); setGlobal(0); setPremiumLatest(null); setGlobalLatest(null); return; }
     const now = Date.now();
-    if (now - lastFetchRef.current < MIN_REFRESH_GAP_MS) return;
+    if (!force && now - lastFetchRef.current < MIN_REFRESH_GAP_MS) return;
     lastFetchRef.current = now;
 
-    const fetchOne = async (room: GroupRoom): Promise<number> => {
+    const fetchOne = async (room: GroupRoom): Promise<{ count: number; latest: LatestMessage | null }> => {
       try {
-        const since = getLastRead(user._id, room);
-        const params = new URLSearchParams({ room });
-        if (since) params.set("since", since);
+        const since = getLastRead(user._id, room) ?? new Date(Date.now() - FIRST_VISIT_WINDOW_MS).toISOString();
+        const params = new URLSearchParams({ room, since });
         const res = await fetch(`/api/group-chat/unread-count?${params.toString()}`, { credentials: "include" });
         const data = await res.json();
-        return data?.success ? Number(data.data.count) || 0 : 0;
+        return data?.success
+          ? { count: Number(data.data.count) || 0, latest: data.data.latest ?? null }
+          : { count: 0, latest: null };
       } catch {
-        return 0;
+        return { count: 0, latest: null };
       }
     };
 
+    const empty = { count: 0, latest: null as LatestMessage | null };
     const [nextPremium, nextGlobal] = await Promise.all([
-      premiumEligible ? fetchOne("premium") : Promise.resolve(0),
-      globalEligible ? fetchOne("global") : Promise.resolve(0),
+      premiumEligible ? fetchOne("premium") : Promise.resolve(empty),
+      globalEligible ? fetchOne("global") : Promise.resolve(empty),
     ]);
-    setPremium(nextPremium);
-    setGlobal(nextGlobal);
+    setPremium(nextPremium.count);
+    setGlobal(nextGlobal.count);
+    setPremiumLatest(nextPremium.latest);
+    setGlobalLatest(nextGlobal.latest);
   }, [user, premiumEligible, globalEligible]);
 
   useEffect(() => {
@@ -84,7 +102,7 @@ export function useUnreadChatCounts(premiumEligible: boolean, globalEligible: bo
     };
   }, [refresh]);
 
-  return { premium, global, total: premium + global, refresh };
+  return { premium, global, premiumLatest, globalLatest, total: premium + global, refresh };
 }
 
 // Standard chat-badge formatting: exact digit up to 9, "9+" beyond that —

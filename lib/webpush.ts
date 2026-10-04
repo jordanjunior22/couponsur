@@ -33,6 +33,9 @@ export interface PushPayload {
   url?: string;
   /** Icon shown in the notification — defaults to the PWA icon in public/sw.js. */
   icon?: string;
+  /** Notifications with the same tag REPLACE each other instead of stacking
+   *  (e.g. one entry per chat room, however many messages arrive). */
+  tag?: string;
 }
 
 export interface PushSendResult {
@@ -147,4 +150,25 @@ export async function sendPushToUser(userId: string, payload: PushPayload): Prom
   const subscriptions = await PushSubscriptionModel.find({ user: userId });
   if (subscriptions.length === 0) return { attempted: 0, sent: 0, removed: 0 };
   return deliverPush(subscriptions, payload);
+}
+
+// Sends to the devices of a whole set of accounts (e.g. the members of a chat
+// room). Looked up in chunks so a large audience never builds one enormous
+// query, and capped so a single broadcast can't grow without bound.
+export async function sendPushToUsers(userIds: string[], payload: PushPayload, maxRecipients = 3000): Promise<PushSendResult> {
+  if (!ensureConfigured() || userIds.length === 0) return { attempted: 0, sent: 0, removed: 0 };
+
+  await connectDB();
+  const ids = userIds.slice(0, maxRecipients);
+  const total: PushSendResult = { attempted: 0, sent: 0, removed: 0 };
+  const CHUNK = 500;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const subscriptions = await PushSubscriptionModel.find({ user: { $in: ids.slice(i, i + CHUNK) } });
+    if (subscriptions.length === 0) continue;
+    const r = await deliverPush(subscriptions, payload);
+    total.attempted += r.attempted;
+    total.sent += r.sent;
+    total.removed += r.removed;
+  }
+  return total;
 }

@@ -59,6 +59,14 @@ export interface IUser extends Document {
   // When this account last posted in a group chat room - backs the
   // configurable pause between messages (Settings.groupChatCooldownSeconds).
   groupChatLastAt?: Date | null;
+  // Privacy: may other group members see this account's coupon stats and
+  // history on their profile card? On by default; the owner can hide it from
+  // their Profil page. Hidden profiles still appear in member lists.
+  groupProfileVisible?: boolean;
+  // "Don't send me push notifications for new messages in this room."
+  groupPushMuted?: { premium?: boolean; global?: boolean };
+  // Throttle for opening other members' profiles (see utils/groupProfileThrottle.ts).
+  groupProfileViews?: { window: string | null; count: number };
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -123,6 +131,21 @@ const UserSchema = new Schema<IUser>(
       default: () => ({}),
     },
     groupChatLastAt: { type: Date, default: null },
+    groupProfileVisible: { type: Boolean, default: true },
+    groupPushMuted: {
+      type: new Schema({ premium: { type: Boolean, default: false }, global: { type: Boolean, default: false } }, { _id: false }),
+      default: () => ({}),
+    },
+    groupProfileViews: {
+      type: new Schema(
+        {
+          window: { type: String, default: null },
+          count: { type: Number, default: 0 },
+        },
+        { _id: false }
+      ),
+      default: () => ({}),
+    },
     lastLoginAt: { type: Date, default: null },
   },
   {

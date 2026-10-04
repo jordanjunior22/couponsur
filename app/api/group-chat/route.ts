@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { Types } from "mongoose";
 import GroupMessageModel, { GroupRoom, IGroupReplyPreview } from "@/models/GroupMessage";
 import GroupPresenceModel from "@/models/GroupPresence";
@@ -9,9 +9,10 @@ import { parseImageDataUri, MAX_GROUP_IMAGE_BYTES } from "@/utils/groupChatImage
 import { detectProhibitedContact, moderationMessage } from "@/utils/chatModeration";
 import { toClientMessage } from "@/utils/groupChatSerializer";
 import { ONLINE_WINDOW_MS, TYPING_WINDOW_MS } from "@/utils/groupChatPresence";
-import { getSettings } from "@/models/Settings";
+import { getSettingsCached } from "@/models/Settings";
 import UserModel from "@/models/Users";
-import { sendPushToAdmins, sendPushToUser } from "@/lib/webpush";
+import { sendPushToUser } from "@/lib/webpush";
+import { notifyRoomOfNewMessage, notifyAdminsOfMessage } from "@/lib/groupRoomPush";
 
 // First load shows the latest INITIAL_LIMIT messages; older history is
 // fetched on demand, PAGE_SIZE at a time (`before`), as the reader scrolls
@@ -76,25 +77,71 @@ export async function GET(req: NextRequest) {
     // with the field set from day one.
     const roomFilter = room === "premium" ? { $or: [{ room: "premium" }, { room: { $exists: false } }] } : { room: "global" };
 
-    let docs;
-    let hasMore = false;
+    // The client sends hb=0 on most fast polls: presence only needs a fresh
+    // timestamp every ~9s to stay inside the 15s "online" window, so writing it
+    // on every 3s poll was two-thirds wasted database writes.
+    const heartbeat = searchParams.get("hb") !== "0";
+    const viewerIsAdmin = access.user.role === "ADMIN";
 
-    if (since) {
-      docs = await GroupMessageModel.find({ ...roomFilter, updatedAt: { $gt: since } })
-        .select("-image")
-        .sort({ updatedAt: 1 })
-        .limit(POLL_LIMIT)
-        .lean();
-    } else {
+    const loadMessages = async () => {
+      if (since) {
+        const rows = await GroupMessageModel.find({ ...roomFilter, updatedAt: { $gt: since } })
+          .select("-image")
+          .sort({ updatedAt: 1 })
+          .limit(POLL_LIMIT)
+          .lean();
+        return { docs: rows, hasMore: false };
+      }
       const limit = before ? PAGE_SIZE : INITIAL_LIMIT;
       const rows = await GroupMessageModel.find(before ? { ...roomFilter, createdAt: { $lt: before } } : roomFilter)
         .select("-image")
         .sort({ createdAt: -1 })
         .limit(limit + 1)
         .lean();
-      hasMore = rows.length > limit;
-      docs = rows.slice(0, limit).reverse(); // back to chronological
-    }
+      return { docs: rows.slice(0, limit).reverse(), hasMore: rows.length > limit }; // back to chronological
+    };
+
+    // Presence, the online count and who's typing don't depend on the
+    // messages - run them alongside the message query instead of after it.
+    // Loading older history is a one-off scroll action, not a "still here"
+    // heartbeat, so it skips all of this.
+    const loadPresence = async () => {
+      if (before) return null;
+      const now = new Date();
+      // Awaited before the count so a just-arrived viewer is reflected in
+      // their own first response.
+      if (heartbeat) {
+        await GroupPresenceModel.findOneAndUpdate(
+          { room, user: access.user.userId },
+          { $set: { lastSeenAt: now } },
+          { upsert: true }
+        );
+      }
+      const [onlineCount, typingRows] = await Promise.all([
+        GroupPresenceModel.countDocuments({ room, lastSeenAt: { $gte: new Date(now.getTime() - ONLINE_WINDOW_MS) } }),
+        // Everyone else who pinged "typing" in the last few seconds (a handful
+        // at most - a small, indexed query).
+        GroupPresenceModel.find({
+          room,
+          typingAt: { $gte: new Date(now.getTime() - TYPING_WINDOW_MS) },
+          user: { $ne: access.user.userId },
+        })
+          .limit(4)
+          .select("user")
+          .lean(),
+      ]);
+
+      let typing: string[] = [];
+      if (typingRows.length > 0) {
+        const typists = await UserModel.find({ _id: { $in: typingRows.map((r) => r.user) } })
+          .select("phone role nickname")
+          .lean();
+        typing = typists.map((u) => (u.role === "ADMIN" ? u.nickname || "Admin" : maskPhone(u.phone)));
+      }
+      return { onlineCount, typing };
+    };
+
+    const [{ docs, hasMore }, presence] = await Promise.all([loadMessages(), loadPresence()]);
 
     // One batched lookup for every distinct sender in this window, rather
     // than a query per message, to know who's currently blocked.
@@ -105,7 +152,6 @@ export async function GET(req: NextRequest) {
     ]);
     const blockedSet = new Set(blockedUsers.map((u) => u._id.toString()));
 
-    const viewerIsAdmin = access.user.role === "ADMIN";
     const data = docs.map((m) =>
       toClientMessage(m, {
         senderBlocked: blockedSet.has(m.user.toString()),
@@ -115,43 +161,11 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    // Loading older history is a one-off scroll action, not a "still here"
-    // heartbeat - skip the presence write and the settings read for it.
-    if (before) {
+    if (before || !presence) {
       return NextResponse.json({ success: true, data, hasMore, me: access.user.userId });
     }
 
-    const now = new Date();
-    // This viewer's own heartbeat - every poll of this room counts as
-    // "still here" (see ONLINE_WINDOW_MS). Awaited before the count below so
-    // a just-arrived viewer is reflected in their own first response.
-    await GroupPresenceModel.findOneAndUpdate(
-      { room, user: access.user.userId },
-      { $set: { lastSeenAt: now } },
-      { upsert: true }
-    );
-    const [onlineCount, settings, typingRows] = await Promise.all([
-      GroupPresenceModel.countDocuments({ room, lastSeenAt: { $gte: new Date(now.getTime() - ONLINE_WINDOW_MS) } }),
-      getSettings(),
-      // Everyone else who pinged "typing" in the last few seconds (a handful at
-      // most - a small, indexed query).
-      GroupPresenceModel.find({
-        room,
-        typingAt: { $gte: new Date(now.getTime() - TYPING_WINDOW_MS) },
-        user: { $ne: access.user.userId },
-      })
-        .limit(4)
-        .select("user")
-        .lean(),
-    ]);
-
-    let typing: string[] = [];
-    if (typingRows.length > 0) {
-      const typists = await UserModel.find({ _id: { $in: typingRows.map((r) => r.user) } })
-        .select("phone role nickname")
-        .lean();
-      typing = typists.map((u) => (u.role === "ADMIN" ? u.nickname || "Admin" : maskPhone(u.phone)));
-    }
+    const settings = await getSettingsCached();
 
     return NextResponse.json({
       success: true,
@@ -159,8 +173,12 @@ export async function GET(req: NextRequest) {
       hasMore,
       me: access.user.userId,
       amIBlocked: access.user.blocked,
-      onlineCount,
-      typing,
+      // The size of the Premium community is not for members to know: in the
+      // Premium room only admins get the online number. (Everyone still gets
+      // the member list - see app/api/group-chat/members.)
+      onlineCount: room === "premium" && !viewerIsAdmin ? null : presence.onlineCount,
+      hideCounts: room === "premium" && !viewerIsAdmin,
+      typing: presence.typing,
       // So the composer can wait out the pause locally instead of sending a
       // message the server is going to refuse. Admins are exempt.
       cooldownSeconds: viewerIsAdmin ? 0 : settings.groupChatCooldownSeconds ?? 2,
@@ -242,7 +260,7 @@ export async function POST(req: NextRequest) {
     // all slip through. Placed after validation so a rejected message never
     // costs the sender their turn. Admins are exempt.
     if (access.user.role !== "ADMIN") {
-      const settings = await getSettings();
+      const settings = await getSettingsCached();
       const cooldownMs = (settings.groupChatCooldownSeconds ?? 2) * 1000;
       if (cooldownMs > 0) {
         const nowMs = Date.now();
@@ -301,36 +319,52 @@ export async function POST(req: NextRequest) {
     const senderLabel = access.user.role === "ADMIN" ? access.user.nickname || "Admin" : maskPhone(access.user.phone);
     const preview = text ? text.slice(0, 120) : "📷 Image";
 
-    // Fire-and-forget - only when a buyer (not an admin themselves) posts,
-    // so admins replying to each other never self-notify.
-    if (access.user.role !== "ADMIN") {
-      sendPushToAdmins({
-        title: `💬 Message — groupe ${room === "premium" ? "premium" : "global"}`,
-        body: `${senderLabel} : ${preview}`,
-        url: "/dashboard",
-      }).catch((e) => console.error("Push on group chat message failed:", e));
-    }
+    // Notifications run AFTER the response is sent, via after(): a plain
+    // un-awaited promise can be cut off the moment a serverless function
+    // returns, silently dropping the push. Each one is independent and
+    // best-effort - none can fail the send.
+    const senderId = access.user.userId;
+    const isAdminSender = access.user.role === "ADMIN";
+    after(async () => {
+      const jobs: Promise<unknown>[] = [];
 
-    // Tell the author of the message being replied to - unless that's the
-    // sender themselves, or they're looking at the room right now (they'll
-    // see it appear; a notification on top would just be noise).
-    if (replyTo && replyTo.user.toString() !== access.user.userId) {
-      const targetId = replyTo.user.toString();
-      GroupPresenceModel.exists({
-        room,
-        user: targetId,
-        lastSeenAt: { $gte: new Date(Date.now() - ONLINE_WINDOW_MS) },
-      })
-        .then((online) => {
-          if (online) return;
-          return sendPushToUser(targetId, {
-            title: `↩ ${senderLabel} vous a répondu`,
-            body: preview,
-            url: roomPath(room),
-          });
-        })
-        .catch((e) => console.error("Push on group chat reply failed:", e));
-    }
+      // The admins hear about every member message, straight away, with a link
+      // to the room itself (an admin's own messages reach the other admins
+      // through the room broadcast below instead).
+      if (!isAdminSender) {
+        jobs.push(notifyAdminsOfMessage({ room, senderId, senderLabel, preview }));
+      }
+
+      // The author of the message being replied to - unless that's the
+      // sender themselves, or they're looking at the room right now (they'll
+      // see it appear; a notification on top would just be noise).
+      if (replyTo && replyTo.user.toString() !== senderId) {
+        const targetId = replyTo.user.toString();
+        jobs.push(
+          GroupPresenceModel.exists({
+            room,
+            user: targetId,
+            lastSeenAt: { $gte: new Date(Date.now() - ONLINE_WINDOW_MS) },
+          }).then((online) =>
+            online
+              ? null
+              : sendPushToUser(targetId, {
+                  title: `↩ ${senderLabel} vous a répondu`,
+                  body: preview,
+                  url: roomPath(room),
+                })
+          )
+        );
+      }
+
+      // Everyone else in the room (rate-limited, mute-aware: lib/groupRoomPush.ts).
+      jobs.push(notifyRoomOfNewMessage({ room, senderId, senderLabel, preview, senderIsAdmin: isAdminSender }));
+
+      const results = await Promise.allSettled(jobs);
+      for (const r of results) {
+        if (r.status === "rejected") console.error("Group chat push failed:", r.reason);
+      }
+    });
 
     return NextResponse.json(
       // Sender can't be blocked here - that was already rejected above.

@@ -19,6 +19,19 @@ export default function PrivacyPage() {
         Nous ne vendons ni ne partageons vos données avec des tiers, sauf obligation légale.
       </p>
 
+      <h2 className="text-lg font-bold mt-8 mb-2">Profil dans les groupes de discussion</h2>
+      <p>
+        Dans les groupes (Premium et Global), les autres membres peuvent ouvrir votre profil
+        pour voir votre photo, un nom partiellement masqué (votre numéro n’est jamais affiché en
+        entier), vos statistiques et la liste des coupons terminés que vous avez achetés avec leur
+        résultat (gagné, perdu ou remboursé). Aucun montant, aucun paiement et aucun coupon
+        encore en cours ne sont affichés.
+      </p>
+      <p className="mt-2">
+        Vous pouvez masquer ces informations à tout moment depuis la page Profil, option
+        « Mes stats dans les groupes ». Votre profil apparaît alors comme privé.
+      </p>
+
       <p className="mt-4">
         Vous pouvez demander la suppression de vos données à tout moment.
       </p>

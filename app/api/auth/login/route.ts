@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
       unlockedPickIds: user.unlockedPickIds,
       nickname: user.nickname ?? null,
       avatar: user.avatar ?? null,
+      groupProfileVisible: user.groupProfileVisible !== false,
       subscription: user.subscription,
       lastLoginAt: user.lastLoginAt,
     };

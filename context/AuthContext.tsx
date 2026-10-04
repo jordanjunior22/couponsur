@@ -23,6 +23,10 @@ interface AuthUser {
   nickname?: string | null;
   // Optional profile picture (small JPEG data URI) — see /api/auth/avatar.
   avatar?: string | null;
+  // May other group members see this account's coupon stats? (default true)
+  groupProfileVisible?: boolean;
+  // Chat rooms this account muted push notifications for.
+  groupPushMuted?: { premium?: boolean; global?: boolean };
   subscription?: {
     status: "NONE" | "ACTIVE" | "EXPIRED";
     plan: "MONTHLY";
@@ -40,6 +44,7 @@ interface AuthContextType {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   updateNickname: (nickname: string) => Promise<void>;
   updateAvatar: (avatar: string | null) => Promise<void>;
+  updateGroupPrivacy: (visible: boolean) => Promise<void>;
   unlockPick: (pickId: string) => Promise<void>;
   refreshUser: () => Promise<void>;
   hasActiveSubscription: () => boolean;
@@ -162,6 +167,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setUser(data.user);
   };
 
+  const updateGroupPrivacy = async (visible: boolean) => {
+    const res = await fetch("/api/auth/group-privacy", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visible }),
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+      throw new Error(data.message);
+    }
+
+    setUser(data.user);
+  };
+
   const unlockPick = async (pickId: string) => {
     if (!user) return;
 
@@ -191,7 +213,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signup, login, logout, changePassword, updateNickname, updateAvatar, unlockPick, refreshUser, hasActiveSubscription }}>
+    <AuthContext.Provider value={{ user, loading, signup, login, logout, changePassword, updateNickname, updateAvatar, updateGroupPrivacy, unlockPick, refreshUser, hasActiveSubscription }}>
       {children}
     </AuthContext.Provider>
   );

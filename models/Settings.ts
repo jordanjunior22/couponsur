@@ -143,3 +143,22 @@ export async function getSettings(): Promise<ISettings> {
   }
   return settings;
 }
+// The settings doc is read on almost every request (chat access checks, the
+// generator, ...) but changes a few times a month. A short in-memory cache
+// removes that database round-trip from the hot paths. Read-only use only -
+// code that needs to MODIFY settings must use getSettings() above. An admin
+// save clears it immediately on the instance that handled it; other warm
+// instances catch up within SETTINGS_CACHE_MS.
+const SETTINGS_CACHE_MS = 15_000;
+let cachedSettings: { value: ISettings; at: number } | null = null;
+
+export async function getSettingsCached(): Promise<ISettings> {
+  if (cachedSettings && Date.now() - cachedSettings.at < SETTINGS_CACHE_MS) return cachedSettings.value;
+  const value = await getSettings();
+  cachedSettings = { value, at: Date.now() };
+  return value;
+}
+
+export function invalidateSettingsCache() {
+  cachedSettings = null;
+}

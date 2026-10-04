@@ -6,7 +6,7 @@ import {
   PiUserCircleFill, PiDeviceMobileFill, PiStarFill,
   PiWrenchFill, PiKeyFill, PiSignOutBold,
   PiDownloadSimpleBold, PiCheckCircleFill, PiShareFatBold,
-  PiTagFill, PiCameraFill,
+  PiTagFill, PiCameraFill, PiEyeBold, PiEyeSlashBold, PiBellBold,
 } from "react-icons/pi";
 import { compressImageToDataUri } from "@/utils/imageCompression";
 import { useAuth } from "@/context/AuthContext";
@@ -222,6 +222,9 @@ function AccountPanel() {
           </button>
         )}
 
+        {user.role !== "ADMIN" && <GroupPrivacyRow />}
+        <GroupNotificationsRow canPremium={isSubscribed || user.role === "ADMIN"} />
+
         <button style={menuItemStyle} onClick={() => setShowSubscribe(true)}>
           <span style={menuIconStyle}><PiStarFill size={15} /></span> Gérer mon abonnement
         </button>
@@ -322,6 +325,137 @@ function AvatarPicker() {
         </button>
       )}
       {error && <div style={{ fontSize: 11, color: "#f87171", marginTop: 6 }}>⚠️ {error}</div>}
+    </div>
+  );
+}
+
+// ─── SIGNED-IN: NEW-MESSAGE NOTIFICATIONS PER GROUP ───────────────────────
+// Members of a group get a push when it has new messages (at most one every
+// couple of minutes per group, and never while they're looking at it). These
+// switches mute a group. The device-level permission is the separate
+// "notifications" card further down this page.
+function GroupNotificationsRow({ canPremium }: { canPremium: boolean }) {
+  const { user, refreshUser } = useAuth();
+  const [busy, setBusy] = useState<"premium" | "global" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const rooms: { id: "premium" | "global"; label: string }[] = [
+    ...(canPremium ? [{ id: "premium" as const, label: "Groupe Premium" }] : []),
+    { id: "global", label: "Chat Global" },
+  ];
+
+  const setMuted = async (room: "premium" | "global", muted: boolean) => {
+    setBusy(room);
+    setError(null);
+    try {
+      const res = await fetch("/api/auth/group-notifications", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room, muted }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message);
+      await refreshUser();
+    } catch (e: any) {
+      setError(e.message || "Impossible de modifier ce réglage");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div style={{ padding: "11px 10px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <span style={menuIconStyle}><PiBellBold size={15} /></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, color: "#E5E7EB" }}>Notifications des groupes</div>
+          <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 2, lineHeight: 1.45 }}>
+            Soyez prévenu des nouveaux messages quand vous n&apos;êtes pas dans le groupe.
+          </div>
+        </div>
+      </div>
+      {rooms.map((r) => {
+        const on = !user?.groupPushMuted?.[r.id];
+        return (
+          <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "6px 0 6px 28px" }}>
+            <span style={{ fontSize: 12.5, color: "#9CA3AF" }}>{r.label}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={on}
+              aria-label={`Notifications ${r.label}`}
+              onClick={() => setMuted(r.id, on)}
+              disabled={busy === r.id}
+              style={{
+                width: 44, height: 24, borderRadius: 12, position: "relative", flexShrink: 0, padding: 0,
+                cursor: busy === r.id ? "not-allowed" : "pointer", opacity: busy === r.id ? 0.6 : 1,
+                background: on ? "#C9A84C" : "#222830", border: `1px solid ${on ? "#C9A84C" : "#2A3140"}`,
+                transition: "background 0.15s",
+              }}
+            >
+              <span style={{ position: "absolute", top: 2, left: on ? 22 : 2, width: 18, height: 18, borderRadius: "50%", background: on ? "#0A0C0F" : "#7A8399", transition: "left 0.15s" }} />
+            </button>
+          </div>
+        );
+      })}
+      {error && <div style={{ fontSize: 11, color: "#f87171", marginTop: 6 }}>{error}</div>}
+    </div>
+  );
+}
+
+// ─── SIGNED-IN: SHOW / HIDE MY STATS IN THE GROUPS ─────────────────────────
+// Other group members can open a profile card showing this account's finished
+// coupons and results (never prices, payments or the phone number). On by
+// default; this switch hides it - the profile then reads as private.
+function GroupPrivacyRow() {
+  const { user, updateGroupPrivacy } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const visible = user?.groupProfileVisible !== false;
+
+  const toggle = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await updateGroupPrivacy(!visible);
+    } catch (e: any) {
+      setError(e.message || "Impossible de modifier ce réglage");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: "11px 10px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={menuIconStyle}>{visible ? <PiEyeBold size={15} /> : <PiEyeSlashBold size={15} />}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, color: "#E5E7EB" }}>Mes stats dans les groupes</div>
+          <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 2, lineHeight: 1.45 }}>
+            {visible
+              ? "Les membres voient vos coupons terminés et leurs résultats (jamais votre numéro ni vos paiements)."
+              : "Votre profil est privé : les membres ne voient pas vos statistiques."}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={visible}
+          aria-label="Afficher mes stats dans les groupes"
+          onClick={toggle}
+          disabled={busy}
+          style={{
+            width: 44, height: 24, borderRadius: 12, position: "relative", flexShrink: 0, padding: 0,
+            cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1,
+            background: visible ? "#C9A84C" : "#222830", border: `1px solid ${visible ? "#C9A84C" : "#2A3140"}`,
+            transition: "background 0.15s",
+          }}
+        >
+          <span style={{ position: "absolute", top: 2, left: visible ? 22 : 2, width: 18, height: 18, borderRadius: "50%", background: visible ? "#0A0C0F" : "#7A8399", transition: "left 0.15s" }} />
+        </button>
+      </div>
+      {error && <div style={{ fontSize: 11, color: "#f87171", marginTop: 6 }}>{error}</div>}
     </div>
   );
 }

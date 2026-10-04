@@ -13,6 +13,13 @@ import { markRoomRead } from "@/hooks/useUnreadChat";
 import { compressImageToDataUri } from "@/utils/imageCompression";
 import { InlineLoader } from "@/components/LoadingSpinner";
 import type { GroupRoom } from "@/models/GroupMessage";
+import dynamic from "next/dynamic";
+import { readRoomCache, writeRoomCache, avatarMemory } from "@/lib/groupChatCache";
+
+// The members list and profile card are only needed when tapped - keep their
+// code out of the room's first load.
+const MembersSheet = dynamic(() => import("@/components/GroupMemberSheets").then((m) => m.MembersSheet), { ssr: false });
+const MemberProfileSheet = dynamic(() => import("@/components/GroupMemberSheets").then((m) => m.MemberProfileSheet), { ssr: false });
 import { REACTION_EMOJIS } from "@/utils/groupChatSerializer";
 
 interface ReplyPreview {
@@ -365,11 +372,11 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const nextAllowedRef = useRef(0);
 
-  // ─── Who's online sheet ─────────────────────────────────────────────────
-  const [onlineOpen, setOnlineOpen] = useState(false);
-  const [onlineMembers, setOnlineMembers] = useState<{ user: string; role: "USER" | "ADMIN"; label: string; isMe: boolean }[]>([]);
-  const [onlineTotal, setOnlineTotal] = useState(0);
-  const [onlineLoading, setOnlineLoading] = useState(false);
+  // ─── Members list + profile cards ───────────────────────────────────────
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [profileUserId, setProfileUserId] = useState<string | null>(null);
+  // Premium + not an admin: the number of members is never shown.
+  const [hideCounts, setHideCounts] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
@@ -383,6 +390,9 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   // whole window every 3s. Null until the first fetch lands (or forever, for
   // an empty room).
   const latestUpdatedAtRef = useRef<string | null>(null);
+  const pollTickRef = useRef(0);
+  const initialFetchStartedRef = useRef(false);
+  const cacheHydratedRef = useRef(false);
   // Guards setState calls in fetchMessages against firing after unmount.
   // Reset to true on every effect run (not just declared once via useRef's
   // initializer) because React 18 Strict Mode (on by default for the App
@@ -462,6 +472,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         }
         if (typeof data.cooldownSeconds === "number") setCooldownSeconds(data.cooldownSeconds);
         if (Array.isArray(data.typing)) setTypingNames(data.typing);
+        if (typeof data.hideCounts === "boolean") setHideCounts(data.hideCounts);
         setAccessError(null);
         setAmIBlocked(!!data.amIBlocked);
         if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
@@ -486,7 +497,10 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     // a meaningless `since`.
     if (!latestUpdatedAtRef.current) return fetchMessages();
     try {
-      const params = new URLSearchParams({ room, since: latestUpdatedAtRef.current });
+      // Presence only needs refreshing every ~9s (the "online" window is 15s),
+      // so two of every three fast polls tell the server not to write it.
+      const hb = pollTickRef.current++ % 3 === 0 ? "1" : "0";
+      const params = new URLSearchParams({ room, since: latestUpdatedAtRef.current, hb });
       const res = await fetch(`/api/group-chat?${params.toString()}`, { credentials: "include" });
       const data = await res.json();
       if (!mountedRef.current || !data?.success) return;
@@ -494,6 +508,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
       if (typeof data.onlineCount === "number") setOnlineCount(data.onlineCount);
       if (typeof data.cooldownSeconds === "number") setCooldownSeconds(data.cooldownSeconds);
       if (Array.isArray(data.typing)) setTypingNames(data.typing);
+      if (typeof data.hideCounts === "boolean") setHideCounts(data.hideCounts);
       if (data.me) markRoomRead(data.me, room);
       const fresh: GroupMessage[] = data.data;
       if (fresh.length === 0) return;
@@ -513,13 +528,47 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     }
   }, [room, fetchMessages]);
 
+  // Show the last-known messages INSTANTLY (from this device's memory /
+  // storage), then let the normal fetch below refresh them. Only done once, and
+  // only if nothing is on screen yet.
   useEffect(() => {
-    if (authLoading || !isEligible) {
-      if (!authLoading) setLoadingMessages(false);
+    if (!user || cacheHydratedRef.current) return;
+    cacheHydratedRef.current = true;
+    const cached = readRoomCache<GroupMessage>(user._id, room);
+    if (!cached || cached.messages.length === 0) return;
+    setMessages((prev) => (prev.length > 0 ? prev : cached.messages));
+    setHasMoreOlder(cached.hasMore);
+    latestUpdatedAtRef.current = maxUpdatedAt(cached.messages, latestUpdatedAtRef.current);
+    setLoadingMessages(false);
+  }, [user, room]);
+
+  // Keep that cache current (a second after the last change, not on every one).
+  useEffect(() => {
+    if (!user || loadingMessages) return;
+    const t = setTimeout(() => writeRoomCache(user._id, room, messages, hasMoreOlder), 1000);
+    return () => clearTimeout(t);
+  }, [messages, hasMoreOlder, loadingMessages, user, room]);
+
+  useEffect(() => {
+    // Don't make the messages wait for the "who am I" check: the endpoint does
+    // its own authentication, so the first fetch starts right away, in
+    // parallel with it, instead of after it.
+    if (authLoading) {
+      if (!initialFetchStartedRef.current) {
+        initialFetchStartedRef.current = true;
+        fetchMessages();
+      }
+      return;
+    }
+    if (!isEligible) {
+      setLoadingMessages(false);
       return;
     }
 
-    fetchMessages();
+    if (!initialFetchStartedRef.current) {
+      initialFetchStartedRef.current = true;
+      fetchMessages();
+    }
     const fastInterval = setInterval(() => {
       if (document.visibilityState === "visible") fetchNewMessages();
     }, POLL_MS);
@@ -542,20 +591,13 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   // cached for the life of the room. A value of null means "checked — no
   // picture", so those senders aren't asked about again. A picture someone
   // changes mid-session shows up the next time the room is opened.
-  const [avatars, setAvatars] = useState<Record<string, string | null>>({});
-  const requestedAvatarsRef = useRef<Set<string>>(new Set());
+  const [avatars, setAvatars] = useState<Record<string, string | null>>(() => Object.fromEntries(avatarMemory));
+  const requestedAvatarsRef = useRef<Set<string>>(new Set(avatarMemory.keys()));
 
-  useEffect(() => {
-    if (!isEligible) return;
-    const missing = Array.from(
-      new Set(
-        messages
-          .filter((m) => !m.pending && !m.failed && m.user !== user?._id && !requestedAvatarsRef.current.has(m.user))
-          .map((m) => m.user)
-      )
-    );
-    if (missing.length === 0) return;
-
+  // Asks the server for any of these members' pictures we haven't asked about
+  // yet (batches of 50). Used for chat senders AND the members list.
+  const ensureAvatars = useCallback((ids: string[]) => {
+    const missing = Array.from(new Set(ids)).filter((id) => id !== user?._id && !requestedAvatarsRef.current.has(id));
     for (let i = 0; i < missing.length; i += 50) {
       const batch = missing.slice(i, i + 50);
       batch.forEach((id) => requestedAvatarsRef.current.add(id));
@@ -565,7 +607,10 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           if (!mountedRef.current || !data?.success) return;
           setAvatars((prev) => {
             const next = { ...prev };
-            for (const id of batch) next[id] = data.avatars?.[id] ?? null;
+            for (const id of batch) {
+              next[id] = data.avatars?.[id] ?? null;
+              avatarMemory.set(id, next[id]);
+            }
             return next;
           });
         })
@@ -574,7 +619,12 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           batch.forEach((id) => requestedAvatarsRef.current.delete(id));
         });
     }
-  }, [messages, isEligible, room, user?._id]);
+  }, [room, user?._id]);
+
+  useEffect(() => {
+    if (!isEligible) return;
+    ensureAvatars(messages.filter((m) => !m.pending && !m.failed).map((m) => m.user));
+  }, [messages, isEligible, ensureAvatars]);
 
   // ─── Unsent draft: survives leaving the room / refreshing the page ──────
   const draftKey = user ? draftStorageKey(room, user._id) : null;
@@ -1025,26 +1075,6 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
     } catch { /* leave as-is */ }
   };
 
-  // Who's online: fetched when the sheet opens, then kept fresh while it's open.
-  const fetchOnline = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/group-chat/online?room=${room}`, { credentials: "include" });
-      const data = await res.json();
-      if (!mountedRef.current || !data?.success) return;
-      setOnlineMembers(data.data);
-      setOnlineTotal(data.total ?? data.data.length);
-    } catch { /* keep the last list */ }
-    finally { if (mountedRef.current) setOnlineLoading(false); }
-  }, [room]);
-
-  useEffect(() => {
-    if (!onlineOpen) return;
-    setOnlineLoading(true);
-    fetchOnline();
-    const id = setInterval(fetchOnline, 8000);
-    return () => clearInterval(id);
-  }, [onlineOpen, fetchOnline]);
-
   const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Escape" && replyingTo) {
       setReplyingTo(null);
@@ -1295,6 +1325,9 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
         .gc-swipe-hint { position: absolute; top: 50%; width: 26px; height: 26px; border-radius: 50%; background: ${C.dark4}; border: 1px solid ${C.border}; color: ${C.gold}; display: flex; align-items: center; justify-content: center; font-size: 14px; pointer-events: none; opacity: var(--p, 0); transform: translateY(-50%) scale(calc(0.6 + var(--p, 0) * 0.4)); }
         .gc-fab-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: ${C.gold}; color: ${C.dark}; font-size: 10px; font-weight: 800; display: flex; align-items: center; justify-content: center; border: 2px solid ${C.dark}; }
         .gc-toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: ${C.dark4}; border: 1px solid ${C.border}; color: ${C.text}; font-size: 12px; font-weight: 600; padding: 8px 14px; border-radius: 999px; box-shadow: 0 6px 18px rgba(0,0,0,0.45); animation: gcFadeIn 160ms ease; pointer-events: none; z-index: 30; }
+        .gc-skel { background: linear-gradient(90deg, ${C.dark3} 0%, ${C.dark4} 50%, ${C.dark3} 100%); background-size: 200% 100%; animation: gcShimmer 1.3s ease-in-out infinite; }
+        @keyframes gcShimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        @media (prefers-reduced-motion: reduce) { .gc-skel { animation: none; } }
         .gc-fab { position: absolute; right: 16px; bottom: 16px; width: 38px; height: 38px; border-radius: 50%; background: ${C.dark4}; border: 1px solid ${C.border}; color: ${C.gold}; font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
         .gc-composer-input { transition: height 0.1s ease; }
         .gc-header-btn { display: flex; align-items: center; justify-content: center; height: 36px; background: ${C.dark4}; border: 1px solid ${C.border}; border-radius: 10px; color: ${C.muted}; cursor: pointer; font-family: inherit; transition: background 0.15s ease, border-color 0.15s ease; }
@@ -1332,15 +1365,16 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, fontSize: 11, color: C.muted, minWidth: 0 }}>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{subtitle}</span>
-            {onlineCount !== null && onlineCount > 0 && (
+            {!hideCounts && onlineCount !== null && onlineCount > 0 && (
               <button
                 type="button"
-                onClick={() => setOnlineOpen(true)}
-                aria-label={`${onlineCount} en ligne - voir qui`}
-                title="Voir qui est en ligne"
+                onClick={() => setMembersOpen(true)}
+                aria-label={`${onlineCount} en ligne - voir les membres`}
+                title="Voir les membres"
                 style={{ display: "flex", alignItems: "center", gap: 5, color: "#4ADE80", flexShrink: 0, fontWeight: 600, whiteSpace: "nowrap", background: "none", border: "none", padding: "2px 0", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
               >
                 <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ADE80", boxShadow: "0 0 0 3px rgba(74,222,128,0.18)" }} />
+                {/* Not rendered at all for regular members in Premium (hideCounts) - see above. */}
                 {onlineCount} en ligne
                 <span aria-hidden style={{ opacity: 0.7 }}>›</span>
               </button>
@@ -1434,7 +1468,7 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
           )}
 
           {loadingMessages ? (
-            <div style={{ margin: "auto" }}><InlineLoader size={32} label="Chargement des messages…" padding="0" /></div>
+            <MessageSkeleton />
           ) : visibleMessages.length === 0 ? (
             <div style={{ margin: "auto", textAlign: "center", color: C.muted, fontSize: 13, padding: "0 20px" }}>
               {filter === "starred"
@@ -1473,7 +1507,18 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                   {(groupStart || m.pinned || isStarred || (isAdmin && m.senderBlocked && !isOwn) || (isAdmin && m.reportCount > 0)) && (
                     <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, marginBottom: 3, color: isOwn ? "rgba(10,12,15,0.65)" : accent! }}>
                       {groupStart && m.role === "ADMIN" && !isOwn && <span>👑</span>}
-                      {groupStart && <span>{senderLabel(m, user._id)}</span>}
+                      {groupStart && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => { if (!suppressClickRef.current) setProfileUserId(m.user); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") setProfileUserId(m.user); }}
+                          style={{ cursor: "pointer" }}
+                          title="Voir le profil"
+                        >
+                          {senderLabel(m, user._id)}
+                        </span>
+                      )}
                       {m.pinned && <span title="Épinglé" style={{ display: "inline-flex" }}><PiPushPinBold size={11} /></span>}
                       {isStarred && <span title="Favori" style={{ display: "inline-flex" }}><PiStarFill size={11} /></span>}
                       {/* Visible to admins only — a muted account isn't publicly labeled to the rest of the room. */}
@@ -1698,7 +1743,14 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
                   >
                     {!isOwn && (
                       <div style={{ width: 28, flexShrink: 0, alignSelf: "flex-end" }}>
-                        {groupEnd && <Avatar label={initialsFor(m)} color={accent ?? C.muted} src={avatars[m.user]} />}
+                        {groupEnd && (
+                          <Avatar
+                            label={initialsFor(m)}
+                            color={accent ?? C.muted}
+                            src={avatars[m.user]}
+                            onClick={() => { if (!suppressClickRef.current) setProfileUserId(m.user); }}
+                          />
+                        )}
                       </div>
                     )}
                     <div
@@ -1820,53 +1872,25 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
       </form>
       )}
 
-      {/* Who's online */}
-      {onlineOpen && (
-        <div
-          onClick={() => setOnlineOpen(false)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 2200, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: C.dark2, border: `1px solid ${C.border}`, borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 480, maxHeight: "70dvh", display: "flex", flexDirection: "column", paddingBottom: "env(safe-area-inset-bottom)" }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, letterSpacing: 1, color: C.text }}>
-                En ligne <span style={{ color: "#4ADE80" }}>({onlineTotal})</span>
-              </div>
-              <button onClick={() => setOnlineOpen(false)} aria-label="Fermer" style={{ background: C.dark4, border: `1px solid ${C.border}`, borderRadius: "50%", width: 30, height: 30, cursor: "pointer", color: C.muted, display: "flex", alignItems: "center", justifyContent: "center" }}><PiXBold size={14} /></button>
-            </div>
-            <div className="gc-scroll" style={{ overflowY: "auto", padding: "6px 8px 12px" }}>
-              {onlineLoading && onlineMembers.length === 0 ? (
-                <div style={{ padding: 20 }}><InlineLoader size={24} label="Chargement…" padding="0" /></div>
-              ) : onlineMembers.length === 0 ? (
-                <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 13 }}>Personne en ligne pour l&apos;instant.</div>
-              ) : (
-                onlineMembers.map((mb) => (
-                  <div key={mb.user} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10 }}>
-                    <Avatar
-                      label={mb.role === "ADMIN" ? "👑" : mb.label.slice(0, 2)}
-                      color={mb.role === "ADMIN" ? C.gold : colorForUser(mb.user)}
-                      src={mb.isMe ? user?.avatar : avatars[mb.user]}
-                    />
-                    <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {mb.isMe ? "Vous" : mb.label}
-                    </div>
-                    {mb.role === "ADMIN" && (
-                      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "1px", color: C.gold, background: "rgba(201,168,76,0.12)", border: "1px solid rgba(201,168,76,0.3)", padding: "2px 7px", borderRadius: 4, textTransform: "uppercase" }}>Admin</span>
-                    )}
-                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ADE80", flexShrink: 0 }} />
-                  </div>
-                ))
-              )}
-              {onlineTotal > onlineMembers.length && (
-                <div style={{ padding: "8px 10px", fontSize: 11, color: C.muted, textAlign: "center" }}>
-                  + {onlineTotal - onlineMembers.length} autre{onlineTotal - onlineMembers.length > 1 ? "s" : ""}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+      {/* Members list + profile card */}
+      {membersOpen && (
+        <MembersSheet
+          room={room}
+          hideCounts={hideCounts}
+          onlineCount={onlineCount}
+          avatars={avatars}
+          ensureAvatars={ensureAvatars}
+          onOpenProfile={(id) => setProfileUserId(id)}
+          onClose={() => setMembersOpen(false)}
+        />
+      )}
+      {profileUserId && (
+        <MemberProfileSheet
+          room={room}
+          userId={profileUserId}
+          fallbackAvatar={profileUserId === user?._id ? user?.avatar : avatars[profileUserId]}
+          onClose={() => setProfileUserId(null)}
+        />
       )}
 
       {/* Image lightbox */}
@@ -1883,10 +1907,33 @@ export default function GroupChatRoom({ room, title, subtitle, icon, onClose }: 
   );
 }
 
-function Avatar({ label, color, src }: { label: string; color: string; src?: string | null }) {
+// Placeholder bubbles shown while the first messages load - the screen has its
+// final shape immediately instead of a spinner on an empty page.
+function MessageSkeleton() {
+  const rows = [
+    { own: false, w: "58%" }, { own: false, w: "44%" }, { own: true, w: "50%" },
+    { own: false, w: "66%" }, { own: true, w: "36%" }, { own: false, w: "52%" }, { own: true, w: "60%" },
+  ];
+  return (
+    <div aria-busy="true" aria-label="Chargement des messages" style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%" }}>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: r.own ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 6 }}>
+          {!r.own && <div className="gc-skel" style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0 }} />}
+          <div className="gc-skel" style={{ width: r.w, height: 40, borderRadius: 14 }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Avatar({ label, color, src, onClick }: { label: string; color: string; src?: string | null; onClick?: () => void }) {
   return (
     <div
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      aria-label={onClick ? "Voir le profil" : undefined}
       style={{
+        cursor: onClick ? "pointer" : undefined,
         width: 28, height: 28, borderRadius: "50%", flexShrink: 0, overflow: "hidden",
         background: `${color}26`, border: `1.5px solid ${color}`,
         display: "flex", alignItems: "center", justifyContent: "center",

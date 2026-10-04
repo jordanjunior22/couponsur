@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/utils/ConnectDb";
-import SettingsModel, { getSettings, MATCH_GENERATOR_MARKETS, type MatchGeneratorMarket } from "@/models/Settings";
+import SettingsModel, { getSettings, invalidateSettingsCache, MATCH_GENERATOR_MARKETS, type MatchGeneratorMarket } from "@/models/Settings";
 import { cookies } from "next/headers";
 import { verifyToken } from "@/utils/auth";
 
@@ -301,6 +301,7 @@ export async function PUT(req: NextRequest) {
       { new: true, upsert: true }
     );
 
+    invalidateSettingsCache();
     return NextResponse.json({ success: true, data: updated });
   } catch (error) {
     console.error("UPDATE SETTINGS ERROR:", error);

@@ -7,7 +7,7 @@
 //   - "global": any logged-in user — no subscription check at all.
 import { cookies } from "next/headers";
 import UserModel from "@/models/Users";
-import { getSettings } from "@/models/Settings";
+import { getSettingsCached } from "@/models/Settings";
 import { verifyToken } from "@/utils/auth";
 import type { GroupRoom } from "@/models/GroupMessage";
 
@@ -63,7 +63,7 @@ export async function requireGroupChatAccess(room: GroupRoom = "premium"): Promi
   // these fields existed come back with them missing entirely, and that
   // should read as "on" (see models/Settings.ts).
   if (!isAdmin) {
-    const settings = await getSettings();
+    const settings = await getSettingsCached();
     const enabled = room === "premium" ? settings.groupChatEnabled !== false : settings.globalChatEnabled !== false;
     if (!enabled) {
       return {
