@@ -4081,7 +4081,7 @@ function SettingsTab() {
           disabled={genSaving}
           onChange={(e) => { const v = Number(e.target.value); setGenCount(v); saveGeneratorSettings({ count: v }); }}
         >
-          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+          {Array.from({ length: 100 }, (_, i) => i + 1).map((n) => (
             <option key={n} value={n}>{n} match{n > 1 ? "s" : ""}</option>
           ))}
         </select>

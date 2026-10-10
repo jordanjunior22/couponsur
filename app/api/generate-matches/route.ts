@@ -153,10 +153,11 @@ export async function GET(req: NextRequest) {
       dbUser.subscription.expiresAt &&
       new Date(dbUser.subscription.expiresAt) > new Date()
     );
-    const isUnlimited = isPremium || dbUser?.role === "ADMIN";
+    const isAdmin = dbUser?.role === "ADMIN";
+    const isUnlimited = isPremium || isAdmin;
 
-    // Outer gate: can this user open the tool at all.
-    if (settings.matchGeneratorAccess === "PREMIUM" && !isPremium) {
+    // Outer gate: can this user open the tool at all. Admins bypass it.
+    if (settings.matchGeneratorAccess === "PREMIUM" && !isPremium && !isAdmin) {
       return NextResponse.json(
         { success: false, message: "Le générateur est réservé aux abonnés premium.", requiresPremium: true },
         { status: 403 }
@@ -169,7 +170,7 @@ export async function GET(req: NextRequest) {
     // remains usable — the response flags what got dropped via
     // `restrictedMarkets` so the UI can tell the visitor why their combo
     // is smaller/different than requested.
-    const allowedMarkets = selectedMarkets.filter((m) => marketAccessFor(m) === "EVERYONE" || isPremium);
+    const allowedMarkets = selectedMarkets.filter((m) => marketAccessFor(m) === "EVERYONE" || isPremium || isAdmin);
     const restrictedMarkets = selectedMarkets.filter((m) => !allowedMarkets.includes(m));
 
     if (allowedMarkets.length === 0) {
@@ -238,9 +239,19 @@ export async function GET(req: NextRequest) {
     const avoid = searchParams.get("avoid");
 
     const allPicks = await getPredictions();
-    const qualified = dedupeByMatch(
-      allPicks.filter((p) => allowedMarkets.includes(p.market) && p.confidence >= MIN_CONFIDENCE)
-    ).sort((a, b) => b.confidence - a.confidence);
+    // Kept per (match, market): a fixture may qualify under several selected
+    // markets, and the combo needs those alternatives to cover every market.
+    // One-leg-per-fixture is enforced when the combo is assembled instead.
+    const perMarket = allPicks
+      .filter((p) => allowedMarkets.includes(p.market) && p.confidence >= MIN_CONFIDENCE)
+      .sort((a, b) => b.confidence - a.confidence);
+    const qualified = dedupeByMatch(perMarket).sort((a, b) => b.confidence - a.confidence);
+
+    // Markets the visitor asked for that have at least one qualifying pick.
+    // More markets than legs → a random subset (varied, not always the same).
+    const marketsWithPicks = allowedMarkets.filter((m) => perMarket.some((p) => p.market === m));
+    const missingMarkets = allowedMarkets.filter((m) => !marketsWithPicks.includes(m));
+    const coveredMarkets = shuffle(marketsWithPicks).slice(0, count);
 
     if (qualified.length === 0) {
       await refundIfReserved();
@@ -260,7 +271,7 @@ export async function GET(req: NextRequest) {
     let targetMissed = false;
 
     if (targetOdds !== null) {
-      const combo = buildVariedComboForTargetOdds(qualified, count, targetOdds, avoid);
+      const combo = buildVariedComboForTargetOdds(perMarket, count, targetOdds, avoid, coveredMarkets);
       if (!combo) {
         await refundIfReserved();
         return NextResponse.json({
@@ -283,11 +294,32 @@ export async function GET(req: NextRequest) {
       // than always the literal top-N, so this isn't a deterministic carbon
       // copy of whatever the paid automated combos pick every single time.
       const pool = qualified.slice(0, Math.max(count * 3, count));
-      selected = shuffle(pool).slice(0, Math.min(count, pool.length));
+      // First one leg per selected market (best few of that market, on a
+      // fixture not already used), then fill the remaining slots from the
+      // general pool so the combo still reaches `count` legs.
+      const draw = (): PredictionPick[] => {
+        const picked: PredictionPick[] = [];
+        const usedMatches = new Set<string>();
+        const keyOf = (p: PredictionPick) => `${p.league}|${p.home}|${p.away}`;
+        const take = (p: PredictionPick) => {
+          picked.push(p);
+          usedMatches.add(keyOf(p));
+        };
+        for (const m of shuffle(coveredMarkets)) {
+          const options = perMarket.filter((p) => p.market === m && !usedMatches.has(keyOf(p))).slice(0, 3);
+          if (options.length > 0) take(options[Math.floor(Math.random() * options.length)]);
+        }
+        for (const p of shuffle(pool)) {
+          if (picked.length >= count) break;
+          if (!usedMatches.has(keyOf(p))) take(p);
+        }
+        return picked;
+      };
+      selected = draw();
       // Don't hand back the exact combo the visitor just saw if the pool
-      // allows any other draw (a few reshuffles is plenty).
+      // allows any other draw (a few redraws is plenty).
       for (let attempt = 0; attempt < 8 && avoid && comboSignature(selected) === avoid && pool.length > count; attempt++) {
-        selected = shuffle(pool).slice(0, Math.min(count, pool.length));
+        selected = draw();
       }
       totalOdds = parseFloat(selected.reduce((acc, s) => acc * s.odd, 1).toFixed(2));
     }
@@ -310,6 +342,8 @@ export async function GET(req: NextRequest) {
       requestedOdds: targetOdds,
       targetMissed,
       restrictedMarkets,
+      // Selected markets with no qualifying pick today (so no leg for them).
+      missingMarkets,
       disclaimer: DISCLAIMER,
       usage,
     });

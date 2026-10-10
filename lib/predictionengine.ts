@@ -386,21 +386,31 @@ export function buildVariedComboForTargetOdds(
   candidates: PredictionPick[],
   maxSize: number,
   targetOdds: number,
-  avoid?: string | null
+  avoid?: string | null,
+  /** Markets the visitor selected: combos covering more of them are strictly
+   *  preferred, and combos are sized to be able to carry one leg each. Also
+   *  makes candidates able to hold several legs per fixture (one per market)
+   *  — a combo never uses the same fixture twice. */
+  requiredMarkets?: string[]
 ): ComboResult | null {
   if (candidates.length === 0) return null;
 
   const minOdds = targetOdds * 0.75;
   const maxOdds = targetOdds * 1.25;
   const sizeCap = Math.min(maxSize, candidates.length);
+  const required = requiredMarkets ?? [];
+  const minSize = Math.min(required.length, sizeCap) || 1;
   const SAMPLES = 600;
+  const matchKey = (p: PredictionPick) => `${p.league}|${p.home}|${p.away}`;
+  const coverageOf = (combo: PredictionPick[]) =>
+    required.length === 0 ? 0 : required.filter((m) => combo.some((p) => p.market === m)).length;
 
-  type Scored = { combo: PredictionPick[]; total: number; sig: string; weight: number };
+  type Scored = { combo: PredictionPick[]; total: number; sig: string; weight: number; coverage: number };
   const inBand = new Map<string, Scored>();
   let closest: Scored | null = null;
 
   for (let i = 0; i < SAMPLES; i++) {
-    const size = 1 + Math.floor(Math.random() * sizeCap);
+    const size = minSize + Math.floor(Math.random() * (sizeCap - minSize + 1));
     // Partial Fisher–Yates over indices: `size` distinct random candidates.
     const idx = candidates.map((_, n) => n);
     for (let k = 0; k < size; k++) {
@@ -408,12 +418,18 @@ export function buildVariedComboForTargetOdds(
       [idx[k], idx[j]] = [idx[j], idx[k]];
     }
     const combo = idx.slice(0, size).map((n) => candidates[n]);
+    if (new Set(combo.map(matchKey)).size !== combo.length) continue; // same fixture twice
     const total = parseFloat(combo.reduce((acc, s) => acc * s.odd, 1).toFixed(2));
     const sig = comboSignature(combo);
     const distance = Math.abs(total - targetOdds) / targetOdds; // 0 = exact
+    const coverage = coverageOf(combo);
 
-    if (closest === null || distance < Math.abs(closest.total - targetOdds) / targetOdds) {
-      closest = { combo, total, sig, weight: 0 };
+    if (
+      closest === null ||
+      coverage > closest.coverage ||
+      (coverage === closest.coverage && distance < Math.abs(closest.total - targetOdds) / targetOdds)
+    ) {
+      closest = { combo, total, sig, weight: 0, coverage };
     }
     if (total >= minOdds && total <= maxOdds && !inBand.has(sig)) {
       const avgConf = combo.reduce((acc, s) => acc + s.confidence, 0) / combo.length;
@@ -421,11 +437,16 @@ export function buildVariedComboForTargetOdds(
       // keeps weak legs possible but unlikely; floor on closeness keeps the
       // edge of the band reachable.
       const closeness = Math.max(0.15, 1 - distance / 0.25);
-      inBand.set(sig, { combo, total, sig, weight: Math.pow(avgConf, 3) * closeness });
+      inBand.set(sig, { combo, total, sig, weight: Math.pow(avgConf, 3) * closeness, coverage });
     }
   }
 
   let options = [...inBand.values()];
+  // Keep only the best-covering combos (all selected markets if any exist).
+  if (required.length > 0 && options.length > 0) {
+    const bestCoverage = Math.max(...options.map((o) => o.coverage));
+    options = options.filter((o) => o.coverage === bestCoverage);
+  }
   if (options.length === 0) {
     return closest ? { selected: closest.combo, totalOdds: closest.total } : null;
   }

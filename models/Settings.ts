@@ -114,7 +114,7 @@ const SettingsSchema = new Schema<ISettings>(
     matchGeneratorEnabled: { type: Boolean, default: false },
     matchGeneratorAccess: { type: String, enum: ["EVERYONE", "PREMIUM"], default: "PREMIUM" },
     matchGeneratorMarketAccess: { type: Schema.Types.Mixed, default: () => ({ ...DEFAULT_MARKET_ACCESS }) },
-    matchGeneratorMatchCount: { type: Number, default: 3, min: 1, max: 10 },
+    matchGeneratorMatchCount: { type: Number, default: 3, min: 1, max: 100 },
     generatorFreeDailyLimit: { type: Number, default: 5, min: 0, max: 100 },
     groupChatEnabled: { type: Boolean, default: true },
     groupChatCooldownSeconds: { type: Number, default: 2, min: 0, max: 60 },

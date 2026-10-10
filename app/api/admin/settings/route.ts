@@ -158,10 +158,10 @@ export async function PUT(req: NextRequest) {
         typeof matchGeneratorMatchCount !== "number" ||
         !Number.isInteger(matchGeneratorMatchCount) ||
         matchGeneratorMatchCount < 1 ||
-        matchGeneratorMatchCount > 10
+        matchGeneratorMatchCount > 100
       ) {
         return NextResponse.json(
-          { success: false, message: "matchGeneratorMatchCount must be an integer between 1 and 10" },
+          { success: false, message: "matchGeneratorMatchCount must be an integer between 1 and 100" },
           { status: 400 }
         );
       }

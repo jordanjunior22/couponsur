@@ -48,6 +48,8 @@ interface GenerateResponse {
   // admin-restricted to premium and the caller isn't premium (see
   // app/api/generate-matches/route.ts's inner gate).
   restrictedMarkets?: string[];
+  // Selected markets with no qualifying pick today, so no leg in the combo.
+  missingMarkets?: string[];
 }
 
 type GenState = "idle" | "loading" | "result" | "error";
@@ -175,7 +177,8 @@ export function MatchGeneratorTool({
   marketAccess: Record<string, "EVERYONE" | "PREMIUM">;
 }) {
   const { user, hasActiveSubscription } = useAuth();
-  const isPremium = hasActiveSubscription();
+  // Admins get every market, same as subscribers (enforced server-side too).
+  const isPremium = hasActiveSubscription() || user?.role === "ADMIN";
   const [state, setState] = useState<GenState>("idle");
   const [view, setView] = useState<GenView>("config");
   const [matches, setMatches] = useState<GeneratedMatch[]>([]);
@@ -186,6 +189,7 @@ export function MatchGeneratorTool({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [requiresPremium, setRequiresPremium] = useState(false);
   const [restrictedMarkets, setRestrictedMarkets] = useState<string[]>([]);
+  const [missingMarkets, setMissingMarkets] = useState<string[]>([]);
 
   const lastSignatureRef = useRef<string | null>(null);
 
@@ -263,6 +267,7 @@ export function MatchGeneratorTool({
       setRequestedOdds(data.requestedOdds ?? null);
       setTargetMissed(!!data.targetMissed);
       setRestrictedMarkets(data.restrictedMarkets || []);
+      setMissingMarkets(data.missingMarkets || []);
       setResultMessage(data.matches?.length === 0 ? data.message || null : null);
       setState("result");
       setView("result");
@@ -433,6 +438,11 @@ export function MatchGeneratorTool({
               <span>Réservé aux abonnés premium, non inclus : {restrictedMarkets.map((m) => MARKET_LABELS[m] || m).join(", ")}.</span>
             </div>
           )}
+          {missingMarkets.length > 0 && (
+            <div style={{ fontSize: 11, color: "#7A8399", marginBottom: 12, lineHeight: 1.5 }}>
+              Aucun pronostic fiable aujourd&apos;hui pour : {missingMarkets.map((m) => MARKET_LABELS[m] || m).join(", ")}.
+            </div>
+          )}
           {resultMessage && (
             <div style={{ fontSize: 12, color: "#7A8399", marginBottom: 14 }}>{resultMessage}</div>
           )}
@@ -518,7 +528,7 @@ export function MatchGeneratorTool({
           Connexion requise pour générer des matchs.
         </div>
       )}
-      {state === "idle" && view === "config" && user && access === "PREMIUM" && !hasActiveSubscription() && (
+      {state === "idle" && view === "config" && user && access === "PREMIUM" && !isPremium && (
         <div style={{ fontSize: 11.5, color: "#7A8399", marginTop: 12 }}>
           Réservé aux abonnés premium.
         </div>
